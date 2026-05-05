@@ -1,0 +1,90 @@
+# ============================================================
+# 🔒 凭证文件 — 永远不能 commit
+# ============================================================
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+wallet*.json
+keystore*.json
+mnemonic.txt
+seed_phrase.txt
+private_key.txt
+api_keys.yaml
+api_keys.json
+secrets/
+
+# ============================================================
+# 数据文件
+# ============================================================
+*.sql
+*.dump
+data/historical/
+data/ohlcv/
+data/funding_rates/
+trades_*.csv
+positions_*.csv
+pnl_*.csv
+backtest_results/
+*.log
+logs/
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints
+
+# ============================================================
+# Node / Frontend
+# ============================================================
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.vercel
+dist/
+build/
+
+# ============================================================
+# Docker / 数据卷
+# ============================================================
+docker_volumes/
+postgres_data/
+redis_data/
+
+# ============================================================
+# IDE / 系统
+# ============================================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ============================================================
+# 临时 / 草稿
+# ============================================================
+tmp/
+temp/
+*.tmp
+*.bak
+notes/
+TODO.local.md
+SCRATCHPAD.md

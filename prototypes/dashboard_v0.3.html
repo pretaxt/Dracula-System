@@ -1,0 +1,1522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dracula-System v0.2 — 多策略量化套利终端</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-primary: #0a0e14;
+  --bg-secondary: #131820;
+  --bg-tertiary: #1a2029;
+  --bg-hover: #232b36;
+  --border: #2a3340;
+  --border-strong: #3a4554;
+  --text-primary: #e8ecef;
+  --text-secondary: #8b95a3;
+  --text-tertiary: #5a6470;
+  --accent-green: #00d68f;
+  --accent-green-dim: rgba(0, 214, 143, 0.1);
+  --accent-red: #ff4757;
+  --accent-red-dim: rgba(255, 71, 87, 0.1);
+  --accent-yellow: #ffb800;
+  --accent-yellow-dim: rgba(255, 184, 0, 0.1);
+  --accent-blue: #4a9eff;
+  --accent-blue-dim: rgba(74, 158, 255, 0.1);
+  --accent-purple: #b16cff;
+  --accent-purple-dim: rgba(177, 108, 255, 0.1);
+  --grid-line: rgba(255, 255, 255, 0.025);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Space Grotesk', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-x: hidden;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* === 顶栏 === */
+.topbar {
+  height: 60px;
+  background: rgba(19, 24, 32, 0.85);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+}
+
+.brand { display: flex; align-items: center; gap: 14px; font-weight: 700; font-size: 17px; }
+
+.brand-logo {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 16px;
+  color: var(--bg-primary);
+  box-shadow: 0 4px 12px rgba(0, 214, 143, 0.2);
+}
+
+.brand-version {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: var(--text-tertiary); font-weight: 400; margin-left: 6px;
+  padding: 3px 8px; background: var(--bg-tertiary); border-radius: 3px;
+}
+
+.nav { display: flex; gap: 4px; margin-left: 44px; }
+.nav-item {
+  padding: 9px 16px; font-size: 14px; color: var(--text-secondary);
+  cursor: pointer; border-radius: 5px; transition: all 0.15s;
+  position: relative; font-weight: 500;
+}
+.nav-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
+.nav-item:hover { color: var(--text-primary); }
+.nav-badge {
+  position: absolute; top: 2px; right: 2px;
+  background: var(--accent-red); color: #fff;
+  font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 18px;
+  font-family: 'JetBrains Mono', monospace; font-size: 13px;
+}
+
+.status-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--accent-green-dim);
+  border: 1px solid rgba(0, 214, 143, 0.3);
+  border-radius: 5px;
+  color: var(--accent-green);
+  font-size: 12px; font-weight: 600;
+}
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+.clock { color: var(--text-secondary); }
+
+.kill-switch {
+  background: var(--accent-red-dim); color: var(--accent-red);
+  border: 1px solid var(--accent-red);
+  padding: 7px 16px; border-radius: 5px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  font-weight: 700; cursor: pointer; letter-spacing: 1px;
+  transition: all 0.15s;
+}
+.kill-switch:hover {
+  background: var(--accent-red); color: var(--bg-primary);
+  box-shadow: 0 0 16px rgba(255, 71, 87, 0.4);
+}
+
+/* === 主体 === */
+.main { padding: 20px; display: flex; flex-direction: column; gap: 16px; max-width: 1800px; margin: 0 auto; }
+
+.page { display: none; flex-direction: column; gap: 16px; }
+.page.active { display: flex; }
+
+/* === KPI === */
+.kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+
+.kpi-card {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 18px 20px;
+  position: relative; overflow: hidden;
+}
+
+.kpi-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-blue), transparent);
+  opacity: 0.6;
+}
+.kpi-card.green::before { background: linear-gradient(90deg, transparent, var(--accent-green), transparent); }
+.kpi-card.yellow::before { background: linear-gradient(90deg, transparent, var(--accent-yellow), transparent); }
+
+.kpi-label {
+  font-size: 12px; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 1.2px;
+  margin-bottom: 10px; font-weight: 600;
+}
+
+.kpi-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 28px; font-weight: 600; letter-spacing: -0.5px; line-height: 1.1;
+}
+.kpi-value.green { color: var(--accent-green); }
+.kpi-value.yellow { color: var(--accent-yellow); }
+
+.kpi-meta {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-tertiary);
+}
+.kpi-delta { font-weight: 600; }
+.kpi-delta.up { color: var(--accent-green); }
+.kpi-delta.down { color: var(--accent-red); }
+
+/* === 网格 === */
+.grid-12 { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.col-8 { grid-column: span 8; }
+.col-4 { grid-column: span 4; }
+.col-6 { grid-column: span 6; }
+.col-12 { grid-column: span 12; }
+
+/* === 面板 === */
+.panel { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+
+.panel-header {
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(26, 32, 41, 0.5);
+}
+
+.panel-title {
+  font-size: 13px; font-weight: 700; color: var(--text-primary);
+  text-transform: uppercase; letter-spacing: 1.2px;
+  display: flex; align-items: center; gap: 10px;
+}
+
+.panel-title-bar { width: 3px; height: 15px; background: var(--accent-green); border-radius: 2px; }
+.panel-title-bar.blue { background: var(--accent-blue); }
+.panel-title-bar.yellow { background: var(--accent-yellow); }
+.panel-title-bar.purple { background: var(--accent-purple); }
+.panel-title-bar.red { background: var(--accent-red); }
+
+.panel-actions { display: flex; gap: 6px; }
+
+.btn {
+  background: var(--bg-hover); color: var(--text-secondary);
+  border: 1px solid var(--border); padding: 6px 12px;
+  font-size: 12px; border-radius: 4px; cursor: pointer;
+  font-family: 'JetBrains Mono', monospace; transition: all 0.15s;
+  font-weight: 500;
+}
+.btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.btn.primary {
+  background: var(--accent-green-dim); color: var(--accent-green);
+  border-color: rgba(0, 214, 143, 0.4);
+}
+.btn.primary:hover { background: var(--accent-green); color: var(--bg-primary); }
+.btn.danger {
+  background: var(--accent-red-dim); color: var(--accent-red);
+  border-color: rgba(255, 71, 87, 0.4);
+}
+.btn.danger:hover { background: var(--accent-red); color: var(--bg-primary); }
+
+/* === 表格 === */
+.opp-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+
+.opp-table th {
+  background: rgba(26, 32, 41, 0.7); color: var(--text-tertiary);
+  font-weight: 600; padding: 11px 14px; text-align: left;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  border-bottom: 1px solid var(--border);
+}
+.opp-table th.right { text-align: right; }
+.opp-table td { padding: 13px 14px; border-bottom: 1px solid var(--border); color: var(--text-primary); }
+.opp-table td.right { text-align: right; }
+.opp-table tr { transition: background 0.1s; }
+.opp-table tr:hover { background: var(--bg-hover); }
+.opp-table tr.highlight { background: rgba(0, 214, 143, 0.04); }
+.opp-table tr.dex-row { background: rgba(177, 108, 255, 0.04); }
+
+.symbol-cell { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+
+.exch-badge {
+  display: inline-block; padding: 4px 8px;
+  font-size: 11px; border-radius: 3px;
+  font-weight: 600; letter-spacing: 0.5px;
+}
+.exch-badge.binance { background: rgba(240, 185, 11, 0.12); color: #f0b90b; }
+.exch-badge.bybit { background: rgba(247, 165, 1, 0.12); color: #f7a501; }
+.exch-badge.okx { background: rgba(74, 158, 255, 0.12); color: var(--accent-blue); }
+.exch-badge.htx { background: rgba(0, 159, 211, 0.12); color: #009fd3; }
+.exch-badge.bitget { background: rgba(0, 246, 196, 0.12); color: #00f6c4; }
+.exch-badge.hyperliquid { background: rgba(177, 108, 255, 0.15); color: var(--accent-purple); }
+.exch-badge.dydx { background: rgba(108, 92, 231, 0.15); color: #6c5ce7; }
+.exch-badge.uniswap { background: rgba(255, 0, 122, 0.12); color: #ff007a; }
+.exch-badge.pancake { background: rgba(255, 184, 0, 0.12); color: #ffb800; }
+
+.exch-type {
+  display: inline-block; padding: 2px 6px;
+  font-size: 10px; border-radius: 2px;
+  font-weight: 700; letter-spacing: 0.5px;
+  margin-left: 4px;
+}
+.exch-type.cex { background: rgba(74, 158, 255, 0.15); color: var(--accent-blue); }
+.exch-type.dex { background: rgba(177, 108, 255, 0.15); color: var(--accent-purple); }
+
+.apr { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.apr.high { color: var(--accent-green); }
+.apr.medium { color: var(--accent-yellow); }
+.apr.low { color: var(--text-secondary); }
+.apr.negative { color: var(--accent-red); }
+
+.bar { width: 70px; height: 5px; background: var(--border); border-radius: 2px; overflow: hidden; display: inline-block; vertical-align: middle; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-green), var(--accent-blue)); border-radius: 2px; }
+
+.action-btn {
+  background: var(--accent-green-dim); color: var(--accent-green);
+  border: 1px solid rgba(0, 214, 143, 0.3);
+  padding: 5px 12px; border-radius: 4px;
+  font-size: 12px; font-family: 'JetBrains Mono', monospace;
+  cursor: pointer; font-weight: 600; transition: all 0.15s;
+}
+.action-btn:hover { background: var(--accent-green); color: var(--bg-primary); }
+
+/* === 持仓 === */
+.position-item { padding: 16px 18px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+.position-item:hover { background: var(--bg-hover); }
+.position-item:last-child { border-bottom: none; }
+.position-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.position-symbol { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 10px; }
+.position-pnl { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; }
+.position-pnl.profit { color: var(--accent-green); }
+.position-pnl.loss { color: var(--accent-red); }
+.position-details { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; font-family: 'JetBrains Mono', monospace; }
+.pos-label { color: var(--text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; margin-bottom: 4px; }
+.pos-value { color: var(--text-primary); font-size: 14px; font-weight: 500; }
+.pos-value.green { color: var(--accent-green); }
+
+/* === 风控 === */
+.risk-panel { padding: 20px; }
+.risk-item { margin-bottom: 20px; }
+.risk-item:last-child { margin-bottom: 0; }
+.risk-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.risk-label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+.risk-status { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 3px 10px; border-radius: 3px; font-weight: 600; }
+.risk-status.safe { background: var(--accent-green-dim); color: var(--accent-green); }
+.risk-status.warn { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+.risk-status.danger { background: var(--accent-red-dim); color: var(--accent-red); }
+.risk-bar { height: 7px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+.risk-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.risk-bar-fill.safe { background: linear-gradient(90deg, var(--accent-green), #00b377); }
+.risk-bar-fill.warn { background: linear-gradient(90deg, var(--accent-yellow), #ff9500); }
+.risk-bar-fill.danger { background: linear-gradient(90deg, var(--accent-red), #c71f30); }
+.risk-meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-tertiary); }
+
+/* === 交易所连接 === */
+.exch-status { padding: 8px 18px; }
+.exch-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--border); }
+.exch-row:last-child { border-bottom: none; }
+.exch-info { display: flex; align-items: center; gap: 14px; }
+.exch-logo { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 15px; }
+.exch-logo.binance { background: rgba(240, 185, 11, 0.15); color: #f0b90b; }
+.exch-logo.bybit { background: rgba(247, 165, 1, 0.15); color: #f7a501; }
+.exch-logo.okx { background: rgba(74, 158, 255, 0.15); color: var(--accent-blue); }
+.exch-logo.htx { background: rgba(0, 159, 211, 0.15); color: #009fd3; }
+.exch-logo.bitget { background: rgba(0, 246, 196, 0.15); color: #00f6c4; }
+.exch-logo.hyperliquid { background: rgba(177, 108, 255, 0.15); color: var(--accent-purple); }
+.exch-logo.dydx { background: rgba(108, 92, 231, 0.15); color: #6c5ce7; }
+.exch-logo.uniswap { background: rgba(255, 0, 122, 0.12); color: #ff007a; }
+.exch-logo.pancake { background: rgba(255, 184, 0, 0.15); color: #ffb800; }
+.exch-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; }
+.exch-meta { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-tertiary); margin-top: 3px; display: flex; align-items: center; gap: 6px; }
+.exch-meta .status-dot { width: 6px; height: 6px; }
+.exch-balance { text-align: right; font-family: 'JetBrains Mono', monospace; }
+.exch-balance-amount { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.exch-balance-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; }
+
+/* === 图表 === */
+.chart-container { padding: 16px; height: 220px; }
+
+/* === 日志 === */
+.log-panel { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 14px 18px; max-height: 320px; overflow-y: auto; line-height: 1.85; }
+.log-line { display: flex; gap: 12px; padding: 3px 0; }
+.log-time { color: var(--text-tertiary); flex-shrink: 0; }
+.log-level { font-weight: 700; flex-shrink: 0; width: 56px; }
+.log-level.info { color: var(--accent-blue); }
+.log-level.ok { color: var(--accent-green); }
+.log-level.warn { color: var(--accent-yellow); }
+.log-level.err { color: var(--accent-red); }
+.log-msg { color: var(--text-secondary); }
+.log-msg .hl { color: var(--text-primary); font-weight: 500; }
+
+/* === 设置页面 === */
+.settings-section { padding: 24px; }
+.settings-group { margin-bottom: 32px; }
+.settings-group:last-child { margin-bottom: 0; }
+.settings-group-title {
+  font-size: 16px; font-weight: 700; color: var(--text-primary);
+  margin-bottom: 4px; display: flex; align-items: center; gap: 10px;
+}
+.settings-group-desc { font-size: 13px; color: var(--text-tertiary); margin-bottom: 16px; line-height: 1.6; }
+.settings-group-tier {
+  font-size: 10px; padding: 3px 8px; border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; letter-spacing: 0.5px;
+}
+.tier-1 { background: var(--accent-green-dim); color: var(--accent-green); }
+.tier-2 { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+.tier-3 { background: var(--accent-red-dim); color: var(--accent-red); }
+
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 0; border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-info { flex: 1; }
+.setting-label { font-size: 14px; font-weight: 500; color: var(--text-primary); margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
+.setting-desc { font-size: 12px; color: var(--text-tertiary); line-height: 1.5; }
+.setting-control { display: flex; align-items: center; gap: 10px; }
+
+/* === 滑块 === */
+.range-input { display: flex; align-items: center; gap: 14px; min-width: 300px; }
+.range-input input[type="range"] { flex: 1; -webkit-appearance: none; height: 5px; background: var(--bg-tertiary); border-radius: 2px; outline: none; }
+.range-input input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: var(--accent-green); border-radius: 50%; cursor: pointer; box-shadow: 0 0 8px rgba(0, 214, 143, 0.4); }
+.range-value { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; color: var(--accent-green); min-width: 80px; text-align: right; }
+
+/* === 开关 === */
+.toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 24px; transition: 0.2s; }
+.toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 2px; bottom: 2px; background: var(--text-secondary); border-radius: 50%; transition: 0.2s; }
+.toggle input:checked + .toggle-slider { background: var(--accent-green-dim); border-color: var(--accent-green); }
+.toggle input:checked + .toggle-slider:before { transform: translateX(20px); background: var(--accent-green); }
+
+/* === 锁定输入 === */
+.locked-input {
+  font-family: 'JetBrains Mono', monospace; font-size: 14px;
+  background: var(--bg-tertiary); border: 1px dashed var(--border-strong);
+  color: var(--text-secondary); padding: 7px 14px; border-radius: 4px;
+  display: flex; align-items: center; gap: 8px; cursor: not-allowed;
+}
+.lock-icon { color: var(--accent-red); }
+
+/* === 矩阵 === */
+.matrix-table { width: 100%; border-collapse: collapse; }
+.matrix-table th, .matrix-table td { padding: 12px 14px; text-align: center; font-size: 13px; border-bottom: 1px solid var(--border); }
+.matrix-table th { background: rgba(26, 32, 41, 0.7); color: var(--text-tertiary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+.matrix-table td:first-child, .matrix-table th:first-child { text-align: left; padding-left: 18px; }
+.matrix-level { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.matrix-level-dot { width: 9px; height: 9px; border-radius: 50%; }
+.matrix-level-dot.info { background: var(--accent-blue); }
+.matrix-level-dot.ok { background: var(--accent-green); }
+.matrix-level-dot.warn { background: var(--accent-yellow); }
+.matrix-level-dot.crit { background: var(--accent-red); }
+
+.checkbox { position: relative; width: 18px; height: 18px; display: inline-block; cursor: pointer; }
+.checkbox input { opacity: 0; position: absolute; width: 18px; height: 18px; cursor: pointer; }
+.checkbox-mark { position: absolute; top: 0; left: 0; width: 18px; height: 18px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 3px; }
+.checkbox input:checked ~ .checkbox-mark { background: var(--accent-green); border-color: var(--accent-green); }
+.checkbox input:checked ~ .checkbox-mark:after { content: ''; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px; border: solid var(--bg-primary); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.checkbox.locked .checkbox-mark { background: var(--accent-red-dim); border-color: var(--accent-red); }
+.checkbox.locked .checkbox-mark:after { content: ''; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px; border: solid var(--accent-red); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+/* === 通知中心 === */
+.notif-list { padding: 0; }
+.notif-item {
+  padding: 16px 18px; border-bottom: 1px solid var(--border);
+  display: flex; gap: 16px; align-items: flex-start;
+  transition: background 0.1s;
+}
+.notif-item:hover { background: var(--bg-hover); }
+.notif-item.unread { background: rgba(74, 158, 255, 0.04); border-left: 3px solid var(--accent-blue); }
+.notif-icon {
+  width: 36px; height: 36px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+}
+.notif-icon.info { background: var(--accent-blue-dim); }
+.notif-icon.ok { background: var(--accent-green-dim); }
+.notif-icon.warn { background: var(--accent-yellow-dim); }
+.notif-icon.crit { background: var(--accent-red-dim); }
+.notif-body { flex: 1; }
+.notif-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 5px; }
+.notif-msg { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+.notif-meta { display: flex; gap: 12px; margin-top: 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-tertiary); flex-wrap: wrap; align-items: center; }
+.notif-channels { display: flex; gap: 4px; }
+.notif-channel-tag { padding: 2px 7px; border-radius: 3px; background: var(--bg-tertiary); font-size: 10px; font-weight: 600; color: var(--text-secondary); }
+
+/* === Toast === */
+.toast-container { position: fixed; top: 80px; right: 24px; z-index: 200; display: flex; flex-direction: column; gap: 12px; max-width: 400px; }
+.toast {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-green);
+  border-radius: 6px; padding: 14px 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  animation: slide-in 0.3s ease-out;
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.toast.warn { border-left-color: var(--accent-yellow); }
+.toast.crit { border-left-color: var(--accent-red); }
+.toast-icon { font-size: 18px; }
+.toast-body { flex: 1; }
+.toast-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.toast-msg { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.toast-close { color: var(--text-tertiary); cursor: pointer; font-size: 16px; line-height: 1; }
+.toast-close:hover { color: var(--text-primary); }
+
+@keyframes slide-in {
+  from { transform: translateX(120%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* === 滚动条 === */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+</style>
+</head>
+<body>
+
+<!-- 顶部导航 -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-logo">D</div>
+    <span>Dracula</span>
+    <span class="brand-version">v0.2.0 · PHASE 0</span>
+  </div>
+  <div class="nav">
+    <div class="nav-item active" data-page="dashboard">仪表盘</div>
+    <div class="nav-item" data-page="opportunities">机会扫描</div>
+    <div class="nav-item" data-page="positions">持仓管理</div>
+    <div class="nav-item" data-page="dex-arb">CEX-DEX 套利</div>
+    <div class="nav-item" data-page="notifications">通知中心 <span class="nav-badge">3</span></div>
+    <div class="nav-item" data-page="settings">设置</div>
+  </div>
+  <div class="topbar-right">
+    <div class="status-pill">
+      <span class="status-dot"></span>
+      <span>SYSTEM ONLINE</span>
+    </div>
+    <span class="clock" id="clock">2026-05-06 14:23:47 UTC</span>
+    <button class="kill-switch">⏻ EMERGENCY STOP</button>
+  </div>
+</div>
+
+<div class="main">
+
+<!-- ============= 页面 1: 仪表盘 ============= -->
+<div class="page active" id="page-dashboard">
+
+  <!-- KPI -->
+  <div class="kpi-row">
+    <div class="kpi-card green">
+      <div class="kpi-label">账户总价值</div>
+      <div class="kpi-value mono">$5,247.83</div>
+      <div class="kpi-meta"><span class="kpi-delta up">+$47.83</span><span>24H · +0.92%</span></div>
+    </div>
+    <div class="kpi-card green">
+      <div class="kpi-label">未实现盈亏</div>
+      <div class="kpi-value green">+$23.41</div>
+      <div class="kpi-meta"><span>3 持仓 · Delta 中性</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">累计资金费收入</div>
+      <div class="kpi-value mono">$112.56</div>
+      <div class="kpi-meta"><span class="kpi-delta up">+$8.42</span><span>过去 24h</span></div>
+    </div>
+    <div class="kpi-card yellow">
+      <div class="kpi-label">当前年化收益率</div>
+      <div class="kpi-value yellow">14.8%</div>
+      <div class="kpi-meta"><span>加权平均 · 滚动 7 天</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">今日回撤</div>
+      <div class="kpi-value mono">-0.34%</div>
+      <div class="kpi-meta"><span>红线 -3.0% · 安全</span></div>
+    </div>
+  </div>
+
+  <!-- 风控 + 交易所 -->
+  <div class="grid-12">
+    <div class="panel col-8">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar"></div>资金费率机会扫描器 · 7 家交易所</div>
+        <div class="panel-actions">
+          <button class="btn">CEX</button>
+          <button class="btn">DEX</button>
+          <button class="btn primary">↻ 实时</button>
+        </div>
+      </div>
+      <table class="opp-table">
+        <thead>
+          <tr>
+            <th>币种</th>
+            <th>交易所</th>
+            <th class="right">资金费率</th>
+            <th class="right">年化收益</th>
+            <th class="right">下次结算</th>
+            <th class="right">流动性</th>
+            <th class="right">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="dex-row">
+            <td><div class="symbol-cell">🔥 HYPE/USDC</div></td>
+            <td><span class="exch-badge hyperliquid">HYPERLIQUID</span><span class="exch-type dex">DEX</span></td>
+            <td class="right"><span class="apr high">+0.0421%</span></td>
+            <td class="right"><span class="apr high">46.1% APR</span></td>
+            <td class="right">00:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:82%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr class="highlight">
+            <td><div class="symbol-cell">🔥 ENA/USDT</div></td>
+            <td><span class="exch-badge bybit">BYBIT</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr high">+0.0312%</span></td>
+            <td class="right"><span class="apr high">34.2% APR</span></td>
+            <td class="right">02:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:88%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr class="highlight">
+            <td><div class="symbol-cell">🔥 PEPE/USDT</div></td>
+            <td><span class="exch-badge bitget">BITGET</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr high">+0.0289%</span></td>
+            <td class="right"><span class="apr high">31.6% APR</span></td>
+            <td class="right">04:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:75%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr class="dex-row">
+            <td><div class="symbol-cell">SUI/USDC</div></td>
+            <td><span class="exch-badge dydx">DYDX</span><span class="exch-type dex">DEX</span></td>
+            <td class="right"><span class="apr high">+0.0234%</span></td>
+            <td class="right"><span class="apr high">25.6% APR</span></td>
+            <td class="right">00:12:08</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:71%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr>
+            <td><div class="symbol-cell">SOL/USDT</div></td>
+            <td><span class="exch-badge okx">OKX</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr high">+0.0198%</span></td>
+            <td class="right"><span class="apr high">21.7% APR</span></td>
+            <td class="right">02:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:92%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr>
+            <td><div class="symbol-cell">DOGE/USDT</div></td>
+            <td><span class="exch-badge htx">HTX</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr medium">+0.0167%</span></td>
+            <td class="right"><span class="apr medium">18.3% APR</span></td>
+            <td class="right">02:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:65%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr>
+            <td><div class="symbol-cell">AVAX/USDT</div></td>
+            <td><span class="exch-badge binance">BINANCE</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr medium">+0.0127%</span></td>
+            <td class="right"><span class="apr medium">13.9% APR</span></td>
+            <td class="right">04:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:71%"></span></span></td>
+            <td class="right"><button class="action-btn">建仓</button></td>
+          </tr>
+          <tr>
+            <td><div class="symbol-cell">ETH/USDT</div></td>
+            <td><span class="exch-badge bybit">BYBIT</span><span class="exch-type cex">CEX</span></td>
+            <td class="right"><span class="apr negative">-0.0042%</span></td>
+            <td class="right"><span class="apr negative">-4.6% APR</span></td>
+            <td class="right">02:36:14</td>
+            <td class="right"><span class="bar"><span class="bar-fill" style="width:99%"></span></span></td>
+            <td class="right">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel col-4">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar yellow"></div>风控监控</div>
+        <div class="panel-actions"><button class="btn" data-go="settings">查看规则</button></div>
+      </div>
+      <div class="risk-panel">
+        <div class="risk-item">
+          <div class="risk-header"><span class="risk-label">单日回撤</span><span class="risk-status safe">安全</span></div>
+          <div class="risk-bar"><div class="risk-bar-fill safe" style="width:11%"></div></div>
+          <div class="risk-meta"><span>当前 -0.34%</span><span>红线 -3.00%</span></div>
+        </div>
+        <div class="risk-item">
+          <div class="risk-header"><span class="risk-label">周回撤</span><span class="risk-status safe">安全</span></div>
+          <div class="risk-bar"><div class="risk-bar-fill safe" style="width:18%"></div></div>
+          <div class="risk-meta"><span>当前 -1.42%</span><span>红线 -8.00%</span></div>
+        </div>
+        <div class="risk-item">
+          <div class="risk-header"><span class="risk-label">总仓位占用</span><span class="risk-status warn">中等</span></div>
+          <div class="risk-bar"><div class="risk-bar-fill warn" style="width:62%"></div></div>
+          <div class="risk-meta"><span>$3,253 / $5,247</span><span>62.0%</span></div>
+        </div>
+        <div class="risk-item">
+          <div class="risk-header"><span class="risk-label">最低永续保证金率</span><span class="risk-status safe">安全</span></div>
+          <div class="risk-bar"><div class="risk-bar-fill safe" style="width:24%"></div></div>
+          <div class="risk-meta"><span>76.4%</span><span>清算线 50.0%</span></div>
+        </div>
+        <div class="risk-item">
+          <div class="risk-header"><span class="risk-label">API 异常计数 (5min)</span><span class="risk-status safe">正常</span></div>
+          <div class="risk-bar"><div class="risk-bar-fill safe" style="width:0%"></div></div>
+          <div class="risk-meta"><span>0 次</span><span>触发阈值 3 次</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 持仓 + 交易所连接 -->
+  <div class="grid-12">
+    <div class="panel col-8">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar blue"></div>当前持仓 · DELTA 中性</div>
+        <div class="panel-actions"><button class="btn">全部平仓</button></div>
+      </div>
+      <div>
+        <div class="position-item">
+          <div class="position-header">
+            <div class="position-symbol"><span class="exch-badge bybit">BYBIT</span>ENA/USDT<span style="font-size:11px;color:var(--text-tertiary);font-weight:400;">建仓 6h 12m 前</span></div>
+            <div class="position-pnl profit">+$11.42 (+1.04%)</div>
+          </div>
+          <div class="position-details">
+            <div><div class="pos-label">现货持仓</div><div class="pos-value">+$1,098.42</div></div>
+            <div><div class="pos-label">永续空单</div><div class="pos-value">-$1,098.42</div></div>
+            <div><div class="pos-label">已收资金费</div><div class="pos-value green">+$8.86</div></div>
+            <div><div class="pos-label">实时年化</div><div class="pos-value green">34.2%</div></div>
+          </div>
+        </div>
+        <div class="position-item">
+          <div class="position-header">
+            <div class="position-symbol"><span class="exch-badge hyperliquid">HYPERLIQUID</span>HYPE/USDC<span style="font-size:11px;color:var(--text-tertiary);font-weight:400;">建仓 2h 41m 前</span></div>
+            <div class="position-pnl profit">+$8.93 (+0.81%)</div>
+          </div>
+          <div class="position-details">
+            <div><div class="pos-label">现货持仓</div><div class="pos-value">+$1,103.21</div></div>
+            <div><div class="pos-label">永续空单</div><div class="pos-value">-$1,103.21</div></div>
+            <div><div class="pos-label">已收资金费</div><div class="pos-value green">+$11.83</div></div>
+            <div><div class="pos-label">实时年化</div><div class="pos-value green">46.1%</div></div>
+          </div>
+        </div>
+        <div class="position-item">
+          <div class="position-header">
+            <div class="position-symbol"><span class="exch-badge okx">OKX</span>SOL/USDT<span style="font-size:11px;color:var(--text-tertiary);font-weight:400;">建仓 1d 4h 前</span></div>
+            <div class="position-pnl profit">+$3.06 (+0.30%)</div>
+          </div>
+          <div class="position-details">
+            <div><div class="pos-label">现货持仓</div><div class="pos-value">+$1,021.55</div></div>
+            <div><div class="pos-label">永续空单</div><div class="pos-value">-$1,021.55</div></div>
+            <div><div class="pos-label">已收资金费</div><div class="pos-value green">+$15.42</div></div>
+            <div><div class="pos-label">实时年化</div><div class="pos-value green">21.7%</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel col-4">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar purple"></div>交易所连接 · 7+2</div>
+        <div class="panel-actions"><button class="btn" data-go="settings">配置</button></div>
+      </div>
+      <div class="exch-status">
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo binance">B</div>
+            <div><div class="exch-name">Binance <span class="exch-type cex">CEX</span></div><div class="exch-meta"><span class="status-dot"></span>Connected · 18ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$1,052.34</div><div class="exch-balance-meta">现货+合约</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo bybit">b</div>
+            <div><div class="exch-name">Bybit <span class="exch-type cex">CEX</span></div><div class="exch-meta"><span class="status-dot"></span>Connected · 24ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$1,243.12</div><div class="exch-balance-meta">现货+合约</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo okx">O</div>
+            <div><div class="exch-name">OKX <span class="exch-type cex">CEX</span></div><div class="exch-meta"><span class="status-dot"></span>Connected · 31ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$952.37</div><div class="exch-balance-meta">现货+合约</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo htx">H</div>
+            <div><div class="exch-name">HTX <span class="exch-type cex">CEX</span></div><div class="exch-meta"><span class="status-dot"></span>Connected · 89ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$385.42</div><div class="exch-balance-meta">现货+合约</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo bitget">G</div>
+            <div><div class="exch-name">Bitget <span class="exch-type cex">CEX</span></div><div class="exch-meta"><span class="status-dot"></span>Connected · 42ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$478.91</div><div class="exch-balance-meta">现货+合约</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo hyperliquid">⊥</div>
+            <div><div class="exch-name">Hyperliquid <span class="exch-type dex">DEX</span></div><div class="exch-meta"><span class="status-dot"></span>Wallet 0x7a...4f2 · 124ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$687.55</div><div class="exch-balance-meta">链上钱包</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo dydx">d</div>
+            <div><div class="exch-name">dYdX v4 <span class="exch-type dex">DEX</span></div><div class="exch-meta"><span class="status-dot"></span>Wallet 0x7a...4f2 · 167ms</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount">$248.12</div><div class="exch-balance-meta">链上钱包</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo uniswap">U</div>
+            <div><div class="exch-name">Uniswap <span class="exch-type dex">DEX · 仅监控</span></div><div class="exch-meta">价格数据流 · ETH/ARB/BASE</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount" style="color:var(--text-tertiary);">监控模式</div><div class="exch-balance-meta">CEX-DEX 价差检测</div></div>
+        </div>
+        <div class="exch-row">
+          <div class="exch-info">
+            <div class="exch-logo pancake">P</div>
+            <div><div class="exch-name">PancakeSwap <span class="exch-type dex">DEX · 仅监控</span></div><div class="exch-meta">价格数据流 · BSC</div></div>
+          </div>
+          <div class="exch-balance"><div class="exch-balance-amount" style="color:var(--text-tertiary);">监控模式</div><div class="exch-balance-meta">CEX-DEX 价差检测</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PnL + 日志 -->
+  <div class="grid-12">
+    <div class="panel col-8">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar"></div>累计 PnL · 7 天</div>
+        <div class="panel-actions">
+          <button class="btn">24H</button>
+          <button class="btn primary">7D</button>
+          <button class="btn">30D</button>
+        </div>
+      </div>
+      <div class="chart-container">
+        <svg viewBox="0 0 800 200" preserveAspectRatio="none" style="width:100%;height:100%;">
+          <defs>
+            <linearGradient id="pnlGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style="stop-color:#00d68f;stop-opacity:0.3" />
+              <stop offset="100%" style="stop-color:#00d68f;stop-opacity:0" />
+            </linearGradient>
+          </defs>
+          <line x1="0" y1="40" x2="800" y2="40" stroke="#2a3340" stroke-width="0.5" stroke-dasharray="2,4"/>
+          <line x1="0" y1="80" x2="800" y2="80" stroke="#2a3340" stroke-width="0.5" stroke-dasharray="2,4"/>
+          <line x1="0" y1="120" x2="800" y2="120" stroke="#2a3340" stroke-width="0.5" stroke-dasharray="2,4"/>
+          <line x1="0" y1="160" x2="800" y2="160" stroke="#2a3340" stroke-width="0.5" stroke-dasharray="2,4"/>
+          <path d="M 0,170 L 50,165 L 100,158 L 150,155 L 200,148 L 250,140 L 300,135 L 350,128 L 400,118 L 450,108 L 500,98 L 550,85 L 600,72 L 650,60 L 700,52 L 750,42 L 800,35 L 800,200 L 0,200 Z" fill="url(#pnlGrad)"/>
+          <path d="M 0,170 L 50,165 L 100,158 L 150,155 L 200,148 L 250,140 L 300,135 L 350,128 L 400,118 L 450,108 L 500,98 L 550,85 L 600,72 L 650,60 L 700,52 L 750,42 L 800,35" fill="none" stroke="#00d68f" stroke-width="2"/>
+          <circle cx="800" cy="35" r="4" fill="#00d68f"/>
+          <text x="6" y="45" fill="#5a6470" font-size="10" font-family="JetBrains Mono">$120</text>
+          <text x="6" y="85" fill="#5a6470" font-size="10" font-family="JetBrains Mono">$80</text>
+          <text x="6" y="125" fill="#5a6470" font-size="10" font-family="JetBrains Mono">$40</text>
+          <text x="6" y="165" fill="#5a6470" font-size="10" font-family="JetBrains Mono">$0</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="panel col-4">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar yellow"></div>系统日志</div>
+      </div>
+      <div class="log-panel">
+        <div class="log-line"><span class="log-time">14:23:42</span><span class="log-level ok">OK</span><span class="log-msg">资金费已结算 <span class="hl">+$2.84</span> from <span class="hl">PEPE</span></span></div>
+        <div class="log-line"><span class="log-time">14:23:18</span><span class="log-level info">INFO</span><span class="log-msg">扫描 <span class="hl">9</span> 个机会(APR > 10%)</span></div>
+        <div class="log-line"><span class="log-time">14:22:45</span><span class="log-level info">INFO</span><span class="log-msg">WS 心跳 <span class="hl">7/7</span> 交易所</span></div>
+        <div class="log-line"><span class="log-time">14:21:33</span><span class="log-level warn">WARN</span><span class="log-msg">HTX 延迟 <span class="hl">142ms</span> 超阈值</span></div>
+        <div class="log-line"><span class="log-time">14:18:02</span><span class="log-level ok">OK</span><span class="log-msg">建仓 <span class="hl">HYPE</span> · 滑点 0.08%</span></div>
+        <div class="log-line"><span class="log-time">14:17:58</span><span class="log-level info">INFO</span><span class="log-msg">用户确认 HYPE · $1,100</span></div>
+        <div class="log-line"><span class="log-time">14:17:32</span><span class="log-level info">INFO</span><span class="log-msg">机会触发: <span class="hl">HYPE 46.1% APR</span></span></div>
+        <div class="log-line"><span class="log-time">14:15:20</span><span class="log-level ok">OK</span><span class="log-msg">风控通过 · 5 项指标安全</span></div>
+        <div class="log-line"><span class="log-time">14:12:08</span><span class="log-level info">INFO</span><span class="log-msg">资金费 <span class="hl">+$3.21</span> from SOL</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============= 页面 2: CEX-DEX 套利 ============= -->
+<div class="page" id="page-dex-arb">
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title"><div class="panel-title-bar purple"></div>CEX-DEX 现货价差监控 · 仅提示模式</div>
+      <div class="panel-actions">
+        <button class="btn">所有币种</button>
+        <button class="btn primary">↻ 实时</button>
+      </div>
+    </div>
+    <div style="padding: 14px 16px; background: rgba(177, 108, 255, 0.05); border-bottom: 1px solid var(--border); font-size: 14px; color: var(--text-secondary);">
+      ⚠️ 此模块仅做<strong style="color: var(--text-primary);">监控提示</strong>。CEX-DEX 套利涉及 Gas 费、MEV 风险、跨链桥接,系统不会自动执行,需要你手动操作或使用 1inch Fusion 等聚合器。所有显示的"净利润"均已扣除当前 Gas 估值与 0.3% 滑点假设。
+    </div>
+    <table class="opp-table">
+      <thead>
+        <tr>
+          <th>币对</th>
+          <th>CEX 端</th>
+          <th class="right">CEX 价格</th>
+          <th>DEX 端</th>
+          <th class="right">DEX 价格</th>
+          <th class="right">毛价差</th>
+          <th class="right">净利润 (扣 Gas)</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="dex-row">
+          <td><div class="symbol-cell">PEPE/USDT</div></td>
+          <td><span class="exch-badge binance">BINANCE</span></td>
+          <td class="right">$0.00001234</td>
+          <td><span class="exch-badge uniswap">UNISWAP V3</span></td>
+          <td class="right">$0.00001281</td>
+          <td class="right"><span class="apr high">+3.81%</span></td>
+          <td class="right"><span class="apr high">+$42.18 / $1k</span></td>
+          <td class="right"><button class="btn primary">查看</button></td>
+        </tr>
+        <tr>
+          <td><div class="symbol-cell">CAKE/USDT</div></td>
+          <td><span class="exch-badge bybit">BYBIT</span></td>
+          <td class="right">$2.142</td>
+          <td><span class="exch-badge pancake">PANCAKE V3</span></td>
+          <td class="right">$2.158</td>
+          <td class="right"><span class="apr medium">+0.75%</span></td>
+          <td class="right"><span class="apr medium">+$3.42 / $1k</span></td>
+          <td class="right"><button class="btn">查看</button></td>
+        </tr>
+        <tr>
+          <td><div class="symbol-cell">UNI/USDT</div></td>
+          <td><span class="exch-badge okx">OKX</span></td>
+          <td class="right">$8.421</td>
+          <td><span class="exch-badge uniswap">UNISWAP V3</span></td>
+          <td class="right">$8.398</td>
+          <td class="right"><span class="apr low">-0.27%</span></td>
+          <td class="right"><span class="apr negative">-$15.20 / $1k</span></td>
+          <td class="right">—</td>
+        </tr>
+        <tr>
+          <td><div class="symbol-cell">ARB/USDT</div></td>
+          <td><span class="exch-badge binance">BINANCE</span></td>
+          <td class="right">$0.4521</td>
+          <td><span class="exch-badge uniswap">UNISWAP (ARB)</span></td>
+          <td class="right">$0.4543</td>
+          <td class="right"><span class="apr medium">+0.49%</span></td>
+          <td class="right"><span class="apr high">+$3.10 / $1k</span></td>
+          <td class="right"><button class="btn">查看</button></td>
+        </tr>
+        <tr>
+          <td><div class="symbol-cell">LINK/USDT</div></td>
+          <td><span class="exch-badge bitget">BITGET</span></td>
+          <td class="right">$15.42</td>
+          <td><span class="exch-badge uniswap">UNISWAP V3</span></td>
+          <td class="right">$15.41</td>
+          <td class="right"><span class="apr low">-0.06%</span></td>
+          <td class="right"><span class="apr negative">-$22.40 / $1k</span></td>
+          <td class="right">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid-12">
+    <div class="panel col-6">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar"></div>当前 Gas 费状况</div>
+      </div>
+      <div style="padding: 20px;">
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+          <div>
+            <div class="kpi-label" style="margin-bottom: 6px;">Ethereum 主网</div>
+            <div class="kpi-value mono" style="font-size: 20px;">42 gwei</div>
+            <div class="kpi-meta"><span>Uniswap swap ≈ $14</span></div>
+          </div>
+          <div>
+            <div class="kpi-label" style="margin-bottom: 6px;">Arbitrum</div>
+            <div class="kpi-value green mono" style="font-size: 20px;">0.05 gwei</div>
+            <div class="kpi-meta"><span>Uniswap swap ≈ $0.18</span></div>
+          </div>
+          <div>
+            <div class="kpi-label" style="margin-bottom: 6px;">BSC</div>
+            <div class="kpi-value green mono" style="font-size: 20px;">3 gwei</div>
+            <div class="kpi-meta"><span>PancakeSwap ≈ $0.32</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel col-6">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar yellow"></div>提示规则</div>
+      </div>
+      <div style="padding: 18px; font-size: 13px; line-height: 1.8; color: var(--text-secondary);">
+        <div style="margin-bottom: 10px;">• <strong style="color: var(--text-primary);">机会触发条件</strong>:净利润 > $5 / $1000 本金</div>
+        <div style="margin-bottom: 10px;">• <strong style="color: var(--text-primary);">假设滑点</strong>:0.3% (V3 池子标准估值)</div>
+        <div style="margin-bottom: 10px;">• <strong style="color: var(--text-primary);">不计入</strong>:CEX 提币费、桥接费(资金已分布)</div>
+        <div style="margin-bottom: 10px;">• <strong style="color: var(--text-primary);">MEV 警告</strong>:大于 $5k 的单笔建议用 Flashbots Protect</div>
+        <div>• <strong style="color: var(--text-primary);">推送策略</strong>:每个机会只通知一次,30 分钟冷却期</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============= 页面 3: 通知中心 ============= -->
+<div class="page" id="page-notifications">
+
+  <div class="grid-12">
+    <div class="panel col-12">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar red"></div>实时通知 · 24 小时</div>
+        <div class="panel-actions">
+          <button class="btn">全部</button>
+          <button class="btn">未读 (3)</button>
+          <button class="btn">CRITICAL</button>
+          <button class="btn">WARN</button>
+          <button class="btn">SUCCESS</button>
+          <button class="btn primary">标记全部已读</button>
+        </div>
+      </div>
+      <div class="notif-list">
+
+        <div class="notif-item unread">
+          <div class="notif-icon crit">🚨</div>
+          <div class="notif-body">
+            <div class="notif-title" style="color: var(--accent-red);">CRITICAL · 单日回撤接近红线</div>
+            <div class="notif-msg">当前回撤 -2.34%,距离红线 -3.00% 仅 0.66%。建议立即检查持仓状态,系统将在触及红线时自动平仓所有头寸。</div>
+            <div class="notif-meta">
+              <span>14:21:33</span>
+              <span>2 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">📱 Telegram</span>
+                <span class="notif-channel-tag">💬 Discord</span>
+                <span class="notif-channel-tag">📧 Email</span>
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item unread">
+          <div class="notif-icon ok">✅</div>
+          <div class="notif-body">
+            <div class="notif-title" style="color: var(--accent-green);">SUCCESS · 建仓成功</div>
+            <div class="notif-msg">HYPE/USDC @ Hyperliquid · 建仓金额 $1,103.21 · Delta 中性建立 · 滑点 0.08% · 当前年化 46.1%</div>
+            <div class="notif-meta">
+              <span>14:18:02</span>
+              <span>5 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">📱 Telegram</span>
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item unread">
+          <div class="notif-icon warn">⚠️</div>
+          <div class="notif-body">
+            <div class="notif-title" style="color: var(--accent-yellow);">WARN · 新机会触发</div>
+            <div class="notif-msg">HYPE/USDC @ Hyperliquid 资金费率上涨至 +0.0421%(46.1% APR),已超过你设置的 25% APR 推送阈值,建议查看后建仓。</div>
+            <div class="notif-meta">
+              <span>14:17:32</span>
+              <span>6 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">📱 Telegram</span>
+                <span class="notif-channel-tag">💬 Discord</span>
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item">
+          <div class="notif-icon ok">💰</div>
+          <div class="notif-body">
+            <div class="notif-title">SUCCESS · 资金费已结算</div>
+            <div class="notif-msg">PEPE/USDT @ Bitget · 收入 +$2.84 · 累计今日资金费收入 $8.42</div>
+            <div class="notif-meta">
+              <span>14:23:42</span>
+              <span>1 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item">
+          <div class="notif-icon warn">⚡</div>
+          <div class="notif-body">
+            <div class="notif-title" style="color: var(--accent-yellow);">WARN · API 延迟</div>
+            <div class="notif-msg">HTX API 响应延迟 142ms 超过阈值 100ms,已自动切换到备用节点。</div>
+            <div class="notif-meta">
+              <span>14:21:33</span>
+              <span>2 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">💬 Discord</span>
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item">
+          <div class="notif-icon info">ℹ️</div>
+          <div class="notif-body">
+            <div class="notif-title">INFO · CEX-DEX 价差机会</div>
+            <div class="notif-msg">PEPE: Binance($0.00001234) vs Uniswap V3($0.00001281),价差 +3.81%,扣 Gas 后净利润约 +$42 / $1k 本金。</div>
+            <div class="notif-meta">
+              <span>13:58:12</span>
+              <span>26 分钟前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">🍞 Toast</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notif-item">
+          <div class="notif-icon ok">📊</div>
+          <div class="notif-body">
+            <div class="notif-title">INFO · 每日总结(05-05)</div>
+            <div class="notif-msg">昨日 PnL: +$31.84(+0.61%) · 资金费收入 $24.10 · 持仓 3 · 最大回撤 -0.42% · 风控全程安全。</div>
+            <div class="notif-meta">
+              <span>00:00:08</span>
+              <span>14 小时前</span>
+              <div class="notif-channels">
+                <span class="notif-channel-tag">📱 Telegram</span>
+                <span class="notif-channel-tag">📧 Email</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============= 页面 4: 设置中心 ============= -->
+<div class="page" id="page-settings">
+
+  <!-- Tier 1: 仪表盘可调 -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="panel-title-bar"></div>
+        策略参数 <span class="settings-group-tier tier-1">TIER 1 · 自由调整</span>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-group-desc">这些参数你可以随时调整,不会影响系统安全性。</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">资金费率扫描阈值</div>
+          <div class="setting-desc">低于此年化收益率的机会不显示在扫描器中</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="5" max="50" value="10" step="1">
+            <span class="range-value">10% APR</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">单笔建仓金额</div>
+          <div class="setting-desc">每次建仓的默认金额(可在建仓时单独修改)</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="100" max="2000" value="1000" step="50">
+            <span class="range-value">$1,000</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">最大并发持仓数</div>
+          <div class="setting-desc">同时持有的资金费率套利仓位数量上限</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="1" max="10" value="5" step="1">
+            <span class="range-value">5 个</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">自动建仓</div>
+          <div class="setting-desc">机会达到阈值后自动建仓(Module 4 功能,目前未启用)</div>
+        </div>
+        <div class="setting-control">
+          <label class="toggle"><input type="checkbox" disabled><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tier 2: 二次确认 -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="panel-title-bar yellow"></div>
+        风险参数 <span class="settings-group-tier tier-2">TIER 2 · 修改后 5 分钟生效</span>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-group-desc">这些参数会影响仓位规模。修改后需要等待 5 分钟生效,期间可以撤销。</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">单交易所最大仓位占比</div>
+          <div class="setting-desc">在单一交易所的总仓位不能超过总资金的此比例</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="30" max="70" value="50" step="5">
+            <span class="range-value">50%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">单币种最大仓位占比</div>
+          <div class="setting-desc">单一币种的持仓不能超过总资金的此比例</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="10" max="30" value="20" step="5">
+            <span class="range-value">20%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">期望年化最低阈值</div>
+          <div class="setting-desc">低于此年化的机会不会触发建仓提示</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-input">
+            <input type="range" min="10" max="40" value="15" step="1">
+            <span class="range-value">15% APR</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tier 3: 锁定 -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="panel-title-bar red"></div>
+        命根子参数 <span class="settings-group-tier tier-3">TIER 3 · 必须修改 config.yaml</span>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-group-desc" style="color: var(--accent-red);">
+        ⚠️ 这些参数是系统的最后防线。它们故意不能在仪表盘上修改 — 你必须 SSH 到服务器,手动编辑 <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; font-family: 'JetBrains Mono';">config.yaml</code> 文件并重启服务才能改变。这种"摩擦"设计是有意的:它防止你在亏损时冲动地放宽风控。
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">单日回撤红线</div>
+          <div class="setting-desc">单日亏损超过此比例时,系统强制平仓所有持仓并停机</div>
+        </div>
+        <div class="setting-control">
+          <div class="locked-input"><span class="lock-icon">🔒</span>-3.00%</div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">周回撤红线</div>
+          <div class="setting-desc">7 日累计亏损超过此比例时,系统强制平仓并停机</div>
+        </div>
+        <div class="setting-control">
+          <div class="locked-input"><span class="lock-icon">🔒</span>-8.00%</div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">永续保证金率最低阈值</div>
+          <div class="setting-desc">任何永续仓位的保证金率低于此值时,自动减仓</div>
+        </div>
+        <div class="setting-control">
+          <div class="locked-input"><span class="lock-icon">🔒</span>50.00%</div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">紧急熔断逻辑</div>
+          <div class="setting-desc">控制 API 异常、WebSocket 断连、价格异动等情况下的系统行为</div>
+        </div>
+        <div class="setting-control">
+          <div class="locked-input"><span class="lock-icon">🔒</span>已启用</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知矩阵 -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="panel-title-bar blue"></div>
+        通知矩阵 · 分级订阅
+      </div>
+    </div>
+    <div class="settings-section" style="padding: 0;">
+      <div style="padding: 16px 24px 8px 24px; font-size: 14px; color: var(--text-secondary);">
+        每个事件级别可以独立选择推送渠道。CRITICAL 级别强制全开,不允许关闭。
+      </div>
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th style="text-align: left;">事件级别</th>
+            <th>📱 Telegram</th>
+            <th>💬 Discord</th>
+            <th>📧 Email</th>
+            <th>🍞 Toast</th>
+            <th>🖥 系统通知</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="matrix-level"><span class="matrix-level-dot info"></span>INFO 信息</div></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+          </tr>
+          <tr>
+            <td><div class="matrix-level"><span class="matrix-level-dot ok"></span>SUCCESS 成功</div></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+          </tr>
+          <tr>
+            <td><div class="matrix-level"><span class="matrix-level-dot warn"></span>WARN 警告</div></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox"><input type="checkbox" checked><span class="checkbox-mark"></span></label></td>
+          </tr>
+          <tr style="background: rgba(255, 71, 87, 0.04);">
+            <td><div class="matrix-level"><span class="matrix-level-dot crit"></span>CRITICAL 严重</div></td>
+            <td><label class="checkbox locked"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox locked"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox locked"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox locked"><span class="checkbox-mark"></span></label></td>
+            <td><label class="checkbox locked"><span class="checkbox-mark"></span></label></td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="padding: 12px 24px; font-size: 12px; color: var(--text-tertiary); border-top: 1px solid var(--border);">
+        <span style="color: var(--accent-red);">🔒</span> CRITICAL 级别全部锁定为开,无法关闭
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知渠道配置 -->
+  <div class="grid-12">
+    <div class="panel col-6">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar blue"></div>📱 Telegram 配置</div>
+      </div>
+      <div class="settings-section">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Bot Token</div>
+            <div class="setting-desc">向 @BotFather 申请 → /newbot</div>
+          </div>
+          <div class="setting-control">
+            <span class="risk-status safe">已配置</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Chat ID</div>
+            <div class="setting-desc">向 @userinfobot 发消息获取</div>
+          </div>
+          <div class="setting-control">
+            <span class="mono" style="color: var(--text-secondary); font-size: 13px;">847****29</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">交互按钮</div>
+            <div class="setting-desc">通知中带"一键平仓"等操作按钮</div>
+          </div>
+          <div class="setting-control">
+            <label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-row" style="border-bottom: none;">
+          <div class="setting-control" style="margin-left: auto;">
+            <button class="btn">发送测试消息</button>
+            <button class="btn primary">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel col-6">
+      <div class="panel-header">
+        <div class="panel-title"><div class="panel-title-bar blue"></div>💬 Discord / 📧 Email</div>
+      </div>
+      <div class="settings-section">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Discord Webhook URL</div>
+            <div class="setting-desc">在你的服务器 → 频道设置 → Webhooks 创建</div>
+          </div>
+          <div class="setting-control">
+            <span class="risk-status safe">已配置</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">SMTP 服务器</div>
+            <div class="setting-desc">推荐使用 SendGrid / Mailgun(免费额度足够)</div>
+          </div>
+          <div class="setting-control">
+            <span class="risk-status warn">未配置</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">系统通知权限</div>
+            <div class="setting-desc">浏览器原生通知(需要授权)</div>
+          </div>
+          <div class="setting-control">
+            <label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-row" style="border-bottom: none;">
+          <div class="setting-control" style="margin-left: auto;">
+            <button class="btn">测试全部</button>
+            <button class="btn primary">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<!-- Toast 通知 -->
+<div class="toast-container" id="toast-container">
+  <div class="toast">
+    <div class="toast-icon">✅</div>
+    <div class="toast-body">
+      <div class="toast-title" style="color: var(--accent-green);">资金费已结算</div>
+      <div class="toast-msg">PEPE/USDT @ Bitget · +$2.84</div>
+    </div>
+    <div class="toast-close">×</div>
+  </div>
+</div>
+
+<script>
+// 时钟
+function updateClock() {
+  const now = new Date();
+  const utc = now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const el = document.getElementById('clock');
+  if (el) el.textContent = utc;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// 页面切换
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const target = item.getAttribute('data-page');
+    if (!target) return;
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    item.classList.add('active');
+    document.getElementById('page-' + target).classList.add('active');
+    window.scrollTo(0, 0);
+  });
+});
+
+// 跳转按钮
+document.querySelectorAll('[data-go]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.getAttribute('data-go');
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelector(`[data-page="${target}"]`).classList.add('active');
+    document.getElementById('page-' + target).classList.add('active');
+    window.scrollTo(0, 0);
+  });
+});
+
+// 滑块联动
+document.querySelectorAll('input[type="range"]').forEach(r => {
+  r.addEventListener('input', e => {
+    const valueEl = e.target.parentElement.querySelector('.range-value');
+    if (!valueEl) return;
+    const v = e.target.value;
+    const t = valueEl.textContent;
+    if (t.includes('APR')) valueEl.textContent = v + '% APR';
+    else if (t.includes('$')) valueEl.textContent = '$' + Number(v).toLocaleString();
+    else if (t.includes('%')) valueEl.textContent = v + '%';
+    else valueEl.textContent = v + ' 个';
+  });
+});
+
+// Toast 关闭
+document.querySelectorAll('.toast-close').forEach(c => {
+  c.addEventListener('click', () => c.parentElement.remove());
+});
+
+// 让数据微动
+setInterval(() => {
+  document.querySelectorAll('.bar-fill').forEach(b => {
+    const w = parseFloat(b.style.width);
+    const newW = Math.max(40, Math.min(99, w + (Math.random() - 0.5) * 3));
+    b.style.width = newW + '%';
+  });
+}, 2500);
+</script>
+
+</body>
+</html>
