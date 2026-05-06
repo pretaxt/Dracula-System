@@ -1,0 +1,24 @@
+# 策略 #4 — 期现套利 (Phase 0 主力)
+# 对应文档: docs/04_strategy_spot_perp.md
+
+instance_name: spot_perp_main
+strategy_type: spot_perp
+enabled: false
+capital_usd: 1000.0
+
+entry:
+  min_basis_pct: 0.3
+  min_orderbook_depth_usd: 5000
+
+exit:
+  basis_convergence_pct: 0.05
+  max_hold_hours: 720.0
+
+position:
+  max_positions: 2
+  size_usd: 500.0
+  exchanges: ["binance"]
+
+leverage:
+  default: 1.0
+  max: 2.0

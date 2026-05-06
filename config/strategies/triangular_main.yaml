@@ -1,0 +1,21 @@
+# 策略 #13 — 三角套利 (Phase 0 主力)
+# 对应文档: docs/13_strategy_triangular.md
+
+instance_name: triangular_main
+strategy_type: triangular
+enabled: false
+capital_usd: 500.0
+
+entry:
+  min_profit_pct: 0.05
+  max_execution_ms: 500
+  min_orderbook_depth_usd: 3000
+
+position:
+  max_positions: 1
+  size_usd: 500.0
+  exchanges: ["binance"]
+
+leverage:
+  default: 1.0
+  max: 1.0                    # 三角套利不加杠杆

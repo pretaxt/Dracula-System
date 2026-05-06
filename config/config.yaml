@@ -1,0 +1,88 @@
+# ============================================================
+# Dracula System — 主配置文件
+#
+# 包含运行时参数（非 secrets）
+# Secrets 在 .env 文件中管理
+#
+# 对应文档:
+#   风控: docs/01_overview_and_architecture.md §4
+#   决策: docs/REVIEW_RESULT.md
+# ============================================================
+
+system:
+  scan_interval_seconds: 300
+  heartbeat_interval_seconds: 30
+  max_concurrent_positions: 5
+  position_size_usd: 500
+
+# ============================================================
+# 风控 — 三层熔断（冻结，不要轻易修改）
+# 对应: REVIEW_RESULT.md 决策 2.1 / 2.2 / 2.3
+# ============================================================
+risk:
+
+  # Tier 3a — 单策略熔断
+  tier3a:
+    strategy_drawdown_stop_pct: -3.0      # 浮亏达到此值停止建仓
+    strategy_drawdown_recover_pct: -1.0   # 浮亏收回到此值自动恢复
+
+  # Tier 3b — 账户级熔断（需手动重启）
+  tier3b:
+    daily_drawdown_stop_pct: -3.0
+    weekly_drawdown_stop_pct: -8.0
+    requires_manual_restart: true
+
+  # Tier 3c — 强制平仓（需手动重启）
+  tier3c:
+    daily_drawdown_force_close_pct: -5.0
+    margin_ratio_force_close_pct: 50.0
+    requires_manual_restart: true
+
+  # 分层杠杆（决策 2.2）
+  leverage_tiers:
+    tier_a:
+      symbols: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+      max_leverage: 5.0
+      liquidation_buffer_pct: -18.0
+    tier_b:
+      symbols: ["BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT"]
+      max_leverage: 3.0
+      liquidation_buffer_pct: -25.0
+    tier_c:
+      rule: "permanently_banned"
+      description: "不在 Tier A/B 白名单的币种永久禁止开仓"
+
+# ============================================================
+# 交易所
+# ============================================================
+exchanges:
+  binance:
+    enabled: true
+    testnet: false
+    rate_limit_rps: 10
+    timeout_seconds: 5
+  bybit:
+    enabled: false
+    testnet: false
+    rate_limit_rps: 10
+    timeout_seconds: 5
+  okx:
+    enabled: false
+    testnet: false
+    rate_limit_rps: 10
+    timeout_seconds: 5
+
+# ============================================================
+# 扫描器参数
+# ============================================================
+scanner:
+  funding_rate:
+    min_apr_pct: 10.0
+    min_orderbook_depth_usd: 10000
+    max_positions_per_symbol: 1
+  spot_perp:
+    min_basis_pct: 0.3
+    min_orderbook_depth_usd: 5000
+  triangular:
+    min_profit_pct: 0.05
+    max_execution_ms: 500

@@ -1,0 +1,26 @@
+# 策略 #1 — 资金费率套利 (Phase 0 主力)
+# 对应文档: docs/02_strategy_funding_rate.md
+
+instance_name: funding_rate_main
+strategy_type: funding_rate
+enabled: false              # Week 5 开发完成后改为 true
+capital_usd: 2000.0
+
+entry:
+  min_apr_pct: 10.0
+  min_orderbook_depth_usd: 10000
+  max_basis_pct: 0.5
+
+exit:
+  funding_rate_reversal: true
+  min_hold_hours: 1.0
+  max_hold_hours: 168.0
+
+position:
+  max_positions: 3
+  size_usd: 500.0
+  exchanges: ["binance"]
+
+leverage:
+  default: 1.0
+  max: 2.0
