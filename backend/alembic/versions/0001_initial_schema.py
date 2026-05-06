@@ -311,12 +311,7 @@ def upgrade() -> None:
         "user_settings",
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("notification_matrix", postgresql.JSONB, nullable=False,
-                  server_default=sa.text("""'{
-                    "info":     {"telegram":false,"discord":false,"email":false,"toast":true,"system":false},
-                    "success":  {"telegram":true, "discord":false,"email":false,"toast":true,"system":false},
-                    "warn":     {"telegram":true, "discord":true, "email":false,"toast":true,"system":true},
-                    "critical": {"telegram":true, "discord":true, "email":true, "toast":true,"system":true}
-                  }'::jsonb""")),
+                  server_default='\'{"info":{"telegram":false,"discord":false,"email":false,"toast":true,"system":false},"success":{"telegram":true,"discord":false,"email":false,"toast":true,"system":false},"warn":{"telegram":true,"discord":true,"email":false,"toast":true,"system":true},"critical":{"telegram":true,"discord":true,"email":true,"toast":true,"system":true}}\'::jsonb'),
         sa.Column("scan_min_apr", sa.Numeric(10, 4), server_default="10.0"),
         sa.Column("default_position_size_usd", sa.Numeric(20, 2), server_default="500"),
         sa.Column("max_concurrent_positions", sa.Integer, server_default="5"),
