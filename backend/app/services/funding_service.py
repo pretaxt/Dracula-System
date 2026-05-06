@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.redis_client import get_redis_client
+from app.core.redis_client import get_redis
 
 
 async def get_opportunities() -> tuple[list[dict], datetime | None]:
     """从 Redis 读取最新机会快照。"""
-    client = await get_redis_client()
+    client = get_redis()
     raw = await client.get("dracula:funding_rate:opportunities")
     if not raw:
         return [], None
