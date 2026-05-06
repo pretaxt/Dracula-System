@@ -62,33 +62,33 @@ services:
         max-file: "3"
 
   # ----------------------------------------------------------
-  # Week 3+: API 服务 (FastAPI)
+  # API 服务 (FastAPI)
   # ----------------------------------------------------------
-  # api:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   restart: unless-stopped
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     POSTGRES_HOST: postgres
-  #     REDIS_URL: redis://redis:6379/0
-  #   ports:
-  #     - "127.0.0.1:8000:8000"
-  #   volumes:
-  #     - ./config:/app/config:ro
-  #     - ./logs:/app/logs
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ----------------------------------------------------------
   # Week 5+: 策略引擎
