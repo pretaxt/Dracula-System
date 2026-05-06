@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dracula-System · 12 项关键决策 Review</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #08080f;
+    --bg-card: #0f0f17;
+    --bg-elevated: #18182a;
+    --border-subtle: #1a1a26;
+    --border-default: #25252e;
+    --border-strong: #4a4a5e;
+    --text-primary: #ffffff;
+    --text-secondary: #b8b8c8;
+    --text-tertiary: #909099;
+    --accent-blood: #e34058;
+    --accent-emerald: #3ed492;
+    --accent-gold: #f0b850;
+  }
+
+  [data-theme="light"] {
+    --bg-base: #f4f4ed;
+    --bg-card: #ffffff;
+    --bg-elevated: #ffffff;
+    --border-subtle: #e0e0d4;
+    --border-default: #c4c4b8;
+    --border-strong: #a0a098;
+    --text-primary: #0a0a0a;
+    --text-secondary: #1a1a1a;
+    --text-tertiary: #6c6c75;
+    --accent-blood: #b81a30;
+    --accent-emerald: #0e7e4a;
+    --accent-gold: #a06010;
+  }
+
+  * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 0;
+    padding: 40px 20px;
+    transition: background-color 0.3s, color 0.3s;
+  }
+
+  .container { max-width: 900px; margin: 0 auto; }
+
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 30px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .header h1 {
+    font-family: 'Cinzel', serif;
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin: 0 0 8px;
+  }
+
+  .header .meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.1em;
+  }
+
+  .controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+    padding: 16px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    position: sticky;
+    top: 16px;
+    z-index: 10;
+  }
+
+  .progress {
+    flex: 1;
+  }
+
+  .progress-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .progress-bar {
+    height: 6px;
+    background: var(--border-subtle);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-emerald), var(--accent-blood));
+    transition: width 0.3s;
+    width: 0%;
+  }
+
+  .controls-buttons {
+    display: flex;
+    gap: 10px;
+    margin-left: 20px;
+  }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text-secondary);
+    transition: all 0.15s;
+  }
+  .btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-primary);
+  }
+  .btn-primary {
+    background: var(--accent-blood);
+    color: white;
+    border-color: var(--accent-blood);
+  }
+  .btn-primary:hover {
+    color: white;
+    opacity: 0.9;
+  }
+
+  /* 决策汇总表 */
+  .summary-table {
+    width: 100%;
+    margin-bottom: 32px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    border-collapse: collapse;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+  }
+
+  .summary-table th, .summary-table td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .summary-table th {
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .summary-table td:first-child {
+    font-weight: 600;
+    color: var(--accent-blood);
+    width: 50px;
+  }
+
+  .summary-status {
+    text-align: center;
+    width: 80px;
+    font-size: 16px;
+  }
+
+  /* 决策项 */
+  .decision {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    padding: 28px;
+    margin-bottom: 20px;
+    transition: border-color 0.2s, box-shadow 0.3s;
+  }
+
+  .decision.status-accepted {
+    border-left: 3px solid var(--accent-emerald);
+  }
+  .decision.status-discuss {
+    border-left: 3px solid var(--accent-gold);
+  }
+  .decision.status-reject {
+    border-left: 3px solid var(--accent-blood);
+  }
+
+  .decision-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .decision-id {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    color: var(--accent-blood);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .decision-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 4px 0 0;
+    color: var(--text-primary);
+  }
+
+  .decision-priority {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .decision-priority.critical {
+    background: rgba(227, 64, 88, 0.12);
+    color: var(--accent-blood);
+    border: 1px solid var(--accent-blood);
+  }
+
+  .decision-priority.high {
+    background: rgba(240, 184, 80, 0.12);
+    color: var(--accent-gold);
+    border: 1px solid var(--accent-gold);
+  }
+
+  .decision-priority.normal {
+    background: rgba(180, 180, 200, 0.08);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-strong);
+  }
+
+  .decision section {
+    margin: 16px 0;
+  }
+
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .section-content {
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .key-numbers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 8px 0;
+  }
+
+  .key-number {
+    background: var(--bg-elevated);
+    padding: 10px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+  }
+
+  .key-number-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+
+  .key-number-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .warning-box {
+    background: rgba(227, 64, 88, 0.06);
+    border-left: 3px solid var(--accent-blood);
+    padding: 12px 16px;
+    margin: 12px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  .info-box {
+    background: rgba(240, 184, 80, 0.06);
+    border-left: 3px solid var(--accent-gold);
+    padding: 12px 16px;
+    margin: 12px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  /* 态度选择区 */
+  .response-area {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--bg-elevated);
+    border-radius: 6px;
+    border: 1px dashed var(--border-default);
+  }
+
+  .response-options {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .response-btn {
+    padding: 10px 18px;
+    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+
+  .response-btn:hover {
+    border-color: var(--text-primary);
+    color: var(--text-primary);
+  }
+
+  .response-btn.selected.accept {
+    background: var(--accent-emerald);
+    color: white;
+    border-color: var(--accent-emerald);
+  }
+  .response-btn.selected.discuss {
+    background: var(--accent-gold);
+    color: #08080f;
+    border-color: var(--accent-gold);
+  }
+  .response-btn.selected.reject {
+    background: var(--accent-blood);
+    color: white;
+    border-color: var(--accent-blood);
+  }
+
+  .response-note {
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+    display: none;
+  }
+
+  .response-note.show {
+    display: block;
+  }
+
+  /* 主题切换按钮 */
+  .theme-toggle {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    cursor: pointer;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: transform 0.15s;
+  }
+  .theme-toggle:hover { transform: scale(1.1); }
+
+  /* 章节分隔 */
+  .section-divider {
+    margin: 50px 0 24px;
+    text-align: center;
+    position: relative;
+  }
+  .section-divider::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border-default);
+  }
+  .section-divider span {
+    background: var(--bg-base);
+    position: relative;
+    padding: 0 20px;
+    font-family: 'Cinzel', serif;
+    font-size: 18px;
+    color: var(--text-secondary);
+    letter-spacing: 0.1em;
+  }
+
+  /* sign-off */
+  .signoff {
+    margin-top: 40px;
+    background: var(--bg-card);
+    border: 2px solid var(--accent-blood);
+    border-radius: 6px;
+    padding: 32px;
+  }
+  .signoff h2 {
+    font-family: 'Cinzel', serif;
+    font-size: 22px;
+    margin: 0 0 16px;
+    letter-spacing: 0.05em;
+  }
+  .signoff-list {
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 2;
+    color: var(--text-secondary);
+  }
+  .signoff-list label {
+    display: block;
+    cursor: pointer;
+  }
+  .signoff-fields {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+    margin-top: 20px;
+  }
+  .signoff-field input {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .signoff-field-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+
+  .footer {
+    margin-top: 40px;
+    padding: 20px 0;
+    border-top: 1px solid var(--border-subtle);
+    text-align: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()" title="切换日夜模式">
+  <span id="theme-icon">🌙</span>
+</button>
+
+<div class="container">
+
+  <header class="header">
+    <h1>DRACULA SYSTEM</h1>
+    <div class="meta">12 项关键决策 · Review 文档 v1.0 · 2026-05-06</div>
+  </header>
+
+  <!-- 控制栏 -->
+  <div class="controls">
+    <div class="progress">
+      <div class="progress-text">进度:<span id="progress-count">0</span> / 12 项已 review</div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
+    <div class="controls-buttons">
+      <button class="btn" onclick="acceptAll()">全部 ✅</button>
+      <button class="btn" onclick="resetAll()">重置</button>
+      <button class="btn btn-primary" onclick="exportReview()">导出</button>
+    </div>
+  </div>
+
+  <!-- 汇总表 -->
+  <table class="summary-table" id="summary-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>决策</th>
+        <th>关键数字</th>
+        <th class="summary-status">态度</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1.1</td><td>月化收益预期</td><td>1%-3%</td><td class="summary-status" data-summary="1.1">—</td></tr>
+      <tr><td>1.2</td><td>开发周期</td><td>8-12 周</td><td class="summary-status" data-summary="1.2">—</td></tr>
+      <tr><td>1.3</td><td>资金阶梯放大</td><td>$500 → $5k</td><td class="summary-status" data-summary="1.3">—</td></tr>
+      <tr><td>2.1</td><td>单日回撤红线</td><td>-3%</td><td class="summary-status" data-summary="2.1">—</td></tr>
+      <tr><td>2.2</td><td>永续杠杆上限</td><td>≤ 3 倍</td><td class="summary-status" data-summary="2.2">—</td></tr>
+      <tr><td>2.3</td><td>Tier 3 锁定</td><td>改 yaml 重启</td><td class="summary-status" data-summary="2.3">—</td></tr>
+      <tr><td>3.1</td><td>Phase 0 策略数</td><td>3 个(非 17)</td><td class="summary-status" data-summary="3.1">—</td></tr>
+      <tr><td>3.2</td><td>期权策略</td><td>Phase 0 禁用</td><td class="summary-status" data-summary="3.2">—</td></tr>
+      <tr><td>4.1</td><td>回测通过标准</td><td>Sharpe>1.5</td><td class="summary-status" data-summary="4.1">—</td></tr>
+      <tr><td>4.2</td><td>Paper Trading</td><td>≥ 14 天</td><td class="summary-status" data-summary="4.2">—</td></tr>
+      <tr><td>5.1</td><td>多用户授权</td><td>白名单+免费</td><td class="summary-status" data-summary="5.1">—</td></tr>
+      <tr><td>5.2</td><td>多用户上线</td><td>Phase 2(3 月后)</td><td class="summary-status" data-summary="5.2">—</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============================ 第一部分:项目级别 ============================ -->
+  <div class="section-divider"><span>一、项目级别决策</span></div>
+
+  <!-- 决策 1.1 -->
+  <article class="decision" data-id="1.1">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 1.1</div>
+        <h2 class="decision-title">月化收益预期 1%-3%</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">整套系统 Phase 0 阶段(资金 $5k-$30k)的合理月化收益预期,作为"系统是否正常工作"的基准线。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">差</div>
+          <div class="key-number-value">1% / 月</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">中</div>
+          <div class="key-number-value">2% / 月</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">好</div>
+          <div class="key-number-value">3% / 月</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">$35k 月化 2%</div>
+          <div class="key-number-value">$700</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        如果你期待 10%+/月,你会感觉"系统不行" → 加大杠杆 / 缩短测试 / 跳过风控 → 这是该行业 80% 散户失败的原因。真实结果:2-3 个月内大概率爆仓。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">给"全职 + $35k"的具体建议</div>
+      <div class="info-box">
+        $700/月不够全职生活费 — 这是为什么 runway 重要。心理上准备好:前 3-6 个月这个项目几乎没收入。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('1.1', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('1.1', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('1.1', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="1.1" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 1.2 -->
+  <article class="decision" data-id="1.2">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 1.2</div>
+        <h2 class="decision-title">8-12 周开发周期</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">从今天到第一个策略实盘上线的预期时间。8 周乐观 / 10 周合理 / 12 周保守。<strong>不要少于 6 周</strong>(必然跳过 paper trading)。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字 · 8-12 周分配</div>
+      <div class="section-content" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.8; background: var(--bg-elevated); padding: 12px 16px; border-radius: 4px;">
+        Week 1-2:  项目骨架 + 数据库 + 配置系统<br>
+        Week 3-4:  Binance 适配器 + 资金费率扫描<br>
+        Week 5-6:  风控引擎 + Position Manager<br>
+        Week 7-8:  回测框架 + 第一个策略验证<br>
+        Week 9-10: Paper Trading 14+ 天<br>
+        Week 11-12: 实盘 $500 stage 1 + 调优
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        想 4-6 周上线 = 必然跳过 paper trading,实盘第一周 80% 概率出大问题(订单失败处理不完善 / WS 断连 / 资金费率结算时机错)。修 bug 时是真金白银亏损。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('1.2', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('1.2', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('1.2', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="1.2" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 1.3 -->
+  <article class="decision" data-id="1.3">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 1.3</div>
+        <h2 class="decision-title">资金阶梯放大($500 → $1k → $2k → $5k)</h2>
+      </div>
+      <div class="decision-priority high">高</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">实盘阶段资金不能一次到位,必须每个阶段验证后再加。每个阶段至少 14 天,通过后才进下一阶段。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">Stage 1</div>
+          <div class="key-number-value">$500 / 14d</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Stage 2</div>
+          <div class="key-number-value">$1,000 / 14d</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Stage 3</div>
+          <div class="key-number-value">$2,000 / 14d</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Stage 4</div>
+          <div class="key-number-value">$5,000 / 30d</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="section-content">系统的 bug 通常在前 2 周暴露。资金 10 倍小时,bug 暴露成本也 10 倍小。$500 阶段如果有 bug,最多损失 $500。直接 $5k 上线如果有同样 bug,可能损失 $5k。</div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        $5k 一次到位:第一次 bug 损失放大 10 倍 → 心理上无法承受 → 紧急关停系统 → 系统未充分测试 → 失去修复动力。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('1.3', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('1.3', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('1.3', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="1.3" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- ============================ 第二部分:风控红线 ============================ -->
+  <div class="section-divider"><span>二、风控红线(写死代码)</span></div>
+
+  <!-- 决策 2.1 -->
+  <article class="decision" data-id="2.1">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 2.1</div>
+        <h2 class="decision-title">单日回撤红线 -3%</h2>
+      </div>
+      <div class="decision-priority critical">极高</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">单日亏损超过总资金 3% → 系统自动停机 + 平仓所有头寸 + 通知所有渠道。需要人工介入并修改 yaml + 重启系统才能恢复交易。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">$5k 红线</div>
+          <div class="key-number-value">$150</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">$30k 红线</div>
+          <div class="key-number-value">$900</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Tier 1</div>
+          <div class="key-number-value">-1%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Tier 2</div>
+          <div class="key-number-value">-2%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Tier 3</div>
+          <div class="key-number-value">-3%</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        改成 -5% / -10%:黑天鹅时,你会从 -3% 看着它继续到 -10% 甚至 -20%。心理上无法在剧痛中做出冷静决策。LUNA 崩盘时(2022)很多策略一天就 -50%。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">给"全职 + $35k"的具体建议</div>
+      <div class="info-box">
+        知道这个红线意味着<strong>你会经常看到系统暂停</strong>(这是好事)。心理建设:<strong>触发风控不是失败,是系统正常工作</strong>。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('2.1', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('2.1', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('2.1', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="2.1" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 2.2 -->
+  <article class="decision" data-id="2.2">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 2.2</div>
+        <h2 class="decision-title">永续杠杆永远 ≤ 3 倍</h2>
+      </div>
+      <div class="decision-priority critical">极高</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">任何永续合约持仓的杠杆<strong>写死在 config.yaml</strong>,改它需要修改文件并重启系统。UI 上无法调整。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字 · 杠杆 vs 清算距离</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">1x</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">永不清算</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">3x(我们)</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">-33% 清算</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">5x</div>
+          <div class="key-number-value" style="color: var(--accent-gold);">-20% 危险</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">10x</div>
+          <div class="key-number-value" style="color: var(--accent-blood);">-10% 极危险</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">20x+</div>
+          <div class="key-number-value" style="color: var(--accent-blood);">自杀级</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        改成 5-10 倍:表面收益翻倍,实际风险<strong>指数级</strong>增加。一次黑天鹅(519、312)直接清算。80% 加密散户的清算都是因为 5x+ 杠杆。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('2.2', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('2.2', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('2.2', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="2.2" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 2.3 -->
+  <article class="decision" data-id="2.3">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 2.3</div>
+        <h2 class="decision-title">Tier 3 风控锁定(改 yaml + 重启才能修改)</h2>
+      </div>
+      <div class="decision-priority critical">极高</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">最严的风控参数(单日回撤红线、保证金率、API 错误熔断)<strong>不能在 UI 上修改</strong>,必须停机 → SSH → 改 risk.yaml → 重启。整个过程 5-10 分钟,<strong>有意制造摩擦</strong>。</div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="info-box">
+        这是为了对抗"未来你"。某天系统连续 3 天亏损,情绪化的你会想"今天行情特殊,临时关掉吧"。关掉之后:亏损扩大到 -10% / -20%。<strong>有意制造摩擦,让你"想改"和"真的改"之间隔 10 分钟冷静期</strong>。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        Tier 3 可在 UI 改:你某天情绪化决策时能立刻改。复盘时你会发现:"我那天不该改的"。LUNA 散户、FTT 散户、312 散户的剧本。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('2.3', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('2.3', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('2.3', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="2.3" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- ============================ 第三部分:策略组合 ============================ -->
+  <div class="section-divider"><span>三、策略组合</span></div>
+
+  <!-- 决策 3.1 -->
+  <article class="decision" data-id="3.1">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 3.1</div>
+        <h2 class="decision-title">Phase 0 只跑 3 个策略,不跑 17 个</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">Phase 0 阶段(0-12 周,$5k 实盘)实际上线的策略<strong>只有 3 个</strong>:#1 资金费率套利($2k)+ #4 期现套利($1k)+ #13 三角套利($500)。</div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="info-box">
+        如果 17 个一起跑,$5k 摊到每个不到 $300。每个策略持仓 < $100。手续费占比太高,几乎赚不到钱。<strong>"全做" = "全做不好"</strong>。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        坚持上更多:8 周不够 → 时间被压缩 → 每个都不达标 → 资金分散 → 每个都赚不到钱 → 注意力分散 → 不知道哪个赚钱哪个亏钱。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('3.1', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('3.1', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('3.1', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="3.1" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 3.2 -->
+  <article class="decision" data-id="3.2">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 3.2</div>
+        <h2 class="decision-title">期权策略 Phase 0 默认禁用</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">#6 期权波动率套利策略写在文档里但 yaml 中默认 <code>enabled: false</code>。$30k+ 资金量才考虑启用,且必须先进入"监控模式"(模拟交易 30 天)。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字 · 月度回撤对比</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">资金费率</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">-3%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">期现</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">-3%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">三角</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">-1%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">期权</div>
+          <div class="key-number-value" style="color: var(--accent-blood);">-30%</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="warning-box">
+        期权 = "放大版的赌博":收益放大 5-10 倍 → 同时风险也放大 5-10 倍。数学复杂度高 10 倍(Greeks)。流动性差 10 倍。错误成本高 100 倍(一次方向看反就归零)。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('3.2', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('3.2', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('3.2', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="3.2" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- ============================ 第四部分:回测与上线 ============================ -->
+  <div class="section-divider"><span>四、回测与上线门槛</span></div>
+
+  <!-- 决策 4.1 -->
+  <article class="decision" data-id="4.1">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 4.1</div>
+        <h2 class="decision-title">回测必须 Sharpe>1.5 / Max DD<8% / Win Rate>70%</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">每个策略<strong>必须先在 12-24 个月历史数据上回测</strong>,达到 3 个标准才能进入 Paper Trading 阶段。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">Sharpe</div>
+          <div class="key-number-value">> 1.5</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Max DD</div>
+          <div class="key-number-value">< 8%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">Win Rate</div>
+          <div class="key-number-value">> 70%</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">年化</div>
+          <div class="key-number-value">> 15%</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么 Sharpe > 1.5(不是 1.0)</div>
+      <div class="info-box">
+        顶级 quant 基金长期 Sharpe 0.8-1.2。我们要 1.5 是因为<strong>回测高估实盘 0.5</strong>。回测 1.5 → 实盘大概率 1.0。回测 1.0 → 实盘大概率 0.5(不值得做)。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        完全跳过回测:实盘第一周必出大问题,这是 95% 失败者的共同特征。<br>
+        提高到 Sharpe > 2.0:几乎没有策略能达到。你会"过度优化"参数 → 严重过拟合 → 实盘归零。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('4.1', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('4.1', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('4.1', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="4.1" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 4.2 -->
+  <article class="decision" data-id="4.2">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 4.2</div>
+        <h2 class="decision-title">Paper Trading 至少 14 天才能进实盘</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">回测过了之后<strong>不能直接实盘</strong>。必须用<strong>实时行情 + 模拟订单</strong>跑 14 天,验证执行链路。</div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="info-box">
+        <strong>回测验证"理论"</strong> → 历史数据 + 模拟执行,发现不了延迟、滑点、API 限流等"现实问题"。<br>
+        <strong>Paper Trading 验证"工程"</strong> → 真实环境 + 模拟订单,暴露所有现实世界的边界情况。例如 Binance 凌晨 4 点的资金费结算时间窗口、WS 断连后 30 秒内没收到推送、某币种突然暴涨订单簿深度不够。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        跳过 Paper Trading:实盘第一周必出问题(80% 概率)。真金白银亏损 → 心态崩 → 早期放弃。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('4.2', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('4.2', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('4.2', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="4.2" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- ============================ 第五部分:安全与边界 ============================ -->
+  <div class="section-divider"><span>五、安全与边界</span></div>
+
+  <!-- 决策 5.1 -->
+  <article class="decision" data-id="5.1">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 5.1</div>
+        <h2 class="decision-title">多用户授权层 = 白名单 + 完全免费</h2>
+      </div>
+      <div class="decision-priority high">高</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">第 12 章设计的多用户系统<strong>只给你认识的朋友用</strong>:白名单(邀请码)、完全免费、不公开广告/注册、不做客服。</div>
+    </section>
+
+    <section>
+      <div class="section-label">关键数字 · 商业化代价</div>
+      <div class="key-numbers">
+        <div class="key-number">
+          <div class="key-number-label">白名单(我们)</div>
+          <div class="key-number-value" style="color: var(--accent-emerald);">$0 起步</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">商业化 SaaS</div>
+          <div class="key-number-value" style="color: var(--accent-blood);">$460k+</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">合规时间</div>
+          <div class="key-number-value">6-12 月</div>
+        </div>
+        <div class="key-number">
+          <div class="key-number-label">独立开发者失败率</div>
+          <div class="key-number-value">90%</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        想商业化:必须先做合规(律师 / 注册公司 / MSB 牌照)。不合规收钱 = <strong>个人刑事责任</strong>。起步成本至少 $460k,你 $35k 资金根本不够。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">给"全职 + $35k"的具体建议</div>
+      <div class="info-box">
+        朋友用完后如果想感谢你,<strong>让他们请吃饭</strong>,<strong>不要收钱转账</strong>。1 年后你有运营数据 + 现金流时,可以聘请律师正式做。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('5.1', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('5.1', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('5.1', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="5.1" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- 决策 5.2 -->
+  <article class="decision" data-id="5.2">
+    <div class="decision-header">
+      <div>
+        <div class="decision-id">DECISION 5.2</div>
+        <h2 class="decision-title">多用户授权层是 Phase 2(核心系统稳定 3 个月后才做)</h2>
+      </div>
+      <div class="decision-priority normal">普通</div>
+    </div>
+
+    <section>
+      <div class="section-label">是什么</div>
+      <div class="section-content">第 12 章<strong>不在开发计划的前 12 周里</strong>。先做单租户(只有你)稳定 3 个月,再做多用户。最早第 9 个月朋友才能用上。</div>
+    </section>
+
+    <section>
+      <div class="section-label">为什么这样设计</div>
+      <div class="info-box">
+        多用户层会让你工作量翻倍(用户认证 + 三层加密 + 数据隔离 + UI 共 1.5-2 个月)。如果同时做多用户 + 自己策略:你前 6 个月几乎全在救火。多用户 bug → 朋友资金风险。
+      </div>
+    </section>
+
+    <section>
+      <div class="section-label">不同意的后果</div>
+      <div class="warning-box">
+        前 12 周就做多用户:你两件事都做不好。多用户系统有 bug → 朋友资金安全风险。自己策略受影响 → 自己也亏 → 关系破裂。
+      </div>
+    </section>
+
+    <div class="response-area">
+      <div class="section-label">你的态度</div>
+      <div class="response-options">
+        <button class="response-btn" onclick="setStatus('5.2', 'accept', this)">✅ 接受</button>
+        <button class="response-btn" onclick="setStatus('5.2', 'discuss', this)">⚠️ 想讨论</button>
+        <button class="response-btn" onclick="setStatus('5.2', 'reject', this)">❌ 不同意</button>
+      </div>
+      <textarea class="response-note" data-id="5.2" placeholder="如果想讨论或不同意,请说明理由..."></textarea>
+    </div>
+  </article>
+
+  <!-- Sign-off -->
+  <div class="signoff">
+    <h2>Sign-Off · 老虎(项目负责人)</h2>
+    <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.7;">
+      我已认真阅读上面 12 项决策,每一项都打了 ✅ / ⚠️ / ❌。我理解:
+    </p>
+    <div class="signoff-list">
+      <label><input type="checkbox" id="sign-1"> 不同意任何一项都会改变项目走向</label>
+      <label><input type="checkbox" id="sign-2"> 设计阶段冻结后,如果想改,需要重新走 review 流程</label>
+      <label><input type="checkbox" id="sign-3"> 风控红线(2.1 / 2.2 / 2.3)写死在代码里,不是建议而是规则</label>
+      <label><input type="checkbox" id="sign-4"> 多用户层(5.1 / 5.2)是法律边界,不是商业策略</label>
+    </div>
+    <div class="signoff-fields">
+      <div class="signoff-field">
+        <div class="signoff-field-label">签名</div>
+        <input type="text" id="sign-name" placeholder="老虎 / TigerLao">
+      </div>
+      <div class="signoff-field">
+        <div class="signoff-field-label">日期</div>
+        <input type="text" id="sign-date" placeholder="2026-05-XX">
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    DRACULA-SYSTEM · v1.0 · github.com/pretaxt/Dracula-System
+  </div>
+
+</div>
+
+<script>
+  // 主题切换
+  function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    document.getElementById('theme-icon').textContent = next === 'dark' ? '🌙' : '☀️';
+    localStorage.setItem('review-theme', next);
+  }
+  // 初始化主题
+  (function() {
+    const saved = localStorage.getItem('review-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    document.getElementById('theme-icon').textContent = saved === 'dark' ? '🌙' : '☀️';
+  })();
+
+  // 决策状态管理
+  const statuses = {};
+  // 加载本地保存
+  try {
+    const saved = JSON.parse(localStorage.getItem('review-statuses') || '{}');
+    Object.assign(statuses, saved);
+    // 恢复 UI
+    Object.keys(statuses).forEach(id => {
+      const data = statuses[id];
+      const article = document.querySelector(`[data-id="${id}"]`);
+      if (article) {
+        const btns = article.querySelectorAll('.response-btn');
+        btns.forEach(b => b.classList.remove('selected'));
+        const target = article.querySelector(`.response-btn[onclick*="'${data.status}'"]`);
+        if (target) {
+          target.classList.add('selected', data.status);
+          article.classList.add(`status-${data.status === 'accept' ? 'accepted' : data.status === 'discuss' ? 'discuss' : 'reject'}`);
+        }
+        const note = article.querySelector('textarea');
+        if (data.note) {
+          note.value = data.note;
+          note.classList.add('show');
+        } else if (data.status !== 'accept') {
+          note.classList.add('show');
+        }
+        updateSummary(id, data.status);
+      }
+    });
+    updateProgress();
+  } catch (e) { console.warn('load failed', e); }
+
+  function setStatus(id, status, btn) {
+    const article = document.querySelector(`[data-id="${id}"]`);
+    const btns = article.querySelectorAll('.response-btn');
+    btns.forEach(b => b.classList.remove('selected', 'accept', 'discuss', 'reject'));
+    btn.classList.add('selected', status);
+
+    article.classList.remove('status-accepted', 'status-discuss', 'status-reject');
+    article.classList.add(`status-${status === 'accept' ? 'accepted' : status === 'discuss' ? 'discuss' : 'reject'}`);
+
+    const note = article.querySelector('textarea');
+    if (status === 'accept') {
+      note.classList.remove('show');
+    } else {
+      note.classList.add('show');
+    }
+
+    statuses[id] = { status, note: note.value };
+    saveStatuses();
+    updateSummary(id, status);
+    updateProgress();
+  }
+
+  function updateSummary(id, status) {
+    const cell = document.querySelector(`[data-summary="${id}"]`);
+    if (cell) {
+      const icon = status === 'accept' ? '✅' : status === 'discuss' ? '⚠️' : '❌';
+      cell.textContent = icon;
+    }
+  }
+
+  function updateProgress() {
+    const count = Object.keys(statuses).length;
+    document.getElementById('progress-count').textContent = count;
+    const pct = (count / 12) * 100;
+    document.getElementById('progress-fill').style.width = pct + '%';
+  }
+
+  function saveStatuses() {
+    // 同步 textarea 内容
+    document.querySelectorAll('.response-note').forEach(t => {
+      const id = t.getAttribute('data-id');
+      if (statuses[id]) statuses[id].note = t.value;
+    });
+    localStorage.setItem('review-statuses', JSON.stringify(statuses));
+  }
+
+  // textarea 变化时保存
+  document.querySelectorAll('.response-note').forEach(t => {
+    t.addEventListener('input', () => saveStatuses());
+  });
+
+  // 全部接受
+  function acceptAll() {
+    if (!confirm('确认全部 12 项都同意?')) return;
+    document.querySelectorAll('.decision').forEach(article => {
+      const id = article.getAttribute('data-id');
+      const acceptBtn = article.querySelector('.response-btn[onclick*="\'accept\'"]');
+      if (acceptBtn) acceptBtn.click();
+    });
+  }
+
+  // 重置
+  function resetAll() {
+    if (!confirm('确认清除所有 review 状态?')) return;
+    Object.keys(statuses).forEach(k => delete statuses[k]);
+    localStorage.removeItem('review-statuses');
+    document.querySelectorAll('.response-btn').forEach(b => b.classList.remove('selected', 'accept', 'discuss', 'reject'));
+    document.querySelectorAll('.decision').forEach(a => a.classList.remove('status-accepted', 'status-discuss', 'status-reject'));
+    document.querySelectorAll('.response-note').forEach(t => { t.value = ''; t.classList.remove('show'); });
+    document.querySelectorAll('[data-summary]').forEach(c => c.textContent = '—');
+    updateProgress();
+  }
+
+  // 导出
+  function exportReview() {
+    saveStatuses();
+    const labels = {
+      '1.1': '月化收益预期 1%-3%',
+      '1.2': '8-12 周开发周期',
+      '1.3': '资金阶梯放大',
+      '2.1': '单日回撤红线 -3%',
+      '2.2': '永续杠杆 ≤ 3 倍',
+      '2.3': 'Tier 3 风控锁定',
+      '3.1': 'Phase 0 只跑 3 个策略',
+      '3.2': '期权策略 Phase 0 默认禁用',
+      '4.1': '回测 Sharpe > 1.5',
+      '4.2': 'Paper Trading ≥ 14 天',
+      '5.1': '多用户白名单+免费',
+      '5.2': '多用户层 Phase 2'
+    };
+
+    const name = document.getElementById('sign-name').value || '老虎';
+    const date = document.getElementById('sign-date').value || new Date().toISOString().substring(0, 10);
+
+    let text = `# Dracula-System · 12 项决策 Review 结果\n\n`;
+    text += `**签字**:${name}\n**日期**:${date}\n\n---\n\n`;
+
+    Object.keys(labels).forEach(id => {
+      const data = statuses[id];
+      const icon = data ? (data.status === 'accept' ? '✅' : data.status === 'discuss' ? '⚠️' : '❌') : '⬜ 未 review';
+      text += `## ${id} · ${labels[id]}\n\n**态度**:${icon}\n`;
+      if (data && data.note) text += `**备注**:${data.note}\n`;
+      text += '\n';
+    });
+
+    // 触发下载
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dracula_review_${date}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dracula-System · 17 策略选择</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #08080f;
+    --bg-card: #0f0f17;
+    --bg-elevated: #18182a;
+    --border-subtle: #1a1a26;
+    --border-default: #25252e;
+    --border-strong: #4a4a5e;
+    --text-primary: #ffffff;
+    --text-secondary: #b8b8c8;
+    --text-tertiary: #909099;
+    --accent-blood: #e34058;
+    --accent-emerald: #3ed492;
+    --accent-gold: #f0b850;
+    --accent-blue: #5fb0ff;
+  }
+  [data-theme="light"] {
+    --bg-base: #f4f4ed;
+    --bg-card: #ffffff;
+    --bg-elevated: #ffffff;
+    --border-subtle: #e0e0d4;
+    --border-default: #c4c4b8;
+    --border-strong: #a0a098;
+    --text-primary: #0a0a0a;
+    --text-secondary: #1a1a1a;
+    --text-tertiary: #6c6c75;
+    --accent-blood: #b81a30;
+    --accent-emerald: #0e7e4a;
+    --accent-gold: #a06010;
+    --accent-blue: #2563eb;
+  }
+
+  * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 0;
+    padding: 30px 20px;
+    transition: background-color 0.3s, color 0.3s;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; }
+
+  .header {
+    text-align: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .header h1 {
+    font-family: 'Cinzel', serif;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    margin: 0 0 6px;
+  }
+
+  .header .meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.08em;
+  }
+
+  /* 控制栏 */
+  .controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    padding: 14px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    position: sticky;
+    top: 12px;
+    z-index: 10;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .stats {
+    display: flex;
+    gap: 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .stat-num {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .controls-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text-secondary);
+    transition: all 0.15s;
+  }
+  .btn:hover { color: var(--text-primary); border-color: var(--text-primary); }
+  .btn-primary {
+    background: var(--accent-blood);
+    color: white;
+    border-color: var(--accent-blood);
+  }
+
+  /* 筛选器 */
+  .filter-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+  }
+
+  .filter-bar button {
+    padding: 5px 12px;
+    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-bar button.active {
+    background: var(--accent-blood);
+    color: white;
+    border-color: var(--accent-blood);
+  }
+
+  /* 策略卡片 */
+  .strategy {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 14px;
+    transition: all 0.2s;
+    position: relative;
+  }
+
+  .strategy.keep {
+    border-left: 4px solid var(--accent-emerald);
+  }
+  .strategy.cut {
+    border-left: 4px solid var(--accent-blood);
+    opacity: 0.7;
+  }
+  .strategy.candidate {
+    border-left: 4px solid var(--accent-gold);
+  }
+
+  .strategy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .strategy-title {
+    flex: 1;
+  }
+
+  .strategy-id {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--accent-blood);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .strategy-name {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 2px 0 4px;
+    color: var(--text-primary);
+  }
+
+  .strategy-tagline {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+  }
+
+  /* 决策按钮组 */
+  .decision-buttons {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .decision-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: all 0.15s;
+  }
+  .decision-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-primary);
+  }
+  .decision-btn.active.keep {
+    background: var(--accent-emerald);
+    color: white;
+    border-color: var(--accent-emerald);
+  }
+  .decision-btn.active.candidate {
+    background: var(--accent-gold);
+    color: var(--bg-base);
+    border-color: var(--accent-gold);
+  }
+  .decision-btn.active.cut {
+    background: var(--accent-blood);
+    color: white;
+    border-color: var(--accent-blood);
+  }
+
+  /* 关键指标 */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 14px 0;
+  }
+
+  .metric {
+    background: var(--bg-elevated);
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+  }
+
+  .metric-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 3px;
+  }
+
+  .metric-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* 优劣势 */
+  .pros-cons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 12px 0;
+  }
+
+  .pros, .cons {
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .pros {
+    background: rgba(62, 212, 146, 0.06);
+    border-left: 2px solid var(--accent-emerald);
+  }
+  .cons {
+    background: rgba(227, 64, 88, 0.06);
+    border-left: 2px solid var(--accent-blood);
+  }
+
+  .pros-cons-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+  .pros .pros-cons-label { color: var(--accent-emerald); }
+  .cons .pros-cons-label { color: var(--accent-blood); }
+
+  .pros ul, .cons ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-secondary);
+  }
+
+  .pros li, .cons li { margin-bottom: 3px; }
+
+  /* 我的建议 */
+  .recommendation {
+    background: rgba(95, 176, 255, 0.06);
+    border-left: 2px solid var(--accent-blue);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 10px;
+  }
+
+  .recommendation strong {
+    color: var(--accent-blue);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  /* 主题切换 */
+  .theme-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    cursor: pointer;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  /* 章节分隔 */
+  .divider {
+    margin: 30px 0 16px;
+    text-align: center;
+    position: relative;
+  }
+  .divider::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border-default);
+  }
+  .divider span {
+    background: var(--bg-base);
+    position: relative;
+    padding: 0 16px;
+    font-family: 'Cinzel', serif;
+    font-size: 14px;
+    color: var(--text-secondary);
+    letter-spacing: 0.08em;
+  }
+
+  /* 风险标签 */
+  .risk-low { color: var(--accent-emerald); }
+  .risk-mid { color: var(--accent-gold); }
+  .risk-high { color: var(--accent-blood); }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()" title="切换日夜模式">
+  <span id="theme-icon">🌙</span>
+</button>
+
+<div class="container">
+
+  <header class="header">
+    <h1>17 STRATEGIES SELECTOR</h1>
+    <div class="meta">挑选你想保留的策略 · v1.0 · 2026-05-06</div>
+  </header>
+
+  <!-- 控制栏 -->
+  <div class="controls">
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-num" style="color: var(--accent-emerald);" id="count-keep">0</span>
+        <span class="stat-label">保留</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" style="color: var(--accent-gold);" id="count-candidate">0</span>
+        <span class="stat-label">候选</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" style="color: var(--accent-blood);" id="count-cut">0</span>
+        <span class="stat-label">砍掉</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="count-total">17</span>
+        <span class="stat-label">总数</span>
+      </div>
+    </div>
+    <div class="controls-buttons">
+      <button class="btn" onclick="applyMyRecommendation()">采用我的建议</button>
+      <button class="btn" onclick="resetAll()">重置</button>
+      <button class="btn btn-primary" onclick="exportSelection()">导出</button>
+    </div>
+  </div>
+
+  <!-- 筛选器 -->
+  <div class="filter-bar">
+    <button class="active" onclick="filterStrategies('all', this)">全部</button>
+    <button onclick="filterStrategies('p0', this)">P0 主力</button>
+    <button onclick="filterStrategies('p1', this)">P1 候选</button>
+    <button onclick="filterStrategies('p2', this)">P2 候选</button>
+    <button onclick="filterStrategies('arb', this)">套利类</button>
+    <button onclick="filterStrategies('directional', this)">方向类</button>
+  </div>
+
+  <!-- 策略卡片(JS 动态生成) -->
+  <div id="strategies-list"></div>
+
+  <div class="footer" style="margin-top: 30px; padding: 20px 0; border-top: 1px solid var(--border-subtle); text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-tertiary);">
+    DRACULA-SYSTEM · 17 STRATEGIES · github.com/pretaxt/Dracula-System
+  </div>
+</div>
+
+<script>
+  // 主题切换
+  function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    document.getElementById('theme-icon').textContent = next === 'dark' ? '🌙' : '☀️';
+    localStorage.setItem('strat-theme', next);
+  }
+  (function(){
+    const saved = localStorage.getItem('strat-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    document.getElementById('theme-icon').textContent = saved === 'dark' ? '🌙' : '☀️';
+  })();
+
+  // 17 个策略数据
+  const strategies = [
+    { id: 1, phase: 'p0', type: 'arb', name: '资金费率套利', tag: 'Delta 中性收 funding rate',
+      yield: '1.5-2.5%', risk: 'low', riskLabel: '🟢 低', threshold: '$1k+', diff: '简单 · 2周',
+      pros: ['加密量化"基础策略",最稳健', '资金容量大,$10k-$1M 都能跑', '跟币价方向无关', '历史 5 年数据可回测'],
+      cons: ['资金费率会反转(空头时成本)', '极端行情基差扩大瞬时浮亏', '尾部清算风险'],
+      rec: '✅ 必做 · P0 主力 · 分配 $2,000', recDefault: 'keep' },
+
+    { id: 2, phase: 'p1', type: 'arb', name: '跨所基差套利', tag: '不同所同币种永续基差',
+      yield: '0.5-1%', risk: 'low', riskLabel: '🟢 低', threshold: '$3k+', diff: '中等 · 3周',
+      pros: ['基差几乎肯定收敛', 'Delta 中性,无方向风险', '对冲单交易所风险'],
+      cons: ['基差有时拉得久(资金占用长)', '提现成本(2 所之间)', '不同所合约规格不同'],
+      rec: '✅ 推荐 · P1 · Phase 1 启用,分配 $1,000-2,000', recDefault: 'keep' },
+
+    { id: 3, phase: 'p1', type: 'arb', name: '跨所价差套利', tag: '不同所现货价格瞬时差',
+      yield: '0.3-0.8%', risk: 'mid', riskLabel: '🟡 中', threshold: '$5k+', diff: '中等 · 4周',
+      pros: ['频次高,机会多', '跟方向无关'],
+      cons: ['手续费侵蚀严重(往返 0.2-0.4%)', 'BTC 提现 30+ 分钟到账', '实际可执行价差比看到的小', '滑点 + 网络延迟'],
+      rec: '⚠️ 性价比低 · 可砍 · #2 跨所基差更合适', recDefault: 'cut' },
+
+    { id: 4, phase: 'p0', type: 'arb', name: '期现套利', tag: '现货 vs 永续基差收敛',
+      yield: '1-1.5%', risk: 'low', riskLabel: '🟢 低', threshold: '$2k+', diff: '简单 · 2周',
+      pros: ['Delta 中性', '收益与 #1 不完全相关,可分散', '短期机会(几小时到几天)'],
+      cons: ['现货 spot 资金占用大', '极端行情基差扩大可能浮亏'],
+      rec: '✅ 必做 · P0 辅助 · 分配 $1,000', recDefault: 'keep' },
+
+    { id: 5, phase: 'p1', type: 'arb', name: 'CEX-DEX 套利', tag: '中心化 vs 去中心化所价差',
+      yield: '0.5-2%', risk: 'high', riskLabel: '🔴 高', threshold: '$2k+', diff: '复杂 · 5周',
+      pros: ['价差经常很大(2-5%)', '与传统量化无相关', 'DeFi 红利'],
+      cons: ['MEV 抢跑风险高', 'Gas 突涨吃利润', '链上交易失败但 gas 仍扣', 'DEX 滑点高', '智能合约风险'],
+      rec: '⚠️ 只做监控 · P1 · 价差 > 1.5% 推送通知,你手动判断', recDefault: 'candidate' },
+
+    { id: 6, phase: 'p2', type: 'arb', name: '期权波动率套利', tag: 'IV vs RV 价差',
+      yield: '3-10%', risk: 'high', riskLabel: '🔴🔴 极高', threshold: '$30k+', diff: '复杂 · 8周',
+      pros: ['收益潜力最高', '加密期权市场效率仍低,有 alpha', '与现货/永续无相关性'],
+      cons: ['数学复杂度极高(Greeks)', 'Gamma 风险,大波动时大亏', '流动性差', '一次方向看反归零', '建模复杂'],
+      rec: '⚠️ Phase 0 默认禁用 · P2 候选 · $30k+ + 6月经验后启用', recDefault: 'candidate' },
+
+    { id: 7, phase: 'p1', type: 'directional', name: '网格策略', tag: '区间内自动买卖',
+      yield: '0.5-3%(看行情)', risk: 'mid', riskLabel: '🟡 中', threshold: '$1k+', diff: '简单 · 2周',
+      pros: ['实施简单', '震荡市表现优秀', '心理压力小(系统自动)'],
+      cons: ['单边行情会爆仓', '跟方向高度相关,不是真套利', '强烈依赖市场状态', '容易过度优化'],
+      rec: '⚠️ 可保留 · P1 · 震荡市辅助,$5k 时分配少量', recDefault: 'candidate' },
+
+    { id: 8, phase: 'p2', type: 'directional', name: 'IDO/IEO 一级套利', tag: '新币首发认购转卖',
+      yield: '5-50%(单次)', risk: 'high', riskLabel: '🔴 高', threshold: '$5k+', diff: '复杂 · 6周',
+      pros: ['单次收益丰厚', '交易所"福利"'],
+      cons: ['机会随机(几月一次)', '上线前必须打新,资金锁定', '上线后破发风险', '需要 KYC + 持币门槛', '自动化程度低'],
+      rec: '❌ 建议砍 · 不是系统化策略 · 手动做就行', recDefault: 'cut' },
+
+    { id: 9, phase: 'p2', type: 'arb', name: '做市策略', tag: '订单簿挂单赚价差',
+      yield: '1-3%', risk: 'high', riskLabel: '🔴 高', threshold: '$20k+', diff: '极复杂 · 12周',
+      pros: ['顶级 quant 基金核心业务', '频次高,稳定收入', '理论上跟方向无关'],
+      cons: ['基础设施要求高(co-location)', '库存风险', '与 Jump、Wintermute 这种竞争', '手续费红利消失后散户基本不赚钱', '$35k 规模太小被职业 MM 碾压'],
+      rec: '❌ 建议砍 · "全职量化团队"才能做', recDefault: 'cut' },
+
+    { id: 10, phase: 'p2', type: 'directional', name: '趋势跟踪', tag: '技术指标识别中长趋势',
+      yield: '不稳定', risk: 'high', riskLabel: '🔴 高', threshold: '$5k+', diff: '中等 · 6周',
+      pros: ['大趋势中收益可观', '学术研究多,有理论支撑'],
+      cons: ['本质是方向性投机,不是套利', '横盘市连续亏损', '心理压力大(单笔可亏 20%+)', '与系统"Delta 中性"哲学不契合'],
+      rec: '❌ 建议砍 · 与系统其他策略风险特征不同', recDefault: 'cut' },
+
+    { id: 11, phase: 'p2', type: 'arb', name: 'ETF 套利', tag: '加密 ETF 与现货价差',
+      yield: '0.3-1%', risk: 'mid', riskLabel: '🟡 中', threshold: '$10k+', diff: '复杂 · 8周',
+      pros: ['跨场内外的独特机会', 'ETF 上市后流动性大'],
+      cons: ['场内场外结构复杂', '需要美股账户', '时区问题', '收益相对低,与复杂度不匹配'],
+      rec: '❌ 建议砍 · 操作太复杂', recDefault: 'cut' },
+
+    { id: 12, phase: 'p2', type: 'directional', name: '因子模型', tag: '多因子选币组合',
+      yield: '不稳定', risk: 'high', riskLabel: '🔴 高', threshold: '$50k+', diff: '极复杂 · 16周',
+      pros: ['学术理论坚实(股票 30 年验证)', '有可能发现独特 alpha'],
+      cons: ['加密市场历史短,因子未充分验证', '资金量要求大', '16 周开发周期太长', '过拟合风险极高', '需完整数据基础设施'],
+      rec: '❌ 建议砍 · Phase 3+ 才考虑', recDefault: 'cut' },
+
+    { id: 13, phase: 'p0', type: 'arb', name: '三角套利', tag: '同所 3 笔交易吃价差',
+      yield: '0.3-0.8%', risk: 'low', riskLabel: '🟢 低', threshold: '$500+', diff: '中等 · 3周',
+      pros: ['Delta 中性(3 笔后头寸归零)', '资金门槛低', '训练系统的"高频执行能力"', '风险最低之一'],
+      cons: ['价差非常小,手续费占比高', '频次依赖市场效率', '执行速度要求高'],
+      rec: '✅ 必做 · P0 辅助 · 分配 $500,验证执行系统', recDefault: 'keep' },
+
+    { id: 14, phase: 'p1', type: 'arb', name: '稳定币利率套利', tag: '跨平台借贷利率差',
+      yield: '0.5-1%', risk: 'low', riskLabel: '🟢 低', threshold: '$5k+', diff: '中等 · 4周',
+      pros: ['Delta 中性(都是稳定币)', '收益稳定可预测', '与加密市场波动相关性低'],
+      cons: ['智能合约风险', 'Gas 摩擦', '稳定币脱锚风险', '需主网钱包'],
+      rec: '✅ 推荐 · P1 · Phase 1 时分配 $2,000-3,000', recDefault: 'keep' },
+
+    { id: 15, phase: 'p2', type: 'arb', name: '跨链桥套利', tag: '跨链同币种价差',
+      yield: '1-3%(单次)', risk: 'high', riskLabel: '🔴 高', threshold: '$10k+', diff: '极复杂 · 10周',
+      pros: ['单次价差较大', '多链 DeFi 生态早期红利'],
+      cons: ['跨链桥被黑事件频发(Ronin、Wormhole)', '跨链时间长(15分到数小时)', '桥接费用高', '每条链都要单独适配'],
+      rec: '❌ 建议砍 · 安全风险大,与稳健哲学不符', recDefault: 'cut' },
+
+    { id: 16, phase: 'p1', type: 'arb', name: '配对交易', tag: '相关币种统计套利',
+      yield: '1-2%', risk: 'mid', riskLabel: '🟡 中', threshold: '$5k+', diff: '中等 · 5周',
+      pros: ['Delta 部分中性', '经典统计套利,理论坚实', '与传统市场相关性低'],
+      cons: ['相关性可能突然破裂(如 LUNA-BNB)', 'z-score 极端值持续时不收敛', '需要长历史数据', '选错配对会大亏'],
+      rec: '✅ 推荐 · P1 · Phase 1 时分配 $3,000-5,000', recDefault: 'keep' },
+
+    { id: 17, phase: 'p2', type: 'directional', name: 'MEV 抢跑', tag: '抢区块内交易',
+      yield: '可能极高', risk: 'high', riskLabel: '🔴🔴🔴 极高', threshold: 'N/A', diff: '极复杂 · N/A',
+      pros: ['理论收益极高'],
+      cons: ['三明治攻击让普通用户多付钱', '部分司法管辖区已开始监管', '道德存在争议', '技术门槛极高'],
+      rec: '❌ 永久排除 · 法律灰色 + 道德争议', recDefault: 'cut' }
+  ];
+
+  // 当前选择状态
+  const selections = JSON.parse(localStorage.getItem('strat-selections') || '{}');
+
+  function renderStrategies() {
+    const list = document.getElementById('strategies-list');
+    let html = '';
+    let currentPhase = '';
+
+    strategies.forEach(s => {
+      // 章节分隔
+      const phaseLabel = s.phase === 'p0' ? '一、P0 主力(立即做)'
+                       : s.phase === 'p1' ? '二、P1 候选(Phase 1 评估)'
+                       : '三、P2 候选 / 永久排除';
+      if (phaseLabel !== currentPhase) {
+        html += `<div class="divider"><span>${phaseLabel}</span></div>`;
+        currentPhase = phaseLabel;
+      }
+
+      const status = selections[s.id] || '';
+      html += `
+        <div class="strategy ${status}" data-id="${s.id}" data-phase="${s.phase}" data-type="${s.type}">
+          <div class="strategy-header">
+            <div class="strategy-title">
+              <div class="strategy-id">#${s.id}</div>
+              <h3 class="strategy-name">${s.name}</h3>
+              <div class="strategy-tagline">${s.tag}</div>
+            </div>
+            <div class="decision-buttons">
+              <button class="decision-btn ${status === 'keep' ? 'active keep' : ''}" onclick="setStatus(${s.id}, 'keep')">✅ 保留</button>
+              <button class="decision-btn ${status === 'candidate' ? 'active candidate' : ''}" onclick="setStatus(${s.id}, 'candidate')">⚠️ 候选</button>
+              <button class="decision-btn ${status === 'cut' ? 'active cut' : ''}" onclick="setStatus(${s.id}, 'cut')">❌ 砍掉</button>
+            </div>
+          </div>
+
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">月化收益</div>
+              <div class="metric-value">${s.yield}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">风险</div>
+              <div class="metric-value risk-${s.risk}">${s.riskLabel}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">门槛</div>
+              <div class="metric-value">${s.threshold}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">实施</div>
+              <div class="metric-value">${s.diff}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">阶段</div>
+              <div class="metric-value">${s.phase.toUpperCase()}</div>
+            </div>
+          </div>
+
+          <div class="pros-cons">
+            <div class="pros">
+              <div class="pros-cons-label">优势</div>
+              <ul>${s.pros.map(p => `<li>${p}</li>`).join('')}</ul>
+            </div>
+            <div class="cons">
+              <div class="pros-cons-label">劣势 / 风险</div>
+              <ul>${s.cons.map(c => `<li>${c}</li>`).join('')}</ul>
+            </div>
+          </div>
+
+          <div class="recommendation">
+            <strong>我的建议</strong>${s.rec}
+          </div>
+        </div>
+      `;
+    });
+    list.innerHTML = html;
+    updateStats();
+  }
+
+  function setStatus(id, status) {
+    if (selections[id] === status) {
+      delete selections[id];  // 取消
+    } else {
+      selections[id] = status;
+    }
+    localStorage.setItem('strat-selections', JSON.stringify(selections));
+    renderStrategies();
+  }
+
+  function updateStats() {
+    const counts = { keep: 0, candidate: 0, cut: 0 };
+    Object.values(selections).forEach(v => counts[v] = (counts[v] || 0) + 1);
+    document.getElementById('count-keep').textContent = counts.keep;
+    document.getElementById('count-candidate').textContent = counts.candidate;
+    document.getElementById('count-cut').textContent = counts.cut;
+  }
+
+  function applyMyRecommendation() {
+    if (!confirm('应用 Claude 推荐方案?\n保留 8 个 + 候选 3 个 + 砍 6 个')) return;
+    strategies.forEach(s => { selections[s.id] = s.recDefault; });
+    localStorage.setItem('strat-selections', JSON.stringify(selections));
+    renderStrategies();
+  }
+
+  function resetAll() {
+    if (!confirm('确认清除所有选择?')) return;
+    Object.keys(selections).forEach(k => delete selections[k]);
+    localStorage.removeItem('strat-selections');
+    renderStrategies();
+  }
+
+  function filterStrategies(filter, btn) {
+    // 切换按钮状态
+    document.querySelectorAll('.filter-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const cards = document.querySelectorAll('.strategy');
+    cards.forEach(card => {
+      const phase = card.getAttribute('data-phase');
+      const type = card.getAttribute('data-type');
+      let show = true;
+      if (filter === 'all') show = true;
+      else if (filter === 'p0') show = phase === 'p0';
+      else if (filter === 'p1') show = phase === 'p1';
+      else if (filter === 'p2') show = phase === 'p2';
+      else if (filter === 'arb') show = type === 'arb';
+      else if (filter === 'directional') show = type === 'directional';
+      card.style.display = show ? '' : 'none';
+    });
+  }
+
+  function exportSelection() {
+    const date = new Date().toISOString().substring(0, 10);
+    let text = `# Dracula-System · 策略选择结果\n\n**日期**:${date}\n\n`;
+
+    const groups = { keep: [], candidate: [], cut: [], unselected: [] };
+    strategies.forEach(s => {
+      const status = selections[s.id] || 'unselected';
+      groups[status].push(s);
+    });
+
+    text += `## 统计\n`;
+    text += `- ✅ 保留: ${groups.keep.length} 个\n`;
+    text += `- ⚠️ 候选: ${groups.candidate.length} 个\n`;
+    text += `- ❌ 砍掉: ${groups.cut.length} 个\n`;
+    text += `- ⬜ 未决: ${groups.unselected.length} 个\n\n---\n\n`;
+
+    if (groups.keep.length) {
+      text += `## ✅ 保留(${groups.keep.length})\n\n`;
+      groups.keep.forEach(s => text += `- **#${s.id} ${s.name}** · ${s.tag} · ${s.yield} · ${s.riskLabel}\n`);
+      text += '\n';
+    }
+    if (groups.candidate.length) {
+      text += `## ⚠️ 候选(${groups.candidate.length})\n\n`;
+      groups.candidate.forEach(s => text += `- **#${s.id} ${s.name}** · ${s.tag} · ${s.yield} · ${s.riskLabel}\n`);
+      text += '\n';
+    }
+    if (groups.cut.length) {
+      text += `## ❌ 砍掉(${groups.cut.length})\n\n`;
+      groups.cut.forEach(s => text += `- **#${s.id} ${s.name}** · ${s.tag}\n`);
+      text += '\n';
+    }
+    if (groups.unselected.length) {
+      text += `## ⬜ 未决定(${groups.unselected.length})\n\n`;
+      groups.unselected.forEach(s => text += `- #${s.id} ${s.name}\n`);
+    }
+
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dracula_strategies_${date}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // 初次渲染
+  renderStrategies();
+</script>
+
+</body>
+</html>

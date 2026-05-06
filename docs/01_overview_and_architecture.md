@@ -1,10 +1,48 @@
 # Dracula-System 多策略量化套利系统 · 完整设计文档
 
-> **版本**:v1.0 设计稿
+> **版本**:v1.1 (Review 后更新)
 > **日期**:2026-05-06
-> **状态**:待用户审阅
+> **状态**:✅ 已通过用户 review,设计阶段冻结
 > **预计开发周期**:8-12 周
-> **目标读者**:项目主理人(你)+ AI 协作开发者(我)
+> **目标读者**:项目主理人(老虎)+ AI 协作开发者(Claude)
+
+---
+
+## 🔄 Review v1.1 更新摘要
+
+> **2026-05-06 用户(老虎)review 后**,以下决策已冻结:
+
+### 关键变更
+
+| # | 项目 | v1.0 设计 | v1.1 决策 |
+|---|---|---|---|
+| 1 | **策略总数** | 17 个候选 | **12 个保留 + 5 个永久排除** |
+| 2 | **风控熔断** | 单层(触发即全平) | **三层熔断**(单策略/账户/强平) |
+| 3 | **杠杆** | 统一 3x | **分层杠杆**(Tier A 5x / Tier B 3x / Tier C 禁) |
+| 4 | **多用户** | Phase 2 一次性做 | **拆两步**(Phase 1 双用户家人版 / Phase 2 多用户朋友版) |
+
+### 12 个保留策略
+
+```
+P0 主力(立即做):#1 资金费率 / #4 期现 / #13 三角
+
+P1+ 候选(资金/时间到位再启用):
+  #2 跨所基差 / #5 CEX-DEX(监控) / #6 期权波动率(P0 禁用)
+  #7 网格 / #9 做市 / #10 趋势 / #12 因子
+  #14 稳定币利率 / #16 配对交易
+```
+
+### 5 个永久排除
+
+```
+#3 跨所价差套利 · #8 IDO/IEO · #11 ETF 套利 · #15 跨链桥 · #17 MEV
+```
+
+### 详细 review 记录
+
+- [docs/REVIEW_RESULT.md](./REVIEW_RESULT.md) — 12 项决策最终结果
+- [docs/REVIEW_CHECKLIST_12_DECISIONS.md](./REVIEW_CHECKLIST_12_DECISIONS.md) — 12 项决策详细说明
+- [docs/STRATEGIES_17_COMPARISON.md](./STRATEGIES_17_COMPARISON.md) — 17 策略对比
 
 ---
 
@@ -461,12 +499,19 @@ class PositionManager:
 每秒级监控:
 
 ```
-=== Tier 3(命根子)===
-daily_drawdown          红线 -3%
-weekly_drawdown         红线 -8%
-min_margin_ratio        红线 50%
-api_error_count_5m      红线 3 次
-ws_disconnect_seconds   红线 60 秒
+=== Tier 3 三层熔断(命根子)===
+3a 单策略熔断:
+  per_strategy_drawdown   触发 -3%(单策略浮亏)→ 停建仓
+  
+3b 账户熔断:
+  daily_drawdown          触发 -3%(账户单日)→ 停建仓
+  weekly_drawdown         触发 -8%(账户周)→ 停建仓
+  
+3c 强制平仓:
+  daily_drawdown_force    触发 -5%(账户单日)→ 强平
+  min_margin_ratio        触发 50%(保证金率)→ 强平
+  api_error_count_5m      触发 3 次 → 强平
+  ws_disconnect_seconds   触发 60 秒 → 强平
 
 === Tier 2(账户级)===
 total_position_ratio
@@ -474,25 +519,55 @@ max_per_exchange_ratio
 max_per_symbol_ratio
 
 === Tier 1(策略级)===
-per_strategy_drawdown
+per_strategy_drawdown_warn   (-1%,只通知)
 per_strategy_position_count
 per_strategy_capital_used
 ```
 
-### 4.3 熔断机制
+### 4.3 熔断机制(Review v1.1 更新:三层熔断)
 
-任何 Tier 3 红线触及时,**立即执行**:
+不是简单的"触发 → 全部平仓"。**根据严重程度分三级**:
 
 ```
-1. 记录事件(优先,即使后续步骤失败也要记录)
-2. 标记系统为 HALT 状态
-3. 拒绝所有新订单请求
-4. 强制平仓所有持仓(并发执行)
-5. CRITICAL 通知 - 所有渠道全开
-6. 等待人工介入 — 不会自动恢复
+═══ Tier 3a · 单策略熔断(轻度)═══
+触发:单策略浮亏 ≥ -3%(占该策略分配资金)
+动作:
+  1. 该策略停止新建仓
+  2. 现有仓位继续持有(不强平)
+  3. WARN 级通知
+  4. 浮亏回到 -1% 以内 → 自动恢复
+
+═══ Tier 3b · 账户熔断(中度)═══
+触发:总账户单日 -3%
+动作:
+  1. 全部策略停止新建仓
+  2. 现有仓位继续持有(不强平)
+  3. CRITICAL 级通知(全渠道)
+  4. 必须修改 yaml + 重启系统才能恢复
+
+═══ Tier 3c · 强制平仓(重度)═══
+触发:总账户单日 -5% 或保证金率 < 50% 或 API 错误率超阈
+动作:
+  1. 立即强制平仓所有持仓(并发执行)
+  2. 系统标记 HALT 状态
+  3. 拒绝所有新订单
+  4. CRITICAL 级通知(全渠道 + 多次重发)
+  5. 必须修改 yaml + 重启系统才能恢复
 ```
 
-**关键点**:熔断后系统**不会自动恢复**,必须手动 SSH 到服务器,确认情况后手动重启。这又是一个故意的"摩擦"设计。
+**为什么分三层**:
+- 旧设计("一触发就全平")过于一刀切,会:
+  - 错过本可恢复的小波动
+  - 频繁产生摩擦成本(平仓 + 重新建仓的手续费)
+  - 单策略 bug 不应连累其他策略
+- 新设计三级独立:
+  - 3a 处理"单策略小问题"
+  - 3b 处理"系统整体异常"
+  - 3c 处理"必须立即止损"
+
+**熔断的核心哲学没变**:
+- Tier 3a 可以**自动恢复**(系统级"提示")
+- Tier 3b/3c **不会自动恢复**,必须人工介入(故意的"摩擦"设计)
 
 ---
 
@@ -506,22 +581,52 @@ system:
   base_currency: USDT
 
 risk:
-  # Tier 3(锁定)
-  daily_drawdown_limit: -3.0
-  weekly_drawdown_limit: -8.0
-  min_margin_ratio: 50.0
+  # Tier 3a · 单策略熔断(锁定)
+  per_strategy_drawdown_halt: -3.0    # 单策略浮亏 -3% → 停建仓
+  per_strategy_recovery: -1.0         # 浮亏回到 -1% 内 → 自动恢复
+  
+  # Tier 3b · 账户熔断(锁定)
+  daily_drawdown_halt: -3.0           # 账户单日 -3% → 停建仓
+  weekly_drawdown_halt: -8.0          # 账户周 -8% → 停建仓
+  
+  # Tier 3c · 强制平仓(锁定)
+  daily_drawdown_force: -5.0          # 账户单日 -5% → 强平
+  min_margin_ratio: 50.0              # 保证金率 < 50% → 强平
   api_error_threshold_5m: 3
   ws_disconnect_threshold_seconds: 60
 
-  on_halt:
-    force_close_all: true
+  on_force_close:
     notify_all_channels: true
-    auto_resume: false
-
+    notify_repeat_count: 3            # 重发 3 次确保看到
+    auto_resume: false                # 必须人工介入
+  
   # Tier 2(可调,延迟生效)
   max_per_exchange_pct: 50.0
   max_per_symbol_pct: 20.0
   min_required_apr: 15.0
+
+# 分层杠杆(Review v1.1 新增)
+leverage_tiers:
+  # Tier A 币种:最稳定,允许 5x
+  tier_a:
+    symbols: [BTC/USDT, ETH/USDT, SOL/USDT]
+    max_leverage: 5
+    force_close_pct: 18.0      # 币价跌 18% 强平(留 2% 缓冲)
+  
+  # Tier B 币种:流动性中等,3x
+  tier_b:
+    symbols: [BNB/USDT, XRP/USDT, DOGE/USDT, ADA/USDT, MATIC/USDT]
+    max_leverage: 3
+    force_close_pct: 25.0
+  
+  # Tier C 币种:流动性低 → 禁止
+  tier_c_blacklist:
+    enabled: true
+    rules:
+      min_24h_volume_usd: 50000000      # < $50M 排除
+      min_orderbook_1pct_depth: 200000  # 1% 深度 < $200k 排除
+      min_funding_periods_active: 3      # 资金费率连续3期非零
+      min_listed_days: 90                # 上市 < 90 天排除
 
 execution:
   max_slippage_pct: 0.3
@@ -638,7 +743,9 @@ Week 17+:小资金实盘
 
 ## 八、本份文档的剩余章节
 
-后续章节会按文件分别交付:
+### 核心章节(2-12)
+
+后续核心章节按文件分别交付:
 
 - **02_strategy_funding_rate.md** — 资金费率套利完整设计
 - **03_strategy_basis_arb.md** — 跨所基差套利完整设计
@@ -650,15 +757,104 @@ Week 17+:小资金实盘
 - **09_notification_matrix.md** — 通知系统详细
 - **10_backtest_framework.md** — 回测框架
 - **11_deployment_and_ops.md** — 部署 + 应急手册
+- **12_multi_user_authorization.md** — 多用户授权层(白名单模式)
+
+### 扩展策略章节(13-17)
+
+为 Phase 1 + Phase 2 阶段提供更多策略选择:
+
+- **13_strategy_triangular.md** — 三角套利(Phase 0 第二个上线)
+- **14_strategy_stablecoin.md** — 稳定币套利(简短版)
+- **15_strategy_cross_exchange_spread.md** — 跨所价差套利
+- **16_strategy_pairs_trading.md** — 永续合约对冲套利(Phase 1 重点)
+- **17_strategy_dex_lp_hedged.md** — DEX LP + 对冲(Phase 1+ 才考虑)
 
 ---
 
-## 你的下一步
+## 九、未来策略候选清单
+
+### 9.1 已经写文档但分阶段实施
+
+| 策略 | 文档 | Phase 0 | Phase 1 ($30k+) | Phase 2 ($50k+) |
+|---|---|---|---|---|
+| 资金费率套利 | 第 2 章 | ✅ 主力 | ✅ 主力 | ✅ |
+| 跨所基差套利 | 第 3 章 | ⚠️ 可选 | ✅ | ✅ |
+| 期现套利 | 第 4 章 | ✅ 辅助 | ✅ | ✅ |
+| CEX-DEX 监控 | 第 5 章 | ✅ 监控 | ✅ 监控 | ⚠️ 可考虑自动化 |
+| 期权波动率 | 第 6 章 | ❌ 禁用 | ⚠️ 启用监控 | ✅ 实盘 |
+| 三角套利 | 第 13 章 | ✅ 第 2 个上线 | ✅ | ✅ |
+| 稳定币套利 | 第 14 章 | ❌ 收益太低 | ⚠️ 可加 | ✅ |
+| 跨所价差套利 | 第 15 章 | ❌ | ✅ | ✅ |
+| 永续对冲(配对) | 第 16 章 | ❌ | ✅ Phase 1 重点 | ✅ |
+| DEX LP + 对冲 | 第 17 章 | ❌ | ⚠️ 评估 | ✅ |
+
+### 9.2 永久排除的策略(写在这里防止你以后冲动想做)
+
+#### ❌ MEV 套利(Searcher)
+
+**为什么不做**:
+- 行业被专业团队垄断(Top 10 团队占 85%+ MEV 市场)
+- 散户成功率 < 5%,80% 亏损
+- 需要 co-located 服务器、私有 mempool、Solidity/EVM 优化能力
+- 资金门槛 $50k+(实际 $100k+ 才舒服)
+- 6 个月技术学习曲线,期间无收入
+
+**如果以后想做**:
+- 等待资金 $200k+
+- 招专业 Solidity 工程师 + EVM 优化专家
+- 不要自己一个人做
+
+#### ❌ 统计套利 / 因子模型
+
+**为什么不做**:
+- 资金门槛 $100k+(为了同时持有 20+ 仓位分散风险)
+- 需要量化研究员(年薪 $150k-$500k)
+- 因子有效性快速衰减,需要持续重训
+- 个人 Quant 月化 -2% 到 +1%(80% 亏损)
+- 跟现有策略本质重叠(资金费率/基差也是统计套利)
+
+**如果以后想做**:
+- 等资金 $500k+
+- 招 PhD 量化研究员
+- 不要自己一个人做
+
+#### ❌ 高频做市(Market Making)
+
+**为什么不做**(虽然你没问,但为防万一也说):
+- 需要直连交易所(co-location),硬件成本 $5k+/月
+- 需要专业的低延迟基础设施(C++/Rust)
+- 跟职业做市商(Jump、Wintermute、Cumberland)直接竞争
+- 散户做市做的是赔本买卖
+- 跟"配对交易"完全不同——做市需要持续提供两边报价,风险敞口大
+
+**如果以后想做**:
+- 不要自己做
+- 这不是个人能玩的游戏
+
+### 9.3 不在路线图但偶尔会被问到的策略
+
+#### NFT 套利
+- **为什么不写**:NFT 市场流动性极差,套利机会稀少且难以自动化
+- **建议**:如果你对 NFT 感兴趣,作为爱好玩,不作为系统策略
+
+#### 跨链桥套利
+- **为什么不写**:跨链桥本身有安全风险(2022-2024 年被盗超 $20 亿),不值得为了 0.1%-0.5% 套利冒整个本金风险
+- **建议**:不做
+
+#### 治理代币挖矿
+- **为什么不写**:这不是套利,是"赚代币 → 卖代币"的方向性赌博
+- **建议**:不在系统范围内
+
+---
+
+## 十、本份文档的剩余章节
+
+### 你的下一步
 
 1. **认真读完这一篇**(整体架构),特别是"项目现实预期声明"
 2. **告诉我有没有疑问或不同意见**
 3. **确认无误后,我会写第二篇**:资金费率套利的完整设计文档
 
-**重要**:不要让我一次性把所有设计文档都写完。每写完一篇你都要 review,否则后面 5 个策略的设计会越偏越远,最后白做。
+**重要**:不要让我一次性把所有设计文档都写完。每写完一篇你都要 review,否则后面策略的设计会越偏越远,最后白做。
 
 如果有任何一段你觉得"看不懂"或"看着不对",立刻指出来。**设计阶段的修改成本是 0,代码阶段是几倍,实盘阶段是钱。**
