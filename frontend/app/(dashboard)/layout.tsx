@@ -1,14 +1,19 @@
 import AuthGuard from '@/components/shell/AuthGuard'
-import SideNav from '@/components/shell/SideNav'
+import TopNav from '@/components/shell/TopNav'
 import Providers from '@/components/Providers'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <Providers>
       <AuthGuard>
-        <div style={{ display: 'flex' }}>
-          <SideNav />
-          <main style={{ marginLeft: 'var(--nav-width)', flex: 1, minHeight: '100vh', padding: '2rem', background: 'var(--color-bg)' }}>
+        <div style={{
+          minHeight: '100vh',
+          background: 'var(--color-bg)',
+          backgroundImage: 'linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px)',
+          backgroundSize: '40px 40px',
+        }}>
+          <TopNav />
+          <main style={{ maxWidth: 1800, margin: '0 auto', padding: '1.25rem 1.75rem' }}>
             {children}
           </main>
         </div>

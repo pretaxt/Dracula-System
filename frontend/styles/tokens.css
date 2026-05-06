@@ -1,29 +1,41 @@
-/* Dark Luxury — Dracula System Design Tokens */
+/* Dracula System — Design Tokens (aligned with prototype v0.3) */
 :root {
-  /* Background layers */
-  --color-bg:           oklch(13% 0.01 250);
-  --color-surface:      oklch(17% 0.012 250);
-  --color-surface-elev: oklch(21% 0.014 250);
-  --color-surface-high: oklch(25% 0.016 250);
-  --color-border:       oklch(30% 0.012 250);
+  /* Background layers — matches prototype #0a0e14 / #131820 / #1a2029 */
+  --color-bg:           #0a0e14;
+  --color-surface:      #131820;
+  --color-surface-elev: #1a2029;
+  --color-surface-high: #232b36;
+  --color-border:       #2a3340;
+  --color-border-strong:#3a4554;
 
   /* Text */
-  --color-text:         oklch(94% 0.005 250);
-  --color-text-dim:     oklch(62% 0.008 250);
-  --color-text-muted:   oklch(44% 0.006 250);
+  --color-text:         #e8ecef;
+  --color-text-dim:     #8b95a3;
+  --color-text-muted:   #5a6470;
 
-  /* Accent — brass/gold for premium */
-  --color-accent:       oklch(76% 0.14 82);
-  --color-accent-dim:   oklch(60% 0.10 82);
+  /* Accent — terminal green (primary) */
+  --color-accent:       #00d68f;
+  --color-accent-dim:   rgba(0, 214, 143, 0.10);
+  --color-accent-border:rgba(0, 214, 143, 0.30);
+
+  /* Secondary accent — blue */
+  --color-blue:         #4a9eff;
+  --color-blue-dim:     rgba(74, 158, 255, 0.10);
 
   /* Semantic */
-  --color-positive:     oklch(72% 0.17 150);
-  --color-negative:     oklch(62% 0.21 25);
-  --color-warning:      oklch(78% 0.16 70);
-  --color-info:         oklch(70% 0.12 240);
+  --color-positive:     #00d68f;
+  --color-positive-dim: rgba(0, 214, 143, 0.10);
+  --color-negative:     #ff4757;
+  --color-negative-dim: rgba(255, 71, 87, 0.10);
+  --color-warning:      #ffb800;
+  --color-warning-dim:  rgba(255, 184, 0, 0.10);
+  --color-info:         #4a9eff;
+  --color-info-dim:     rgba(74, 158, 255, 0.10);
+  --color-purple:       #b16cff;
+  --color-purple-dim:   rgba(177, 108, 255, 0.10);
 
   /* Typography */
-  --font-ui:      'Inter', system-ui, sans-serif;
+  --font-ui:      'Space Grotesk', 'Inter', system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
 
   --text-xs:   0.75rem;
@@ -44,14 +56,16 @@
   --space-12: 3rem;
 
   /* Animation */
-  --duration-fast:   120ms;
-  --duration-normal: 240ms;
+  --duration-fast:   150ms;
+  --duration-normal: 300ms;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Layout */
-  --nav-width: 220px;
-  --topbar-height: 56px;
-  --radius-sm: 4px;
+  --topbar-height: 60px;
+  --radius-sm: 5px;
   --radius-md: 8px;
   --radius-lg: 12px;
+
+  /* Subtle grid background overlay */
+  --grid-line: rgba(255, 255, 255, 0.025);
 }
