@@ -114,6 +114,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.state.runner = runner
     app.state.paper_session = paper_session
+    app.state.paper_task = paper_task
+    app.state.strategy_cfg = strategy_cfg
+    app.state.adapters = adapters
+    app.state.symbols = _DEFAULT_SYMBOLS
 
     yield  # ← application handles requests here
 
