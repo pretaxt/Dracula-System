@@ -311,7 +311,7 @@ def upgrade() -> None:
         "user_settings",
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("notification_matrix", postgresql.JSONB, nullable=False,
-                  server_default='\'{"info":{"telegram":false,"discord":false,"email":false,"toast":true,"system":false},"success":{"telegram":true,"discord":false,"email":false,"toast":true,"system":false},"warn":{"telegram":true,"discord":true,"email":false,"toast":true,"system":true},"critical":{"telegram":true,"discord":true,"email":true,"toast":true,"system":true}}\'::jsonb'),
+                  server_default=sa.text("'{}'::jsonb")),
         sa.Column("scan_min_apr", sa.Numeric(10, 4), server_default="10.0"),
         sa.Column("default_position_size_usd", sa.Numeric(20, 2), server_default="500"),
         sa.Column("max_concurrent_positions", sa.Integer, server_default="5"),
@@ -322,7 +322,19 @@ def upgrade() -> None:
                   server_default=sa.text("NOW()")),
         sa.CheckConstraint("id = 1", name="user_settings_single_row"),
     )
-    op.execute("INSERT INTO user_settings (id) VALUES (1)")
+    # Insert the single settings row; use json_build_object to avoid colon-parsing
+    # issues in SQLAlchemy text() (":false" would be misread as a bind param).
+    op.execute("""
+        INSERT INTO user_settings (id, notification_matrix) VALUES (
+            1,
+            json_build_object(
+                'info',     json_build_object('telegram', false, 'discord', false, 'email', false, 'toast', true,  'system', false),
+                'success',  json_build_object('telegram', true,  'discord', false, 'email', false, 'toast', true,  'system', false),
+                'warn',     json_build_object('telegram', true,  'discord', true,  'email', false, 'toast', true,  'system', true),
+                'critical', json_build_object('telegram', true,  'discord', true,  'email', true,  'toast', true,  'system', true)
+            )
+        )
+    """)
 
     # TimescaleDB hypertables
     for table_def in [
