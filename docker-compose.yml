@@ -2,9 +2,6 @@ version: '3.9'
 
 # ============================================================
 # Dracula System — Docker Compose
-#
-# Week 1-2: 只启动基础设施 (postgres + redis)
-# Week 3+:  取消注释 api / strategy_engine / frontend
 # ============================================================
 
 services:
@@ -22,7 +19,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"   # 只暴露给本机,不对外
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dracula} -d ${POSTGRES_DB:-dracula}"]
       interval: 10s
@@ -36,7 +33,7 @@ services:
         max-file: "3"
 
   # ----------------------------------------------------------
-  # Redis 7 (缓存 + pub/sub 事件总线)
+  # Redis 7
   # ----------------------------------------------------------
   redis:
     image: redis:7-alpine
@@ -91,35 +88,21 @@ services:
       retries: 3
 
   # ----------------------------------------------------------
-  # Week 5+: 策略引擎
+  # 前端 (Next.js 14)
   # ----------------------------------------------------------
-  # strategy_engine:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   command: python -m app.main
-  #   restart: unless-stopped
-  #   depends_on:
-  #     api:
-  #       condition: service_healthy
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - ./config:/app/config:ro
-  #     - ./logs:/app/logs
-
-  # ----------------------------------------------------------
-  # Week 7+: 前端 (Next.js)
-  # ----------------------------------------------------------
-  # frontend:
-  #   build: ./frontend
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - api
-  #   ports:
-  #     - "127.0.0.1:3000:3000"
-  #   environment:
-  #     NEXT_PUBLIC_API_URL: http://localhost:8000
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://43.160.207.185
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://43.160.207.185
 
 volumes:
   postgres_data:
