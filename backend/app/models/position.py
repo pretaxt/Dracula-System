@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -28,7 +29,7 @@ class PositionRecord(Base):
     # 主键（使用 DB 自增 id，uuid 作为业务键）
     # -------------------------------------------------------------------
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    uuid: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, index=True)
+    uuid: Mapped[str] = mapped_column(UUID(as_uuid=False), unique=True, nullable=False, index=True)
 
     # -------------------------------------------------------------------
     # 策略信息
