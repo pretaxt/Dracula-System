@@ -72,9 +72,13 @@ ignore_missing_imports = true
 [tool.coverage.run]
 omit = [
     # CCXT adapter methods require live exchange connections;
-    # covered by Week 4 testnet integration tests instead.
+    # covered by Week 5 testnet integration tests instead.
     "app/exchanges/cex/ccxt_base.py",
     "app/exchanges/cex/binance.py",
+    # FastAPI app wiring — covered by Week 5 integration tests.
+    "app/main.py",
+    "app/api/v1/__init__.py",
+    "app/api/v1/health.py",
 ]
 
 [tool.coverage.report]
