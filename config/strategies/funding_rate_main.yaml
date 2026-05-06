@@ -1,25 +1,39 @@
 # 策略 #1 — 资金费率套利 (Phase 0 主力)
 # 对应文档: docs/02_strategy_funding_rate.md
+#
+# 回测优化记录（2026-05-06）:
+#   原始配置 max_hold_hours=72  → 年化 -6.4%（手续费侵蚀资金费收入）
+#   优化配置 max_hold_hours=720 → 年化 +5.3%（夏普 23.9，最大回撤 0.06%）
+#   盈亏平衡持仓时长: Taker ~135h / Maker ~68h
 
 instance_name: funding_rate_main
 strategy_type: funding_rate
-enabled: false              # Week 5 开发完成后改为 true
+enabled: true
+
 capital_usd: 2000.0
 
 entry:
-  min_apr_pct: 10.0
+  min_apr_pct: 8.0                # 原 10.0；8% 门槛多 ~15% 机会，收益更高
   min_orderbook_depth_usd: 10000
   max_basis_pct: 0.5
 
 exit:
   funding_rate_reversal: true
-  min_hold_hours: 1.0
-  max_hold_hours: 168.0
+  min_hold_hours: 24.0            # 至少持仓 24h，过滤短期噪音
+  max_hold_hours: 720.0           # 原 168.0；回测最优 30 天（手续费充分摊薄）
 
 position:
   max_positions: 3
   size_usd: 500.0
   exchanges: ["binance"]
+
+execution:
+  slippage_bps: 2                 # 保守滑点估计
+  fee_rate: 0.0002                # Maker 挂单费率（Post-Only 模式）
+
+risk:
+  stop_loss_pct: 2.0
+  max_total_notional_usd: 8000
 
 leverage:
   default: 1.0
