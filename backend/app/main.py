@@ -175,6 +175,11 @@ def create_app() -> FastAPI:
 
     _app.include_router(v1_router, prefix="/api/v1")
 
+    # Root-level health endpoint for Docker / load-balancer probes
+    @_app.get("/health", tags=["health"])
+    async def root_health() -> dict:
+        return {"status": "ok", "version": "0.1.0"}
+
     return _app
 
 
