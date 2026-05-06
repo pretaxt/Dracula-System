@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.risk.models import Position, PositionStatus
@@ -197,8 +198,21 @@ class RiskGuard:
     # 持仓中检查（单仓级）
     # ------------------------------------------------------------------
 
-    def check_position(self, position: Position) -> list[RiskViolation]:
-        """检查单个持仓是否触发止损或超时。"""
+    def check_position(
+        self,
+        position: Position,
+        as_of: datetime | None = None,
+    ) -> list[RiskViolation]:
+        """检查单个持仓是否触发止损或超时。
+
+        Parameters
+        ----------
+        position:
+            要检查的仓位。
+        as_of:
+            计算持仓时长的参考时间（默认 datetime.now(UTC)）。
+            回测时传入模拟周期时间戳，避免使用系统时钟。
+        """
         if position.status != PositionStatus.OPEN:
             return []
 
@@ -218,17 +232,22 @@ class RiskGuard:
                     limit_value=self.limits.stop_loss_pct,
                 ))
 
-        # 2. 最长持仓时间
-        if position.holding_hours > self.limits.max_hold_hours:
-            violations.append(RiskViolation(
-                rule="max_hold_hours",
-                message=(
-                    f"仓位 {position.id[:8]} 已持有 {position.holding_hours:.1f}h "
-                    f"超过上限 {self.limits.max_hold_hours:.0f}h"
-                ),
-                current_value=position.holding_hours,
-                limit_value=self.limits.max_hold_hours,
-            ))
+        # 2. 最长持仓时间（支持传入模拟时间，用于回测）
+        if position.opened_at is not None:
+            ref_time = position.closed_at or as_of or datetime.now(UTC)
+            holding_hours = Decimal(
+                str((ref_time - position.opened_at).total_seconds() / 3600)
+            )
+            if holding_hours > self.limits.max_hold_hours:
+                violations.append(RiskViolation(
+                    rule="max_hold_hours",
+                    message=(
+                        f"仓位 {position.id[:8]} 已持有 {float(holding_hours):.1f}h "
+                        f"超过上限 {self.limits.max_hold_hours:.0f}h"
+                    ),
+                    current_value=holding_hours,
+                    limit_value=self.limits.max_hold_hours,
+                ))
 
         return violations
 

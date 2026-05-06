@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 from app.core.logging import get_logger
@@ -207,11 +208,21 @@ class OrderExecutor:
     # 持仓监控
     # ------------------------------------------------------------------
 
-    def check_all_positions(self) -> list[tuple[Position, list]]:
-        """检查所有开仓，返回有风控违规的 (position, violations) 列表。"""
+    def check_all_positions(
+        self,
+        as_of: "datetime | None" = None,
+    ) -> list[tuple[Position, list]]:
+        """检查所有开仓，返回有风控违规的 (position, violations) 列表。
+
+        Parameters
+        ----------
+        as_of:
+            持仓时长的参考时间（默认使用系统时钟）。
+            回测时传入模拟周期时间戳。
+        """
         flagged = []
         for pos in self._manager.open_positions:
-            violations = self._guard.check_position(pos)
+            violations = self._guard.check_position(pos, as_of=as_of)
             if violations:
                 flagged.append((pos, violations))
         return flagged
