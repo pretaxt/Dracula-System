@@ -121,7 +121,7 @@ export default function DashboardPage() {
               <LineChart data={chartData}>
                 <XAxis dataKey="date" tick={{ fill: '#5a6470', fontSize: 11, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fill: '#5a6470', fontSize: 11, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} width={52} />
-                <Tooltip contentStyle={{ background: '#1a2029', border: '1px solid #2a3340', borderRadius: 6, color: '#e8ecef', fontFamily: 'JetBrains Mono', fontSize: 12 }} formatter={(v: number) => [`$${v.toFixed(4)}`, 'PnL']} />
+                <Tooltip contentStyle={{ background: '#1a2029', border: '1px solid #2a3340', borderRadius: 6, color: '#e8ecef', fontFamily: 'JetBrains Mono', fontSize: 12 }} formatter={(v) => [`$${Number(v ?? 0).toFixed(4)}`, 'PnL']} />
                 <Line type="monotone" dataKey="pnl" stroke="#00d68f" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
