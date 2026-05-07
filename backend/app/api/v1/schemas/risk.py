@@ -1,6 +1,8 @@
 """Risk 请求 / 响应 schema。"""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -19,3 +21,19 @@ class RiskLimitsPatch(BaseModel):
     min_apr_pct: str | None = None
     max_total_notional_usd: str | None = None
     confirm_widening: bool = False
+
+
+class RiskEventOut(BaseModel):
+    time: datetime
+    tier: str
+    event: str
+    trigger: str
+    value: str
+    action: str
+    auto_recovered: bool
+
+
+class RiskEventsResponse(BaseModel):
+    data: list[RiskEventOut]
+    total: int
+    days: int

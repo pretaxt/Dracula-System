@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 import yaml
@@ -118,6 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.strategy_cfg = strategy_cfg
     app.state.adapters = adapters
     app.state.symbols = _DEFAULT_SYMBOLS
+    app.state.startup_time = datetime.now(timezone.utc)
 
     yield  # ← application handles requests here
 

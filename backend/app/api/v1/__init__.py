@@ -4,10 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
+from app.api.v1.account import router as account_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.funding_rates import router as funding_rates_router
 from app.api.v1.health import router as health_router
+from app.api.v1.orders import router as orders_router
 from app.api.v1.paper import router as paper_router
 from app.api.v1.positions import router as positions_router
 from app.api.v1.risk import router as risk_router
@@ -26,5 +28,7 @@ _protected.include_router(funding_rates_router)
 _protected.include_router(dashboard_router)
 _protected.include_router(strategies_router)
 _protected.include_router(risk_router)
+_protected.include_router(orders_router)
+_protected.include_router(account_router)
 
 router.include_router(_protected)

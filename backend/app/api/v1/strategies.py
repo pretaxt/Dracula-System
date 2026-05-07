@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.api.deps import CurrentUser
 from app.api.v1.schemas.strategies import (
@@ -15,6 +15,17 @@ from app.api.v1.schemas.strategies import (
 from app.services.strategy_control import patch_strategy_config, start_paper, stop_paper
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+# 已实现真实控制的策略 (funding_rate 是 P0 主力)
+_LIVE_STRATEGIES = {"funding-rate"}
+
+# 12 策略保留列表 (2026-05-07 决策, 砍掉 #8 #11 #12 #15 #17)
+_VALID_STRATEGY_IDS = {
+    "funding-rate", "spot-perp", "triangular",
+    "perp-basis", "spot-spread", "cex-dex", "options-vol",
+    "grid", "market-making", "trend",
+    "stablecoin-yield", "pairs-trading",
+}
 
 
 def _build_status(app_state) -> StrategyStatusResponse:
@@ -79,3 +90,35 @@ async def update_config(
         max_concurrent_positions=cfg.get("position", {}).get("max_positions", 3),
         scan_interval_seconds=cfg.get("scan_interval_seconds", 60.0),
     )
+
+
+# ---------------------------------------------------------------------------
+# 多策略通用 start/stop (Phase 1+ 真实接入, 当前仅 funding-rate 已实现)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{strategy_id}/start", response_model=StrategyActionResponse)
+async def start_any(
+    _: CurrentUser, request: Request, strategy_id: str
+) -> StrategyActionResponse:
+    """启动指定策略。funding-rate 真实启动,其他策略返回 mock(等待 Phase 1+ 实现)。"""
+    if strategy_id not in _VALID_STRATEGY_IDS:
+        raise HTTPException(status_code=404, detail=f"Unknown strategy: {strategy_id}")
+    if strategy_id in _LIVE_STRATEGIES:
+        await start_paper(request.app.state)
+        return StrategyActionResponse(paper_running=True, timestamp=datetime.now(timezone.utc))
+    # 未实现策略:返回响应壳子,前端展示 "queued"
+    return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
+
+
+@router.post("/{strategy_id}/stop", response_model=StrategyActionResponse)
+async def stop_any(
+    _: CurrentUser, request: Request, strategy_id: str
+) -> StrategyActionResponse:
+    """停止指定策略。"""
+    if strategy_id not in _VALID_STRATEGY_IDS:
+        raise HTTPException(status_code=404, detail=f"Unknown strategy: {strategy_id}")
+    if strategy_id in _LIVE_STRATEGIES:
+        await stop_paper(request.app.state)
+        return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
+    return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
