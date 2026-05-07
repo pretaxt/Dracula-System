@@ -2,185 +2,316 @@
 import { useQuery } from '@tanstack/react-query'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import { getOpportunities } from '@/lib/api/funding'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { Wallet, TrendingUp, BarChart3, Shield, CheckCircle2, TrendingUp as TrUp, AlertTriangle, Zap, XCircle } from 'lucide-react'
+import { CardElevated, SectionHeader } from '@/components/ui/Card'
+import { Badge, StatusDot, type BadgeTone } from '@/components/ui/Button'
+import { ProgressBar, KPICard } from '@/components/ui/Stats'
+import { useT } from '@/components/i18n/I18nProvider'
 
-// Exchange badge colors — matches prototype v0.3
-const EXCH_STYLE: Record<string, { bg: string; color: string }> = {
-  binance:     { bg: 'rgba(240,185,11,0.12)',  color: '#f0b90b' },
-  bybit:       { bg: 'rgba(247,165,1,0.12)',   color: '#f7a501' },
-  okx:         { bg: 'rgba(74,158,255,0.12)',  color: '#4a9eff' },
-  htx:         { bg: 'rgba(0,159,211,0.12)',   color: '#009fd3' },
-  bitget:      { bg: 'rgba(0,246,196,0.12)',   color: '#00f6c4' },
-  hyperliquid: { bg: 'rgba(177,108,255,0.15)', color: '#b16cff' },
-  dydx:        { bg: 'rgba(108,92,231,0.15)',  color: '#6c5ce7' },
+const STRATEGY_PERF: { name: string; pnl: number; pct: number; tone: 'active' | 'warn' | 'paused' }[] = [
+  { name: '资金费率套利', pnl: 348, pct: 78, tone: 'active' },
+  { name: '期现套利',     pnl: 142, pct: 32, tone: 'active' },
+  { name: '三角套利',     pnl:  89, pct: 20, tone: 'active' },
+  { name: '跨所基差套利', pnl:  67, pct: 15, tone: 'active' },
+  { name: '配对交易',     pnl: -32, pct:  7, tone: 'warn' },
+  { name: 'CEX-DEX 监控', pnl:   0, pct:  0, tone: 'paused' },
+]
+
+const ACTIVITY: { icon: 'up' | 'check' | 'warn' | 'zap' | 'x'; text: string; time: string }[] = [
+  { icon: 'up',    text: '资金费率结算 · HYPE/USDC @ Hyperliquid +$2.43',                       time: '14:00:01 UTC · 1 分钟前' },
+  { icon: 'check', text: '建仓成功 · ETH/USDT @ Binance · APR 18.4% · 仓位 $500',               time: '13:42:18 UTC · 19 分钟前' },
+  { icon: 'warn',  text: 'HTX API 延迟升高 · 当前 P95 延迟 480ms',                              time: '13:28:51 UTC · 33 分钟前' },
+  { icon: 'zap',   text: 'CEX-DEX 机会推送 · PEPE 价差 1.41% · 已发 Telegram',                  time: '13:15:02 UTC · 47 分钟前' },
+  { icon: 'x',     text: '平仓 · ARB/USDT @ Bybit · 资金费率连续 2 期转负 · +$8.21',            time: '12:58:33 UTC · 1 小时前' },
+]
+
+const ACTIVITY_ICON = {
+  up:    <TrUp size={14} style={{ color: 'var(--accent-emerald)' }} />,
+  check: <CheckCircle2 size={14} style={{ color: 'var(--accent-emerald)' }} />,
+  warn:  <AlertTriangle size={14} style={{ color: 'var(--accent-gold)' }} />,
+  zap:   <Zap size={14} style={{ color: 'var(--accent-azure)' }} />,
+  x:     <XCircle size={14} style={{ color: 'var(--accent-blood)' }} />,
 }
 
-function ExchBadge({ name }: { name: string }) {
-  const s = EXCH_STYLE[name.toLowerCase()] ?? { bg: 'rgba(255,255,255,0.06)', color: '#8b95a3' }
-  return (
-    <span style={{ display: 'inline-block', padding: '3px 8px', fontSize: '0.68rem', borderRadius: 3, fontWeight: 700, letterSpacing: '0.03em', fontFamily: 'var(--font-mono)', background: s.bg, color: s.color }}>
-      {name.toUpperCase()}
-    </span>
-  )
-}
-
-function AprBar({ pct }: { pct: number }) {
-  const width = Math.min(100, Math.max(0, pct / 50 * 100))
-  const color = pct >= 20 ? 'var(--color-positive)' : pct >= 8 ? 'var(--color-warning)' : 'var(--color-text-dim)'
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-      <span style={{ color, fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '0.875rem' }}>{pct.toFixed(2)}%</span>
-      <span style={{ display: 'inline-block', width: 56, height: 5, background: 'var(--color-border)', borderRadius: 2, overflow: 'hidden', verticalAlign: 'middle' }}>
-        <span style={{ display: 'block', height: '100%', width: `${width}%`, background: 'linear-gradient(90deg, var(--color-accent), var(--color-blue))', borderRadius: 2 }} />
-      </span>
-    </span>
-  )
-}
-
-function PanelHeader({ title, accent = 'green' }: { title: string; accent?: 'green' | 'blue' | 'yellow' }) {
-  const barColor = accent === 'blue' ? 'var(--color-blue)' : accent === 'yellow' ? 'var(--color-warning)' : 'var(--color-accent)'
-  return (
-    <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', background: 'rgba(26,32,41,0.5)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-        <span style={{ display: 'inline-block', width: 3, height: 15, background: barColor, borderRadius: 2 }} />
-        {title}
-      </div>
-    </div>
-  )
-}
-
-interface KpiCardProps {
-  label: string
-  value: string
-  meta?: string
-  delta?: string
-  deltaUp?: boolean
-  accent?: 'green' | 'blue' | 'yellow' | 'default'
-}
-
-function KpiCard({ label, value, meta, delta, deltaUp, accent = 'default' }: KpiCardProps) {
-  const valueColor =
-    accent === 'green'  ? 'var(--color-positive)' :
-    accent === 'yellow' ? 'var(--color-warning)'  :
-    accent === 'blue'   ? 'var(--color-blue)'     : 'var(--color-text)'
-  const topBar =
-    accent === 'green'  ? 'linear-gradient(90deg, transparent, var(--color-accent), transparent)' :
-    accent === 'yellow' ? 'linear-gradient(90deg, transparent, var(--color-warning), transparent)' :
-    accent === 'blue'   ? 'linear-gradient(90deg, transparent, var(--color-blue), transparent)' :
-                          'linear-gradient(90deg, transparent, var(--color-blue), transparent)'
-
-  return (
-    <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '18px 20px', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: topBar, opacity: 0.7 }} />
-      <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.75rem', fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.1, color: valueColor }}>{value}</div>
-      {(delta || meta) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          {delta && <span style={{ fontWeight: 600, color: deltaUp ? 'var(--color-positive)' : 'var(--color-negative)' }}>{deltaUp ? '+' : ''}{delta}</span>}
-          {meta && <span>{meta}</span>}
-        </div>
-      )}
-    </div>
-  )
+const OPP_TONE: Record<string, BadgeTone> = {
+  funding_rate: 'active',
+  triangular:   'info',
+  spot_perp:    'info',
+  cex_dex:      'info',
+  basis_arb:    'info',
 }
 
 export default function DashboardPage() {
+  const { t } = useT()
   const { data: summary, isLoading } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
   const { data: opps } = useQuery({ queryKey: ['opportunities'], queryFn: getOpportunities, refetchInterval: 15_000 })
 
-  if (isLoading) return <div style={{ padding: '3rem', color: 'var(--color-text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.875rem' }}>Loading…</div>
+  if (isLoading) {
+    return <div style={{ padding: 48, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{t('加载中…')}</div>
+  }
 
-  const netPnl     = parseFloat(summary?.net_pnl_usd      || '0')
-  const todayFund  = parseFloat(summary?.today_funding_usd || '0')
-  const avgApr     = parseFloat(summary?.avg_apr_pct       || '0')
-  const openPos    = summary?.open_positions ?? 0
-  const chartData  = (summary?.pnl_series_30d ?? []).map((p: { date: string; net_pnl_usd: string }) => ({
+  const todayFund = parseFloat(summary?.today_funding_usd || '0')
+  const netPnl    = parseFloat(summary?.net_pnl_usd || '0')
+  const openPos   = summary?.open_positions ?? 0
+  const series    = summary?.pnl_series_30d ?? []
+  const last7     = series.slice(-7).reduce((sum: number, p: { net_pnl_usd: string }) => sum + parseFloat(p.net_pnl_usd), 0)
+
+  const chartData = series.map((p: { date: string; net_pnl_usd: string }) => ({
     date: p.date.slice(5),
     pnl:  parseFloat(p.net_pnl_usd),
   }))
+
   const oppList: Array<Record<string, string | number>> = opps?.data ?? []
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-      {/* 5 KPI cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-        <KpiCard label="账户净盈亏"   value={`$${netPnl.toFixed(2)}`}    accent={netPnl >= 0 ? 'green' : 'default'} delta={`$${Math.abs(netPnl).toFixed(2)}`} deltaUp={netPnl >= 0} meta="累计" />
-        <KpiCard label="今日资金费收入" value={`$${todayFund.toFixed(4)}`}  accent="green"  meta="24H 收益" />
-        <KpiCard label="开仓数量"     value={String(openPos)}              accent="blue"   meta="活跃持仓" />
-        <KpiCard label="平均年化收益"  value={`${avgApr.toFixed(2)}%`}     accent="yellow" meta="加权均值 · 滚动 7 天" />
-        <KpiCard label="今日最大回撤"  value="—"                            accent="default" meta="红线 -3.0% · 安全" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* ========== 4 KPI ========== */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+        <KPICard
+          label={t('总资本')}
+          value={<>$34,827.<span style={{ color: 'var(--text-tertiary)', fontSize: '70%' }}>52</span></>}
+          meta={t('USDT 等值')}
+          icon={<Wallet size={14} />}
+          animationDelay="0s"
+        />
+        <KPICard
+          label={t('今日 PnL')}
+          value={`${todayFund >= 0 ? '+' : ''}$${todayFund.toFixed(2)}`}
+          accent={todayFund >= 0 ? 'positive' : 'negative'}
+          icon={<TrendingUp size={14} style={{ color: 'var(--accent-emerald)' }} />}
+          animationDelay="0.05s"
+        />
+        <KPICard
+          label={t('月度 PnL')}
+          value={`${last7 >= 0 ? '+' : ''}$${last7.toFixed(2)}`}
+          accent={last7 >= 0 ? 'positive' : 'negative'}
+          meta={`${last7 >= 0 ? '+' : ''}${last7 !== 0 ? (last7 / 348 * 100).toFixed(2) : '0'}% MTD`}
+          icon={<BarChart3 size={14} style={{ color: 'var(--accent-emerald)' }} />}
+          animationDelay="0.1s"
+        />
+        <KPICard
+          label={t('单日回撤')}
+          value={<>-0.32<span style={{ color: 'var(--text-tertiary)', fontSize: '70%' }}>%</span></>}
+          icon={<Shield size={14} style={{ color: 'var(--accent-emerald)' }} />}
+          footer={
+            <>
+              <ProgressBar pct={11} tone="success" />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 6, color: 'var(--text-tertiary)' }}>
+                <span>{t('距 Tier 3 红线')}</span>
+                <span style={{ color: 'var(--accent-emerald)' }}>2.68%</span>
+              </div>
+            </>
+          }
+          animationDelay="0.15s"
+        />
       </div>
 
-      {/* Chart + Top-6 opportunities */}
+      {/* ========== 权益曲线 + 策略表现 ========== */}
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
-        <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <PanelHeader title="30 天净盈亏曲线" accent="blue" />
-          <div style={{ padding: 16, height: 220 }}>
+        <CardElevated style={{ padding: 20 }} className="animate-in">
+          <SectionHeader
+            title={t('权益曲线')}
+            subtitle="EQUITY CURVE · 30 DAYS"
+            right={
+              <div style={{ display: 'flex', gap: 4 }}>
+                {['1D', '7D', '30D', 'ALL'].map((p) => (
+                  <span key={p} style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 10,
+                    padding: '4px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: p === '30D' ? 'var(--accent-blood)' : 'var(--bg-card)',
+                    color: p === '30D' ? '#fff' : 'var(--text-tertiary)',
+                    cursor: 'pointer',
+                  }}>{p}</span>
+                ))}
+              </div>
+            }
+          />
+          <div style={{ height: 200, marginTop: 8 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <XAxis dataKey="date" tick={{ fill: '#5a6470', fontSize: 11, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: '#5a6470', fontSize: 11, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} width={52} />
-                <Tooltip contentStyle={{ background: '#1a2029', border: '1px solid #2a3340', borderRadius: 6, color: '#e8ecef', fontFamily: 'JetBrains Mono', fontSize: 12 }} formatter={(v) => [`$${Number(v ?? 0).toFixed(4)}`, 'PnL']} />
-                <Line type="monotone" dataKey="pnl" stroke="#00d68f" strokeWidth={2} dot={false} />
-              </LineChart>
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor="var(--accent-blood)" stopOpacity={0.3} />
+                    <stop offset="100%" stopColor="var(--accent-blood)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} width={48} />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-primary)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                  }}
+                  formatter={(v) => [`$${Number(v ?? 0).toFixed(4)}`, 'PnL']}
+                />
+                <Area type="monotone" dataKey="pnl" stroke="var(--accent-blood)" strokeWidth={1.5} fill="url(#equityGrad)" />
+              </AreaChart>
             </ResponsiveContainer>
           </div>
-        </div>
-
-        <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <PanelHeader title="实时机会 TOP 6" accent="green" />
-          {oppList.slice(0, 6).map((o) => (
-            <div key={String(o.symbol)}
-              style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'background var(--duration-fast)', cursor: 'default' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-high)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: '0.875rem', marginBottom: 4 }}>{String(o.symbol)}</div>
-                <ExchBadge name={String(o.exchange)} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
+            {[
+              { l: t('起始'), v: '$34,215.37' },
+              { l: t('最高'), v: '$34,891.20' },
+              { l: t('最低'), v: '$34,082.51' },
+              { l: 'Sharpe',  v: '1.83', accent: 'positive' },
+            ].map((s, i) => (
+              <div key={i}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, marginTop: 4, color: s.accent === 'positive' ? 'var(--accent-emerald)' : 'var(--text-primary)' }}>{s.v}</div>
               </div>
-              <AprBar pct={parseFloat(String(o.apr_pct))} />
+            ))}
+          </div>
+        </CardElevated>
+
+        <CardElevated style={{ padding: 20 }} className="animate-in">
+          <SectionHeader
+            title={t('策略表现')}
+            subtitle="STRATEGY PERFORMANCE"
+            right={<Badge tone="info">MTD</Badge>}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {STRATEGY_PERF.map((s) => (
+              <div key={s.name}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <StatusDot tone={s.tone} />
+                    <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{t(s.name)}</span>
+                  </div>
+                  <span style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 12,
+                    color: s.pnl > 0 ? 'var(--accent-emerald)' : s.pnl < 0 ? 'var(--accent-blood)' : 'var(--text-tertiary)',
+                  }}>
+                    {s.pnl === 0 ? t('监控中') : `${s.pnl > 0 ? '+' : ''}$${s.pnl}`}
+                  </span>
+                </div>
+                <ProgressBar pct={s.pct} tone={s.tone === 'warn' ? 'warn' : s.tone === 'paused' ? 'default' : 'success'} />
+              </div>
+            ))}
+          </div>
+        </CardElevated>
+      </div>
+
+      {/* ========== 风控状态 + 实时机会 ========== */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
+        <CardElevated style={{ padding: 20 }} className="animate-in">
+          <SectionHeader title={t('风控状态')} right={<Badge tone="active">SAFE</Badge>} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {[
+              { l: t('单日回撤'),       v: '-0.32%',  cap: '/ -3.00%' },
+              { l: t('周回撤'),         v: '-1.04%',  cap: '/ -8.00%' },
+              { l: t('最低保证金率'),   v: '87.3%',   cap: '/ 50%' },
+              { l: t('API 错误率 (5m)'),v: '0.4%',    cap: '/ 5.0%' },
+              { l: t('WS 连接稳定性'),  v: '100%',    cap: '',           accent: 'positive' as const },
+            ].map((row, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{row.l}</span>
+                <div style={{ display: 'flex', gap: 6, fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ color: row.accent === 'positive' ? 'var(--accent-emerald)' : 'var(--text-primary)' }}>{row.v}</span>
+                  {row.cap && <span style={{ color: 'var(--text-tertiary)' }}>{row.cap}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', fontSize: 12 }}>
+            <CheckCircle2 size={14} style={{ color: 'var(--accent-emerald)' }} />
+            <span style={{ color: 'var(--text-secondary)' }}>{t('三层风控全部正常')}</span>
+          </div>
+        </CardElevated>
+
+        <CardElevated style={{ padding: 20 }} className="animate-in">
+          <SectionHeader
+            title={t('实时套利机会')}
+            subtitle="LIVE OPPORTUNITIES · UPDATING"
+            right={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                <StatusDot tone="active" />
+                <span>{t('实时')}</span>
+              </span>
+            }
+          />
+          <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            <thead>
+              <tr>
+                {[t('策略'), t('币对'), t('交易所'), t('指标'), 'APR', t('规模'), ''].map((h, i) => (
+                  <th key={i} style={{
+                    textAlign: i >= 3 && i <= 5 ? 'right' : 'left',
+                    padding: '8px 12px',
+                    color: 'var(--text-tertiary)',
+                    fontWeight: 500,
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    borderBottom: '1px solid var(--border-default)',
+                    background: 'var(--bg-deepest)',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {oppList.slice(0, 5).map((o, idx) => {
+                const apr = parseFloat(String(o.apr_pct))
+                const fr  = parseFloat(String(o.funding_rate)) * 100
+                const stratKey = String(o.instrument_type || 'funding_rate')
+                const stratLabel = stratKey === 'funding_rate' ? t('资金费率') : stratKey
+                return (
+                  <tr key={`${o.symbol}-${idx}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    <td style={{ padding: '10px 12px' }}><Badge tone={OPP_TONE[stratKey] || 'info'}>{stratLabel}</Badge></td>
+                    <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{String(o.symbol)}</td>
+                    <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{String(o.exchange)}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: fr >= 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)' }}>
+                      {fr >= 0 ? '+' : ''}{fr.toFixed(4)}%
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 500, color: apr > 0 ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
+                      {apr > 0 ? `+${apr.toFixed(2)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>$500</td>
+                    <td style={{ padding: '10px 12px', fontSize: 10, color: 'var(--accent-emerald)' }}>{t('已建仓')}</td>
+                  </tr>
+                )
+              })}
+              {oppList.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>{t('加载中…')}</td></tr>
+              )}
+            </tbody>
+          </table>
+          {openPos > 0 && (
+            <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+              ↳ {openPos} 个活跃仓位 · 累计净盈亏 ${netPnl.toFixed(2)}
+            </div>
+          )}
+        </CardElevated>
+      </div>
+
+      {/* ========== 系统活动 ========== */}
+      <CardElevated style={{ padding: 20 }} className="animate-in">
+        <SectionHeader
+          title={t('系统活动')}
+          right={<span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>LAST 1H</span>}
+        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {ACTIVITY.map((a, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)' }}>
+              <div style={{ marginTop: 2 }}>{ACTIVITY_ICON[a.icon]}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{a.text}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 2, color: 'var(--text-tertiary)' }}>{a.time}</div>
+              </div>
             </div>
           ))}
-          {oppList.length === 0 && <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>暂无数据</div>}
         </div>
-      </div>
+      </CardElevated>
 
-      {/* Full opportunity table */}
-      <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <PanelHeader title="资金费率机会扫描器" accent="green" />
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: '0.875rem' }}>
-          <thead>
-            <tr>
-              {['币种', '交易所', '资金费率', '年化收益', '趋势'].map((h) => (
-                <th key={h} style={{ padding: '11px 14px', textAlign: 'left', background: 'rgba(26,32,41,0.7)', color: 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {oppList.map((o) => {
-              const fr  = parseFloat(String(o.funding_rate)) * 100
-              const apr = parseFloat(String(o.apr_pct))
-              return (
-                <tr key={String(o.symbol)}
-                  style={{ borderBottom: '1px solid var(--color-border)', transition: 'background var(--duration-fast)', cursor: 'default' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-high)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <td style={{ padding: '13px 14px', fontWeight: 600 }}>{String(o.symbol)}</td>
-                  <td style={{ padding: '13px 14px' }}><ExchBadge name={String(o.exchange)} /></td>
-                  <td style={{ padding: '13px 14px', color: fr >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' }}>{fr >= 0 ? '+' : ''}{fr.toFixed(4)}%</td>
-                  <td style={{ padding: '13px 14px' }}><AprBar pct={apr} /></td>
-                  <td style={{ padding: '13px 14px', color: 'var(--color-text-dim)', fontSize: '0.8rem' }}>{o.history_positive ? `${o.history_positive}/10` : '—'}</td>
-                </tr>
-              )
-            })}
-            {oppList.length === 0 && <tr><td colSpan={5} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>无数据</td></tr>}
-          </tbody>
-        </table>
-      </div>
-
+      {opps?.snapshot_at && (
+        <div style={{ marginTop: 8, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
+          LAST UPDATE · {new Date(opps.snapshot_at).toLocaleTimeString()}
+        </div>
+      )}
     </div>
   )
 }

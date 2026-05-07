@@ -1,10 +1,10 @@
 import axios from 'axios'
 import { useAuthStore } from '../auth/token-store'
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://43.160.207.185'
-
+// 同域: dev 由 Next rewrites 代理到生产后端 (绕过 CORS)
+//       prod docker nginx 反代 /api/v1/* 到后端容器
 export const apiClient = axios.create({
-  baseURL: `${BASE_URL}/api/v1`,
+  baseURL: '/api/v1',
   headers: { 'Content-Type': 'application/json' },
 })
 

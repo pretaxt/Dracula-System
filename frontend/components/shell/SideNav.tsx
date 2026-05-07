@@ -1,46 +1,230 @@
 'use client'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut } from 'lucide-react'
+import { useT } from '../i18n/I18nProvider'
+import { StatusDot } from '../ui/Button'
 import { useAuthStore } from '@/lib/auth/token-store'
-import { useRouter } from 'next/navigation'
 
 const NAV = [
-  { href: '/', label: 'Dashboard', icon: '▦' },
-  { href: '/positions', label: 'Positions', icon: '◈' },
-  { href: '/strategies', label: 'Strategies', icon: '⟳' },
-  { href: '/funding-rates', label: 'Funding Rates', icon: '◎' },
-  { href: '/risk', label: 'Risk Limits', icon: '⚠' },
-]
+  { href: '/',           labelZh: '总览',       Icon: LayoutGrid },
+  { href: '/strategies', labelZh: '策略中心',   Icon: Target,      badge: '12' },
+  { href: '/positions',  labelZh: '持仓与订单', Icon: Layers,      badge: '8',  badgeColor: 'var(--accent-emerald)' },
+  { href: '/risk',       labelZh: '风控中心',   Icon: ShieldAlert },
+  { href: '/settings',   labelZh: '设置',       Icon: Settings },
+] as const
 
 export default function SideNav() {
   const pathname = usePathname()
-  const clearToken = useAuthStore((s) => s.clearToken)
+  const { t } = useT()
   const router = useRouter()
+  const clearToken = useAuthStore((s) => s.clearToken)
+  const handleLogout = () => {
+    clearToken()
+    router.replace('/login')
+  }
 
   return (
-    <nav style={{ width: 'var(--nav-width)', height: '100vh', background: 'var(--color-surface)', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', position: 'fixed', left: 0, top: 0, zIndex: 10 }}>
-      <div style={{ padding: '1.25rem 1.25rem 1rem', borderBottom: '1px solid var(--color-border)' }}>
-        <div style={{ color: 'var(--color-accent)', fontFamily: 'var(--font-mono)', fontSize: '0.65rem', letterSpacing: '0.2em', marginBottom: '0.25rem' }}>DRACULA</div>
-        <div style={{ color: 'var(--color-text)', fontWeight: 700, fontSize: '0.9rem' }}>System</div>
+    <aside
+      style={{
+        width: 'var(--sidenav-width)',
+        background: 'var(--bg-deepest)',
+        borderRight: '1px solid var(--border-default)',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'fixed',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 10,
+      }}
+    >
+      {/* Logo 区 */}
+      <div style={{ padding: 24, borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            className="logo-svg"
+            style={{
+              width: 48,
+              height: 48,
+              flexShrink: 0,
+              borderRadius: 'var(--radius-md)',
+              overflow: 'hidden',
+              boxShadow: '0 0 16px var(--accent-blood-glow)',
+              background: 'linear-gradient(135deg, var(--accent-blood), var(--accent-blood-dim))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/dgl_icon_square.PNG"
+              alt="Dracula"
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          </div>
+          <div>
+            <h1
+              style={{
+                margin: 0,
+                fontFamily: 'var(--font-display)',
+                fontSize: 16,
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                color: 'var(--text-primary)',
+                lineHeight: 1.1,
+              }}
+            >
+              DRACULA
+            </h1>
+            <p
+              style={{
+                margin: '4px 0 0',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 8,
+                letterSpacing: '0.35em',
+                color: 'var(--accent-blood)',
+              }}
+            >
+              {t('ARBITRAGE SYSTEM')}
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div style={{ flex: 1, padding: '1rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-        {NAV.map(({ href, label, icon }) => {
-          const active = pathname === href
+      {/* 系统状态卡 */}
+      <div
+        className="animate-in"
+        style={{
+          margin: 16,
+          padding: 12,
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-md)',
+          animationDelay: '0.1s',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            {t('SYSTEM STATUS')}
+          </span>
+          <StatusDot tone="active" />
+        </div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>{t('RUNNING')}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>↑ 12d 04h 23m</div>
+      </div>
+
+      {/* 导航 */}
+      <nav style={{ flex: 1, padding: '8px 0', overflowY: 'auto' }}>
+        {NAV.map(({ href, labelZh, Icon, ...rest }) => {
+          const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
+          const badge = 'badge' in rest ? rest.badge : undefined
+          const badgeColor = 'badgeColor' in rest ? rest.badgeColor : undefined
           return (
-            <Link key={href} href={href} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', textDecoration: 'none', color: active ? 'var(--color-accent)' : 'var(--color-text-dim)', background: active ? 'color-mix(in oklch, var(--color-accent) 12%, transparent)' : 'transparent', fontSize: '0.875rem', fontWeight: active ? 600 : 400, transition: 'all var(--duration-fast)' }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{icon}</span>
-              {label}
+            <Link
+              key={href}
+              href={href}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '10px 24px',
+                fontSize: 14,
+                color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                background: active ? 'var(--bg-card)' : 'transparent',
+                borderLeft: `2px solid ${active ? 'var(--accent-blood)' : 'transparent'}`,
+                textDecoration: 'none',
+                transition: 'color var(--duration-fast), background var(--duration-fast)',
+              }}
+            >
+              <Icon size={16} />
+              <span>{t(labelZh)}</span>
+              {badge && (
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10,
+                    color: badgeColor || 'var(--text-tertiary)',
+                  }}
+                >
+                  {badge}
+                </span>
+              )}
             </Link>
           )
         })}
-      </div>
+      </nav>
 
-      <div style={{ padding: '0.75rem', borderTop: '1px solid var(--color-border)' }}>
-        <button onClick={() => { clearToken(); router.replace('/login') }} style={{ width: '100%', padding: '0.5rem', background: 'transparent', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text-dim)', fontSize: '0.8rem', cursor: 'pointer' }}>
-          Sign Out
-        </button>
+      {/* 底部用户信息 + 退出 */}
+      <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--accent-blood)',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            {t('老')}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>{t('老虎')}</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--accent-blood)' }}>SUPER ADMIN</div>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            title="退出登录 / Sign out"
+            aria-label="Sign out"
+            style={{
+              flexShrink: 0,
+              width: 32,
+              height: 32,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'transparent',
+              color: 'var(--text-tertiary)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+              transition: 'all var(--duration-fast) var(--ease-in-out)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--accent-blood)'
+              e.currentTarget.style.borderColor = 'rgba(227,64,88,0.4)'
+              e.currentTarget.style.background = 'rgba(227,64,88,0.08)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--text-tertiary)'
+              e.currentTarget.style.borderColor = 'var(--border-subtle)'
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <LogOut size={14} />
+          </button>
+        </div>
       </div>
-    </nav>
+    </aside>
   )
 }

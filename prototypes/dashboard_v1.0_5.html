@@ -1,0 +1,2353 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dracula-System · 量化套利终端</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Cormorant+Garamond:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+<style>
+  /* ============================================ */
+  /* 主题系统:深色(默认) + 浅色                */
+  /* ============================================ */
+
+  :root, [data-theme="dark"] {
+    /* 背景层级 */
+    --bg-deepest: #050508;
+    --bg-base: #08080f;
+    --bg-card: #0f0f17;
+    --bg-card-hover: #14141f;
+    --bg-elevated: #18182a;
+
+    /* 边框 */
+    --border-subtle: #1a1a26;
+    --border-default: #25252e;
+    --border-strong: #4a4a5e;
+
+    /* 文字(对比度优化版) */
+    --text-primary: #ffffff;       /* 18.25 -> 21:1 */
+    --text-secondary: #b8b8c8;     /* 7.75 -> 11:1 */
+    --text-tertiary: #909099;      /* 3.51 -> 5.5:1 ✅ 修复了之前不达 AA 的问题 */
+    --text-muted: #6e6e80;         /* 3.5:1 ✅ 大字达标 */
+
+    /* 强调色 */
+    --accent-blood: #e34058;       /* 比之前 #c41e3a 亮一点,深色下更醒目 */
+    --accent-blood-dim: #8b0000;
+    --accent-blood-bright: #ff4d6a;
+    --accent-blood-glow: rgba(227, 64, 88, 0.25);
+
+    --accent-silver: #d4d4dc;
+    --accent-silver-dim: #8a8a98;
+
+    --accent-gold: #f0b850;
+    --accent-emerald: #3ed492;     /* 提亮,深色下更明显 */
+    --accent-azure: #5fb0ff;
+
+    --status-active: #3ed492;
+    --status-warn: #f0b850;
+    --status-critical: #e34058;
+    --status-paused: #909099;
+
+    /* 阴影 */
+    --shadow-card: 0 1px 0 0 rgba(255,255,255,0.02) inset;
+    --shadow-elevated: 0 4px 24px rgba(0,0,0,0.5);
+    --shadow-glow: 0 0 32px var(--accent-blood-glow);
+
+    /* 噪点 + 顶部光晕 */
+    --noise-opacity: 0.4;
+    --top-glow: rgba(227, 64, 88, 0.18);
+  }
+
+  [data-theme="light"] {
+    /* 背景层级(暖白系,不刺眼) */
+    --bg-deepest: #ebebe5;         /* 导航底色 */
+    --bg-base: #f4f4ed;            /* 主背景(暖米白) */
+    --bg-card: #ffffff;            /* 卡片(纯白) */
+    --bg-card-hover: #fafaf3;
+    --bg-elevated: #ffffff;
+
+    /* 边框 */
+    --border-subtle: #e0e0d4;
+    --border-default: #c4c4b8;
+    --border-strong: #a0a098;
+
+    /* 文字 — 主要内容用黑色,只有解释/标签/时间戳用灰色 */
+    --text-primary: #0a0a0a;       /* 标题 / 主数据(几乎纯黑) */
+    --text-secondary: #1a1a1a;     /* 主要内容(导航 / 表格 / 列表),也是黑色 */
+    --text-tertiary: #6c6c75;      /* 标签 / 单位 / 副标题(灰色) */
+    --text-muted: #888880;         /* 装饰 / 占位(更浅的灰) */
+
+    /* 强调色(浅色背景上需要更深的颜色) */
+    --accent-blood: #b81a30;       /* 比深色版深,在白底上对比度高 */
+    --accent-blood-dim: #8b0000;
+    --accent-blood-bright: #c41e3a;
+    --accent-blood-glow: rgba(184, 26, 48, 0.15);
+
+    --accent-silver: #6c6c75;      /* 浅色下"银"变成深灰 */
+    --accent-silver-dim: #989894;
+
+    --accent-gold: #a06010;        /* 加深到 4.5:1 ✅ */
+    --accent-emerald: #0e7e4a;     /* 加深 */
+    --accent-azure: #2563eb;       /* 加深 */
+
+    --status-active: #0e7e4a;
+    --status-warn: #c08020;
+    --status-critical: #b81a30;
+    --status-paused: #6c6c75;
+
+    /* 阴影(浅色下用阴影代替深色边框) */
+    --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-elevated: 0 4px 16px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+    --shadow-glow: 0 0 20px rgba(184, 26, 48, 0.15);
+
+    /* 浅色主题不要噪点,顶部光晕用淡红 */
+    --noise-opacity: 0;
+    --top-glow: rgba(184, 26, 48, 0.06);
+  }
+
+  /* 平滑切换动画 */
+  body, .card, .card-elevated, .data-table, header, aside, main {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+  }
+
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html, body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  /* 噪点纹理增加质感(只在深色主题显示) */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: var(--noise-opacity);
+    pointer-events: none;
+    z-index: 1000;
+    mix-blend-mode: overlay;
+    transition: opacity 0.3s ease;
+  }
+
+  /* 顶部血色光晕 */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -200px; left: 50%;
+    transform: translateX(-50%);
+    width: 800px; height: 400px;
+    background: radial-gradient(ellipse at center, var(--top-glow) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+    transition: background 0.3s ease;
+  }
+
+  .font-display { font-family: 'Cinzel', 'Cormorant Garamond', serif; font-weight: 600; letter-spacing: 0.04em; }
+  .font-serif { font-family: 'Cormorant Garamond', serif; font-weight: 600; }
+  .font-mono { font-family: 'IBM Plex Mono', monospace; }
+  .font-sans { font-family: 'IBM Plex Sans', sans-serif; }
+
+  /* 卡片基础样式 */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+  .card:hover {
+    border-color: var(--border-default);
+  }
+
+  .card-elevated {
+    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-base) 100%);
+    border: 1px solid var(--border-default);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 浅色主题:卡片用阴影替代渐变,更"立体" */
+  [data-theme="light"] .card-elevated {
+    background: var(--bg-card);
+    box-shadow: var(--shadow-elevated);
+  }
+
+  [data-theme="light"] .card {
+    background: var(--bg-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-base); }
+  ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+  /* 微动画 */
+  @keyframes pulse-blood {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .pulse-blood { animation: pulse-blood 2s ease-in-out infinite; }
+
+  @keyframes slide-in-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-in { animation: slide-in-up 0.4s ease-out backwards; }
+
+  /* 数字闪烁(模拟实时数据) */
+  @keyframes flash-up {
+    0% { color: var(--accent-emerald); }
+    100% { color: var(--text-primary); }
+  }
+  @keyframes flash-down {
+    0% { color: var(--accent-blood); }
+    100% { color: var(--text-primary); }
+  }
+
+  /* 状态点 */
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .status-dot.active { background: var(--status-active); box-shadow: 0 0 8px var(--status-active); }
+  .status-dot.warn { background: var(--status-warn); box-shadow: 0 0 8px var(--status-warn); }
+  .status-dot.critical { background: var(--status-critical); box-shadow: 0 0 8px var(--status-critical); animation: pulse-blood 1.5s infinite; }
+  .status-dot.paused { background: var(--status-paused); }
+
+  /* 顶部血色细线 */
+  .top-bar-glow {
+    height: 2px;
+    background: linear-gradient(90deg, transparent 0%, var(--accent-blood) 30%, var(--accent-blood) 70%, transparent 100%);
+    opacity: 0.6;
+  }
+
+  /* 数据表格 */
+  .data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+  .data-table th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-deepest);
+  }
+  .data-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+  }
+  .data-table tr:hover td {
+    background: var(--bg-card-hover);
+  }
+  .data-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  /* 数字样式 */
+  .num-positive { color: var(--accent-emerald); }
+  .num-negative { color: var(--accent-blood); }
+  .num-large { font-family: 'IBM Plex Mono', monospace; font-weight: 500; letter-spacing: -0.02em; }
+
+  /* 微型 K 线 sparkline */
+  .sparkline {
+    height: 24px;
+    width: 64px;
+  }
+
+  /* 导航 */
+  .nav-item {
+    position: relative;
+    transition: color 0.15s ease, background 0.15s ease;
+    border-left: 2px solid transparent;
+  }
+  .nav-item:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+  }
+  .nav-item.active {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border-left-color: var(--accent-blood);
+  }
+  .nav-item.active::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--accent-blood-glow), transparent 60%);
+    pointer-events: none;
+  }
+
+  /* 按钮 */
+  .btn-primary {
+    background: var(--accent-blood);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 3px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--accent-blood);
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .btn-primary:hover {
+    background: var(--accent-blood-dim);
+    box-shadow: 0 0 24px var(--accent-blood-glow);
+  }
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 8px 16px;
+    border-radius: 3px;
+    font-size: 13px;
+    border: 1px solid var(--border-strong);
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .btn-secondary:hover {
+    color: var(--text-primary);
+    border-color: var(--text-tertiary);
+    background: var(--bg-card);
+  }
+
+  /* 标签 */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .badge-active { background: rgba(61, 220, 151, 0.12); color: var(--accent-emerald); border: 1px solid rgba(61, 220, 151, 0.3); }
+  .badge-warn { background: rgba(232, 176, 77, 0.12); color: var(--accent-gold); border: 1px solid rgba(232, 176, 77, 0.3); }
+  .badge-critical { background: rgba(220, 41, 84, 0.12); color: var(--accent-blood); border: 1px solid rgba(220, 41, 84, 0.3); }
+  .badge-paused { background: rgba(108, 108, 133, 0.12); color: var(--text-tertiary); border: 1px solid var(--border-strong); }
+  .badge-info { background: rgba(77, 159, 232, 0.12); color: var(--accent-azure); border: 1px solid rgba(77, 159, 232, 0.3); }
+
+  /* 顶部高亮线 */
+  .accent-line-top {
+    border-top: 1px solid var(--border-subtle);
+    position: relative;
+  }
+  .accent-line-top::before {
+    content: '';
+    position: absolute;
+    top: -1px; left: 0;
+    width: 40px;
+    height: 1px;
+    background: var(--accent-blood);
+  }
+
+  /* 进度条 */
+  .progress-track {
+    height: 4px;
+    background: var(--border-subtle);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blood) 0%, var(--accent-blood-dim) 100%);
+    transition: width 0.3s ease;
+  }
+  .progress-fill.warn {
+    background: linear-gradient(90deg, var(--accent-gold) 0%, #c79238 100%);
+  }
+  .progress-fill.success {
+    background: linear-gradient(90deg, var(--accent-emerald) 0%, #2cb87b 100%);
+  }
+
+  /* logo 动画 */
+  @keyframes logo-shimmer {
+    0%, 100% { filter: drop-shadow(0 0 4px var(--accent-blood-glow)); }
+    50% { filter: drop-shadow(0 0 12px var(--accent-blood-glow)); }
+  }
+  .logo-svg {
+    animation: logo-shimmer 4s ease-in-out infinite;
+  }
+
+  /* 浅色主题下,logo 加边框让黑色 logo "嵌入"白底 */
+  [data-theme="light"] .logo-svg {
+    border: 1.5px solid var(--accent-blood);
+    animation: logo-shimmer-light 4s ease-in-out infinite;
+  }
+
+  @keyframes logo-shimmer-light {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(184, 26, 48, 0.2), 0 2px 8px rgba(0,0,0,0.15); }
+    50% { box-shadow: 0 0 16px 2px rgba(184, 26, 48, 0.25), 0 4px 12px rgba(0,0,0,0.2); }
+  }
+
+  /* 权益曲线响应主题 */
+  .equity-line {
+    stroke: var(--accent-blood);
+  }
+  .equity-dot {
+    fill: var(--accent-blood);
+  }
+  .equity-dot-glow {
+    fill: var(--accent-blood);
+    opacity: 0.3;
+  }
+  .equity-fill-start {
+    stop-color: var(--accent-blood);
+    stop-opacity: 0.3;
+  }
+  .equity-fill-end {
+    stop-color: var(--accent-blood);
+    stop-opacity: 0;
+  }
+  [data-theme="light"] .equity-fill-start {
+    stop-opacity: 0.15;
+  }
+</style>
+</head>
+
+<body class="min-h-screen relative">
+
+<div class="flex min-h-screen relative" style="z-index: 1;">
+
+  <!-- ============= 侧边导航 ============= -->
+  <aside class="w-64 border-r flex-shrink-0 flex flex-col" style="border-color: var(--border-default); background: var(--bg-deepest);">
+
+    <!-- Logo 区域 -->
+    <div class="px-6 py-6 border-b" style="border-color: var(--border-subtle);">
+      <div class="flex items-center gap-3">
+        <!-- 用户自定义 Logo:把 dgl_icon_square.PNG 跟此 HTML 放在同一目录即可显示 -->
+        <!-- 找不到 PNG 时降级显示 SVG fallback -->
+        <div class="logo-svg" style="width: 48px; height: 48px; flex-shrink: 0; position: relative; border-radius: 4px; overflow: hidden; box-shadow: 0 0 16px var(--accent-blood-glow);">
+          <img src="dgl_icon_square.PNG"
+               alt="Dracula Arbitrage System"
+               style="width: 100%; height: 100%; object-fit: cover; display: block;"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+          <!-- Fallback SVG(找不到 PNG 时显示) -->
+          <svg style="display:none; width: 100%; height: 100%;" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="bloodGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#c41e3a"/>
+                <stop offset="100%" stop-color="#8b0000"/>
+              </linearGradient>
+              <linearGradient id="darkGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#1a1a28"/>
+                <stop offset="100%" stop-color="#0a0a14"/>
+              </linearGradient>
+            </defs>
+            <circle cx="20" cy="20" r="19" fill="url(#darkGrad)" stroke="#c41e3a" stroke-width="1"/>
+            <path d="M 11 11 L 11 19 Q 11 22 13 24 L 14 25 L 14 22 Q 14 19 13 17 L 13 11 Z" fill="url(#bloodGrad)"/>
+            <path d="M 29 11 L 29 19 Q 29 22 27 24 L 26 25 L 26 22 Q 26 19 27 17 L 27 11 Z" fill="url(#bloodGrad)"/>
+            <line x1="18.5" y1="13" x2="18.5" y2="16" stroke="#2cb87b" stroke-width="0.8" stroke-linecap="round"/>
+            <rect x="17.5" y="16" width="2" height="6" fill="#2cb87b" rx="0.3"/>
+            <line x1="18.5" y1="22" x2="18.5" y2="25" stroke="#2cb87b" stroke-width="0.8" stroke-linecap="round"/>
+            <line x1="22" y1="14" x2="22" y2="17" stroke="#c41e3a" stroke-width="0.8" stroke-linecap="round"/>
+            <rect x="21" y="17" width="2" height="5" fill="#c41e3a" rx="0.3"/>
+            <line x1="22" y1="22" x2="22" y2="26" stroke="#c41e3a" stroke-width="0.8" stroke-linecap="round"/>
+            <circle cx="14" cy="27" r="0.8" fill="#c41e3a"/>
+            <circle cx="26.5" cy="28" r="0.6" fill="#c41e3a" opacity="0.7"/>
+          </svg>
+        </div>
+
+        <div>
+          <h1 class="font-display text-base leading-tight" style="color: var(--text-primary); letter-spacing: 0.08em;">DRACULA</h1>
+          <p class="font-mono text-[8px] tracking-[0.35em] mt-1" style="color: var(--accent-blood);">ARBITRAGE SYSTEM</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 系统状态卡片 -->
+    <div class="mx-4 my-4 px-3 py-3 card animate-in" style="animation-delay: 0.1s;">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">System Status</span>
+        <span class="status-dot active"></span>
+      </div>
+      <div class="font-mono text-sm" style="color: var(--text-primary);">RUNNING</div>
+      <div class="font-mono text-[10px] mt-1" style="color: var(--text-tertiary);">↑ 12d 04h 23m</div>
+    </div>
+
+    <!-- 导航菜单 -->
+    <nav class="flex-1 py-2">
+      <a href="#" onclick="switchView('dashboard'); return false;" class="nav-item active flex items-center gap-3 px-6 py-2.5 text-sm" data-view="dashboard">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i>
+        <span>总览</span>
+      </a>
+      <a href="#" onclick="switchView('strategies'); return false;" class="nav-item flex items-center gap-3 px-6 py-2.5 text-sm" data-view="strategies" style="color: var(--text-secondary);">
+        <i data-lucide="target" class="w-4 h-4"></i>
+        <span>策略中心</span>
+        <span class="ml-auto font-mono text-[10px]" style="color: var(--text-tertiary);">17</span>
+      </a>
+      <a href="#" onclick="switchView('positions'); return false;" class="nav-item flex items-center gap-3 px-6 py-2.5 text-sm" data-view="positions" style="color: var(--text-secondary);">
+        <i data-lucide="layers" class="w-4 h-4"></i>
+        <span>持仓与订单</span>
+        <span class="ml-auto font-mono text-[10px]" style="color: var(--accent-emerald);">8</span>
+      </a>
+      <a href="#" onclick="switchView('risk'); return false;" class="nav-item flex items-center gap-3 px-6 py-2.5 text-sm" data-view="risk" style="color: var(--text-secondary);">
+        <i data-lucide="shield-alert" class="w-4 h-4"></i>
+        <span>风控中心</span>
+      </a>
+      <a href="#" onclick="switchView('users'); return false;" class="nav-item flex items-center gap-3 px-6 py-2.5 text-sm" data-view="users" style="color: var(--text-secondary);">
+        <i data-lucide="users" class="w-4 h-4"></i>
+        <span>用户管理</span>
+        <span class="ml-auto badge badge-info text-[8px]">ADMIN</span>
+      </a>
+      <a href="#" onclick="switchView('settings'); return false;" class="nav-item flex items-center gap-3 px-6 py-2.5 text-sm" data-view="settings" style="color: var(--text-secondary);">
+        <i data-lucide="settings" class="w-4 h-4"></i>
+        <span>设置</span>
+      </a>
+    </nav>
+
+    <!-- 底部用户信息 -->
+    <div class="border-t px-4 py-3" style="border-color: var(--border-subtle);">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded flex items-center justify-center font-mono text-xs" style="background: var(--accent-blood); color: white;">老</div>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm truncate">老虎</div>
+          <div class="font-mono text-[10px]" style="color: var(--accent-blood);">SUPER ADMIN</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============= 主区域 ============= -->
+  <main class="flex-1 min-w-0 flex flex-col">
+
+    <!-- 顶部状态栏 -->
+    <div class="top-bar-glow"></div>
+    <header class="border-b flex items-center justify-between px-6 py-3" style="border-color: var(--border-default); background: var(--bg-deepest);">
+      <div class="flex items-center gap-6">
+        <h2 id="page-title" class="font-display text-2xl">总览</h2>
+        <div class="flex items-center gap-4 font-mono text-xs" style="color: var(--text-tertiary);">
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot active"></span>
+            <span>Binance</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot active"></span>
+            <span>Bybit</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot active"></span>
+            <span>OKX</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot warn"></span>
+            <span>HTX</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot active"></span>
+            <span>Bitget</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="status-dot active"></span>
+            <span>Hyperliquid</span>
+          </span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="utc-time" class="font-mono text-xs" style="color: var(--text-tertiary);">14:32:18 UTC</span>
+
+        <!-- 主题切换按钮 -->
+        <button id="theme-toggle" class="btn-secondary flex items-center gap-1.5" title="切换日夜模式" onclick="toggleTheme()">
+          <!-- 月亮(深色模式时显示) -->
+          <i data-lucide="moon" class="w-3.5 h-3.5 theme-icon-dark"></i>
+          <!-- 太阳(浅色模式时显示) -->
+          <i data-lucide="sun" class="w-3.5 h-3.5 theme-icon-light" style="display:none;"></i>
+        </button>
+
+        <!-- 语言切换按钮 -->
+        <button id="lang-toggle" class="btn-secondary font-mono text-xs px-3" title="Switch language / 切换语言" onclick="toggleLanguage()" style="min-width: 38px;">EN</button>
+
+        <button class="btn-secondary flex items-center gap-1.5">
+          <i data-lucide="bell" class="w-3.5 h-3.5"></i>
+          <span class="font-mono text-[10px]">3</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 视图容器 -->
+    <div class="flex-1 overflow-y-auto px-6 py-6">
+
+      <!-- ============= 视图 1:总览 Dashboard ============= -->
+      <div id="view-dashboard" class="view space-y-6">
+
+        <!-- 关键指标卡 -->
+        <div class="grid grid-cols-4 gap-4">
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0s;">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">总资本</span>
+              <i data-lucide="wallet" class="w-3.5 h-3.5" style="color: var(--text-muted);"></i>
+            </div>
+            <div class="num-large text-3xl">$34,827.<span style="color: var(--text-tertiary); font-size: 70%;">52</span></div>
+            <div class="font-mono text-xs mt-1" style="color: var(--text-tertiary);">USDT 等值</div>
+          </div>
+
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.05s;">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">今日 PnL</span>
+              <i data-lucide="trending-up" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i>
+            </div>
+            <div class="num-large text-3xl num-positive">+$87.34</div>
+            <div class="font-mono text-xs mt-1 num-positive">+0.25%</div>
+          </div>
+
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.1s;">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月度 PnL</span>
+              <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i>
+            </div>
+            <div class="num-large text-3xl num-positive">+$612.<span style="color: var(--text-tertiary); font-size: 70%;">15</span></div>
+            <div class="font-mono text-xs mt-1 num-positive">+1.79% MTD</div>
+          </div>
+
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.15s;">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">单日回撤</span>
+              <i data-lucide="shield" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i>
+            </div>
+            <div class="num-large text-3xl">-0.32<span style="font-size: 70%; color: var(--text-tertiary);">%</span></div>
+            <div class="mt-2 progress-track">
+              <div class="progress-fill success" style="width: 11%;"></div>
+            </div>
+            <div class="font-mono text-[10px] mt-1.5 flex justify-between" style="color: var(--text-tertiary);">
+              <span>距 Tier 3 红线</span>
+              <span class="num-positive">2.68%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 主要内容区:权益曲线 + 策略热度 -->
+        <div class="grid grid-cols-3 gap-4">
+
+          <!-- 权益曲线 -->
+          <div class="col-span-2 card-elevated p-5 animate-in" style="animation-delay: 0.2s;">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-display text-lg">权益曲线</h3>
+                <p class="font-mono text-[11px] mt-0.5" style="color: var(--text-tertiary);">EQUITY CURVE · 30 DAYS</p>
+              </div>
+              <div class="flex items-center gap-1">
+                <button class="font-mono text-[10px] px-2.5 py-1 rounded" style="background: var(--bg-card); color: var(--text-tertiary);">1D</button>
+                <button class="font-mono text-[10px] px-2.5 py-1 rounded" style="background: var(--bg-card); color: var(--text-tertiary);">7D</button>
+                <button class="font-mono text-[10px] px-2.5 py-1 rounded" style="background: var(--accent-blood); color: white;">30D</button>
+                <button class="font-mono text-[10px] px-2.5 py-1 rounded" style="background: var(--bg-card); color: var(--text-tertiary);">ALL</button>
+              </div>
+            </div>
+
+            <!-- 手画 SVG 曲线图 -->
+            <svg viewBox="0 0 600 200" class="w-full h-48 equity-chart" preserveAspectRatio="none">
+              <!-- 网格 -->
+              <line x1="0" y1="50" x2="600" y2="50" stroke="var(--border-subtle)" stroke-width="0.5" stroke-dasharray="2,4"/>
+              <line x1="0" y1="100" x2="600" y2="100" stroke="var(--border-subtle)" stroke-width="0.5" stroke-dasharray="2,4"/>
+              <line x1="0" y1="150" x2="600" y2="150" stroke="var(--border-subtle)" stroke-width="0.5" stroke-dasharray="2,4"/>
+
+              <!-- 渐变填充 -->
+              <defs>
+                <linearGradient id="equityGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" class="equity-fill-start"/>
+                  <stop offset="100%" class="equity-fill-end"/>
+                </linearGradient>
+              </defs>
+
+              <!-- 区域 -->
+              <path d="M 0 130 L 30 125 L 60 132 L 90 120 L 120 115 L 150 122 L 180 110 L 210 105 L 240 113 L 270 95 L 300 88 L 330 92 L 360 78 L 390 82 L 420 70 L 450 65 L 480 72 L 510 58 L 540 52 L 570 48 L 600 45 L 600 200 L 0 200 Z"
+                    fill="url(#equityGradient)"/>
+
+              <!-- 主线 -->
+              <path class="equity-line" d="M 0 130 L 30 125 L 60 132 L 90 120 L 120 115 L 150 122 L 180 110 L 210 105 L 240 113 L 270 95 L 300 88 L 330 92 L 360 78 L 390 82 L 420 70 L 450 65 L 480 72 L 510 58 L 540 52 L 570 48 L 600 45"
+                    fill="none"
+                    stroke-width="1.5"/>
+
+              <!-- 终点光点 -->
+              <circle class="equity-dot" cx="600" cy="45" r="3"/>
+              <circle class="equity-dot-glow" cx="600" cy="45" r="6"/>
+            </svg>
+
+            <div class="grid grid-cols-4 gap-4 mt-4 pt-4 border-t" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">起始</div>
+                <div class="font-mono text-sm mt-1">$34,215.37</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">最高</div>
+                <div class="font-mono text-sm mt-1">$34,891.20</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">最低</div>
+                <div class="font-mono text-sm mt-1">$34,082.51</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">Sharpe</div>
+                <div class="font-mono text-sm mt-1 num-positive">1.83</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 策略性能排行 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.25s;">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-display text-lg">策略表现</h3>
+                <p class="font-mono text-[11px] mt-0.5" style="color: var(--text-tertiary);">STRATEGY PERFORMANCE</p>
+              </div>
+              <span class="badge badge-info">MTD</span>
+            </div>
+
+            <div class="space-y-3">
+              <!-- 策略行 -->
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot active"></span>
+                    <span class="text-xs">资金费率套利</span>
+                  </div>
+                  <span class="font-mono text-xs num-positive">+$348</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill success" style="width: 78%;"></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot active"></span>
+                    <span class="text-xs">期现套利</span>
+                  </div>
+                  <span class="font-mono text-xs num-positive">+$142</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill success" style="width: 32%;"></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot active"></span>
+                    <span class="text-xs">三角套利</span>
+                  </div>
+                  <span class="font-mono text-xs num-positive">+$89</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill success" style="width: 20%;"></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot active"></span>
+                    <span class="text-xs">跨所基差套利</span>
+                  </div>
+                  <span class="font-mono text-xs num-positive">+$67</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill success" style="width: 15%;"></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot warn"></span>
+                    <span class="text-xs">配对交易</span>
+                  </div>
+                  <span class="font-mono text-xs num-negative">-$32</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill warn" style="width: 7%;"></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot paused"></span>
+                    <span class="text-xs">CEX-DEX 监控</span>
+                  </div>
+                  <span class="font-mono text-xs" style="color: var(--text-tertiary);">监控</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+
+            <button class="w-full mt-4 btn-secondary text-xs">查看全部 17 个策略 →</button>
+          </div>
+        </div>
+
+        <!-- 风控状态 + 实时机会 -->
+        <div class="grid grid-cols-3 gap-4">
+
+          <!-- 风控状态 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.3s;">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="font-display text-lg">风控状态</h3>
+              <span class="badge badge-active">SAFE</span>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-center justify-between text-xs">
+                <span style="color: var(--text-secondary);">单日回撤</span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono">-0.32%</span>
+                  <span class="font-mono" style="color: var(--text-tertiary);">/ -3.00%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs">
+                <span style="color: var(--text-secondary);">周回撤</span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono">-1.04%</span>
+                  <span class="font-mono" style="color: var(--text-tertiary);">/ -8.00%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs">
+                <span style="color: var(--text-secondary);">最低保证金率</span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono">87.3%</span>
+                  <span class="font-mono" style="color: var(--text-tertiary);">/ 50%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs">
+                <span style="color: var(--text-secondary);">API 错误率 (5m)</span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono">0.4%</span>
+                  <span class="font-mono" style="color: var(--text-tertiary);">/ 5.0%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs">
+                <span style="color: var(--text-secondary);">WS 连接稳定性</span>
+                <div class="flex items-center gap-2">
+                  <span class="font-mono num-positive">100%</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t accent-line-top" style="border-color: var(--border-subtle);">
+              <div class="flex items-center gap-2 text-xs">
+                <i data-lucide="check-circle-2" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i>
+                <span style="color: var(--text-secondary);">三层风控全部正常</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 实时机会 -->
+          <div class="col-span-2 card-elevated p-5 animate-in" style="animation-delay: 0.35s;">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-display text-lg">实时套利机会</h3>
+                <p class="font-mono text-[11px] mt-0.5" style="color: var(--text-tertiary);">LIVE OPPORTUNITIES · UPDATING</p>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span class="status-dot active"></span>
+                <span class="font-mono text-xs" style="color: var(--text-tertiary);">实时</span>
+              </div>
+            </div>
+
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>策略</th>
+                  <th>币对</th>
+                  <th>交易所</th>
+                  <th class="text-right">指标</th>
+                  <th class="text-right">APR</th>
+                  <th class="text-right">规模</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="badge badge-active">资金费率</span></td>
+                  <td>HYPE/USDC</td>
+                  <td>Hyperliquid</td>
+                  <td class="text-right num-positive">+0.0432%</td>
+                  <td class="text-right num-positive font-medium">+37.85%</td>
+                  <td class="text-right">$420</td>
+                  <td><span class="font-mono text-[10px]" style="color: var(--accent-emerald);">已建仓</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge badge-active">资金费率</span></td>
+                  <td>ENA/USDT</td>
+                  <td>Bybit</td>
+                  <td class="text-right num-positive">+0.0287%</td>
+                  <td class="text-right num-positive font-medium">+31.41%</td>
+                  <td class="text-right">$500</td>
+                  <td><span class="font-mono text-[10px]" style="color: var(--accent-emerald);">已建仓</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge badge-info">三角套利</span></td>
+                  <td>USDT-BTC-ETH</td>
+                  <td>Binance</td>
+                  <td class="text-right num-positive">+0.41%</td>
+                  <td class="text-right" style="color: var(--text-tertiary);">—</td>
+                  <td class="text-right">$200</td>
+                  <td><i data-lucide="zap" class="w-3.5 h-3.5 inline-block" style="color: var(--accent-gold);"></i></td>
+                </tr>
+                <tr>
+                  <td><span class="badge badge-info">期现套利</span></td>
+                  <td>SOL/USDT</td>
+                  <td>OKX</td>
+                  <td class="text-right num-positive">+0.52%</td>
+                  <td class="text-right" style="color: var(--text-tertiary);">—</td>
+                  <td class="text-right">$300</td>
+                  <td><span class="font-mono text-[10px]" style="color: var(--accent-azure);">监控中</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge badge-info">CEX-DEX</span></td>
+                  <td>PEPE/USDT</td>
+                  <td>Binance ↔ Uniswap</td>
+                  <td class="text-right num-positive">+1.41%</td>
+                  <td class="text-right" style="color: var(--text-tertiary);">—</td>
+                  <td class="text-right">$1,000</td>
+                  <td><span class="font-mono text-[10px]" style="color: var(--accent-blood);">手动</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 通知中心 -->
+        <div class="card-elevated p-5 animate-in" style="animation-delay: 0.4s;">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-display text-lg">系统活动</h3>
+            <span class="font-mono text-[10px]" style="color: var(--text-tertiary);">LAST 1H</span>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex items-start gap-3 px-3 py-2.5 rounded" style="background: var(--bg-card);">
+              <div class="mt-0.5"><i data-lucide="trending-up" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i></div>
+              <div class="flex-1">
+                <div class="text-xs">资金费率结算 · HYPE/USDC @ Hyperliquid <span class="num-positive font-mono">+$2.43</span></div>
+                <div class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">14:00:01 UTC · 1 分钟前</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 px-3 py-2.5 rounded" style="background: var(--bg-card);">
+              <div class="mt-0.5"><i data-lucide="check-circle-2" class="w-3.5 h-3.5" style="color: var(--accent-emerald);"></i></div>
+              <div class="flex-1">
+                <div class="text-xs">建仓成功 · ETH/USDT @ Binance · APR 18.4% · 仓位 $500</div>
+                <div class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">13:42:18 UTC · 19 分钟前</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 px-3 py-2.5 rounded" style="background: var(--bg-card);">
+              <div class="mt-0.5"><i data-lucide="alert-triangle" class="w-3.5 h-3.5" style="color: var(--accent-gold);"></i></div>
+              <div class="flex-1">
+                <div class="text-xs">HTX API 延迟升高 · 当前 P95 延迟 480ms</div>
+                <div class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">13:28:51 UTC · 33 分钟前</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 px-3 py-2.5 rounded" style="background: var(--bg-card);">
+              <div class="mt-0.5"><i data-lucide="zap" class="w-3.5 h-3.5" style="color: var(--accent-azure);"></i></div>
+              <div class="flex-1">
+                <div class="text-xs">CEX-DEX 机会推送 · PEPE 价差 1.41% · 已发 Telegram</div>
+                <div class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">13:15:02 UTC · 47 分钟前</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 px-3 py-2.5 rounded" style="background: var(--bg-card);">
+              <div class="mt-0.5"><i data-lucide="x-circle" class="w-3.5 h-3.5" style="color: var(--accent-blood);"></i></div>
+              <div class="flex-1">
+                <div class="text-xs">平仓 · ARB/USDT @ Bybit · 资金费率连续 2 期转负 · <span class="num-positive font-mono">+$8.21</span></div>
+                <div class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">12:58:33 UTC · 1 小时前</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============= 视图 2:策略中心 ============= -->
+      <div id="view-strategies" class="view hidden">
+        <div class="mb-6">
+          <p class="font-mono text-xs" style="color: var(--text-tertiary);">17 个策略 · 5 个运行中 · 1 个监控 · 11 个候选</p>
+        </div>
+
+        <!-- 策略筛选 -->
+        <div class="flex items-center gap-2 mb-6">
+          <button class="font-mono text-xs px-3 py-1.5 rounded" style="background: var(--accent-blood); color: white;">全部 17</button>
+          <button class="font-mono text-xs px-3 py-1.5 rounded" style="background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border-default);">运行中 5</button>
+          <button class="font-mono text-xs px-3 py-1.5 rounded" style="background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border-default);">Phase 0 主力</button>
+          <button class="font-mono text-xs px-3 py-1.5 rounded" style="background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border-default);">Phase 1+</button>
+          <button class="font-mono text-xs px-3 py-1.5 rounded" style="background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border-default);">未来候选</button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <!-- 策略卡片:资金费率 -->
+          <div class="card-elevated p-5 animate-in">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">02</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">资金费率套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">FUNDING RATE ARBITRAGE · 主力 P0</p>
+                </div>
+              </div>
+              <span class="badge badge-active">RUNNING</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$2,000</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月化收益</div>
+                <div class="font-mono text-sm mt-1 num-positive">+1.74%</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">持仓</div>
+                <div class="font-mono text-sm mt-1">3 / 5</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              用 Delta 中性的姿势收资金费率,白嫖多头给空头交的钱。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">配置</button>
+            </div>
+          </div>
+
+          <!-- 策略卡片:期现套利 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.05s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">04</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">期现套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">SPOT-PERP PREMIUM · P0</p>
+                </div>
+              </div>
+              <span class="badge badge-active">RUNNING</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$1,000</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月化收益</div>
+                <div class="font-mono text-sm mt-1 num-positive">+1.42%</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">持仓</div>
+                <div class="font-mono text-sm mt-1">2 / 5</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              抓"短期溢价扩大→收敛"的窗口,跟资金费率套利不同时间尺度。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">配置</button>
+            </div>
+          </div>
+
+          <!-- 三角套利 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.1s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">13</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">三角套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">TRIANGULAR ARBITRAGE · P1</p>
+                </div>
+              </div>
+              <span class="badge badge-active">RUNNING</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$500</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月化收益</div>
+                <div class="font-mono text-sm mt-1 num-positive">+0.62%</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">今日触发</div>
+                <div class="font-mono text-sm mt-1">14 次</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              用 3 笔交易吃同一交易所内不同币对之间的微小价差。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">配置</button>
+            </div>
+          </div>
+
+          <!-- 跨所基差套利 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.15s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">03</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">跨所基差套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">PERP BASIS ARB · P1</p>
+                </div>
+              </div>
+              <span class="badge badge-active">RUNNING</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$1,000</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月化收益</div>
+                <div class="font-mono text-sm mt-1 num-positive">+0.83%</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">持仓</div>
+                <div class="font-mono text-sm mt-1">1 / 3</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              做多便宜的合约,做空贵的合约,等基差收敛。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">配置</button>
+            </div>
+          </div>
+
+          <!-- 配对交易 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.2s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">16</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">配对交易</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">PAIRS TRADING · P1</p>
+                </div>
+              </div>
+              <span class="badge badge-warn">UNDERWATER</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$5,000</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">月化收益</div>
+                <div class="font-mono text-sm mt-1 num-negative">-0.64%</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">配对</div>
+                <div class="font-mono text-sm mt-1">2 / 5</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              ETH-BNB 配对当前 z-score = -2.4,等待回归到 0。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">配置</button>
+            </div>
+          </div>
+
+          <!-- CEX-DEX -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.25s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--accent-blood); width: 28px;">05</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">CEX-DEX 套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">CROSS-EXCHANGE · MONITOR ONLY</p>
+                </div>
+              </div>
+              <span class="badge badge-info">MONITOR</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">分配资金</div>
+                <div class="font-mono text-sm mt-1">$0</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">本月推送</div>
+                <div class="font-mono text-sm mt-1">23 次</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">手动获利</div>
+                <div class="font-mono text-sm mt-1 num-positive">+$87</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              监控 CEX 和 DEX 之间的价差,推送有利润机会(MEV 风险下不自动执行)。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-secondary text-xs flex-1">推送配置</button>
+            </div>
+          </div>
+
+          <!-- 期权(禁用) -->
+          <div class="card-elevated p-5 animate-in opacity-60" style="animation-delay: 0.3s;">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start gap-3">
+                <div class="font-mono text-2xl" style="color: var(--text-muted); width: 28px;">06</div>
+                <div>
+                  <h4 class="font-display text-lg leading-tight">期权波动率套利</h4>
+                  <p class="font-mono text-[10px] mt-0.5" style="color: var(--text-tertiary);">OPTIONS VOL ARB · P3</p>
+                </div>
+              </div>
+              <span class="badge badge-paused">DISABLED</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 my-4 py-3 border-y" style="border-color: var(--border-subtle);">
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">解锁条件</div>
+                <div class="font-mono text-sm mt-1" style="color: var(--accent-gold);">$30k+</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">当前资金</div>
+                <div class="font-mono text-sm mt-1">$34.8k</div>
+              </div>
+              <div>
+                <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">回撤上限</div>
+                <div class="font-mono text-sm mt-1 num-negative">-30%</div>
+              </div>
+            </div>
+
+            <p class="text-xs leading-relaxed" style="color: var(--text-secondary);">
+              资金已达解锁线,但高风险策略默认禁用。需要手动启用并先进入监控模式。
+            </p>
+
+            <div class="flex items-center gap-2 mt-4">
+              <button class="btn-secondary text-xs flex-1">查看详情</button>
+              <button class="btn-primary text-xs flex-1">启用监控</button>
+            </div>
+          </div>
+
+          <!-- 占位:候选策略提示 -->
+          <div class="card-elevated p-5 animate-in" style="animation-delay: 0.35s; border: 1px dashed var(--border-strong);">
+            <div class="flex items-center justify-center h-full flex-col gap-3 py-6">
+              <div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: var(--bg-card-hover);">
+                <i data-lucide="plus" class="w-5 h-5" style="color: var(--text-tertiary);"></i>
+              </div>
+              <div class="text-center">
+                <div class="text-sm">未来候选策略</div>
+                <div class="font-mono text-[10px] mt-1" style="color: var(--text-tertiary);">10 个策略待评估激活</div>
+              </div>
+              <button class="btn-secondary text-xs">查看候选清单</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============= 视图 3:持仓与订单 ============= -->
+      <div id="view-positions" class="view hidden">
+        <div class="grid grid-cols-4 gap-4 mb-6">
+          <div class="card p-4">
+            <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">持仓总数</div>
+            <div class="num-large text-2xl mt-2">8</div>
+          </div>
+          <div class="card p-4">
+            <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">名义价值</div>
+            <div class="num-large text-2xl mt-2">$8,420</div>
+          </div>
+          <div class="card p-4">
+            <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">浮动盈亏</div>
+            <div class="num-large text-2xl mt-2 num-positive">+$23.41</div>
+          </div>
+          <div class="card p-4">
+            <div class="font-mono text-[10px] uppercase tracking-wider" style="color: var(--text-tertiary);">已实现盈亏</div>
+            <div class="num-large text-2xl mt-2 num-positive">+$612</div>
+          </div>
+        </div>
+
+        <div class="card-elevated p-5 mb-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-display text-lg">当前持仓</h3>
+            <div class="flex items-center gap-2">
+              <button class="btn-secondary text-xs">导出 CSV</button>
+              <button class="btn-secondary text-xs">紧急平仓所有</button>
+            </div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>策略</th>
+                <th>币对</th>
+                <th>方向</th>
+                <th class="text-right">规模</th>
+                <th class="text-right">入场价</th>
+                <th class="text-right">现价</th>
+                <th class="text-right">浮动盈亏</th>
+                <th class="text-right">持仓</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-active">资金费率</span></td>
+                <td>HYPE/USDC</td>
+                <td>多+空对冲</td>
+                <td class="text-right">$420</td>
+                <td class="text-right">$28.34</td>
+                <td class="text-right">$28.62</td>
+                <td class="text-right num-positive">+$8.42</td>
+                <td class="text-right">2d 14h</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-active">资金费率</span></td>
+                <td>ENA/USDT</td>
+                <td>多+空对冲</td>
+                <td class="text-right">$500</td>
+                <td class="text-right">$0.842</td>
+                <td class="text-right">$0.851</td>
+                <td class="text-right num-positive">+$5.18</td>
+                <td class="text-right">1d 08h</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-active">资金费率</span></td>
+                <td>SOL/USDT</td>
+                <td>多+空对冲</td>
+                <td class="text-right">$600</td>
+                <td class="text-right">$192.34</td>
+                <td class="text-right">$190.81</td>
+                <td class="text-right num-negative">-$1.42</td>
+                <td class="text-right">3d 22h</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-info">期现套利</span></td>
+                <td>ETH/USDT</td>
+                <td>多现+空永</td>
+                <td class="text-right">$300</td>
+                <td class="text-right">$3,124</td>
+                <td class="text-right">$3,118</td>
+                <td class="text-right num-positive">+$1.83</td>
+                <td class="text-right">8h 12m</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-info">期现套利</span></td>
+                <td>BTC/USDT</td>
+                <td>多现+空永</td>
+                <td class="text-right">$400</td>
+                <td class="text-right">$67,234</td>
+                <td class="text-right">$67,189</td>
+                <td class="text-right num-positive">+$2.04</td>
+                <td class="text-right">5h 41m</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-active">基差套利</span></td>
+                <td>ETH/USDT</td>
+                <td>多季+空永</td>
+                <td class="text-right">$1,000</td>
+                <td class="text-right">$3,142</td>
+                <td class="text-right">$3,135</td>
+                <td class="text-right num-positive">+$3.20</td>
+                <td class="text-right">8d 03h</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-warn">配对交易</span></td>
+                <td>ETH ↔ BNB</td>
+                <td>多 ETH 空 BNB</td>
+                <td class="text-right">$2,500</td>
+                <td class="text-right">z=-2.4</td>
+                <td class="text-right">z=-2.7</td>
+                <td class="text-right num-negative">-$32.18</td>
+                <td class="text-right">4d 12h</td>
+                <td><span class="status-dot warn"></span></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-info">期现套利</span></td>
+                <td>AVAX/USDT</td>
+                <td>多现+空永</td>
+                <td class="text-right">$200</td>
+                <td class="text-right">$32.18</td>
+                <td class="text-right">$32.40</td>
+                <td class="text-right num-positive">+$1.37</td>
+                <td class="text-right">2h 18m</td>
+                <td><span class="status-dot active"></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card-elevated p-5">
+          <h3 class="font-display text-lg mb-4">最近订单</h3>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>交易所</th>
+                <th>币对</th>
+                <th>类型</th>
+                <th>方向</th>
+                <th class="text-right">数量</th>
+                <th class="text-right">成交均价</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>14:31:05</td>
+                <td>Binance</td>
+                <td>BTC/USDT</td>
+                <td>LIMIT</td>
+                <td class="num-positive">BUY</td>
+                <td class="text-right">0.00595</td>
+                <td class="text-right">67189.40</td>
+                <td><span class="badge badge-active">FILLED</span></td>
+              </tr>
+              <tr>
+                <td>14:31:05</td>
+                <td>Binance</td>
+                <td>BTC/USDT-PERP</td>
+                <td>LIMIT</td>
+                <td class="num-negative">SELL</td>
+                <td class="text-right">0.00595</td>
+                <td class="text-right">67188.20</td>
+                <td><span class="badge badge-active">FILLED</span></td>
+              </tr>
+              <tr>
+                <td>14:24:31</td>
+                <td>Binance</td>
+                <td>USDT-BTC-ETH</td>
+                <td>IOC</td>
+                <td>三角执行</td>
+                <td class="text-right">$200</td>
+                <td class="text-right">+0.41% spread</td>
+                <td><span class="badge badge-active">FILLED</span></td>
+              </tr>
+              <tr>
+                <td>14:18:02</td>
+                <td>Bybit</td>
+                <td>ENA/USDT</td>
+                <td>LIMIT</td>
+                <td class="num-positive">BUY</td>
+                <td class="text-right">594.0</td>
+                <td class="text-right">0.842</td>
+                <td><span class="badge badge-active">FILLED</span></td>
+              </tr>
+              <tr>
+                <td>13:42:18</td>
+                <td>Hyperliquid</td>
+                <td>HYPE/USDC</td>
+                <td>LIMIT</td>
+                <td class="num-positive">BUY</td>
+                <td class="text-right">14.82</td>
+                <td class="text-right">28.34</td>
+                <td><span class="badge badge-active">FILLED</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ============= 视图 4:风控中心 ============= -->
+      <div id="view-risk" class="view hidden space-y-6">
+        <!-- 三层风控状态 -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="card-elevated p-5">
+            <div class="flex items-center justify-between mb-4">
+              <h4 class="font-display text-base">Tier 1 · 仪表盘可调</h4>
+              <span class="badge badge-active">SAFE</span>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">扫描最低 APR</span>
+                  <span class="font-mono">15%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 60%;"></div></div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">默认仓位规模</span>
+                  <span class="font-mono">$500</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 50%;"></div></div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">最大同时仓位</span>
+                  <span class="font-mono">5</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 50%;"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-elevated p-5">
+            <div class="flex items-center justify-between mb-4">
+              <h4 class="font-display text-base">Tier 2 · 延迟生效</h4>
+              <span class="badge badge-active">SAFE</span>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">单交易所占比</span>
+                  <span class="font-mono">38.4% / 50%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 77%;"></div></div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">单币种占比</span>
+                  <span class="font-mono">12.1% / 20%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 60%;"></div></div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">最低进场 APR</span>
+                  <span class="font-mono">15%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 50%;"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-elevated p-5" style="border-color: var(--accent-blood);">
+            <div class="flex items-center justify-between mb-4">
+              <h4 class="font-display text-base">Tier 3 · 锁定红线</h4>
+              <span class="badge badge-active">SAFE</span>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">单日回撤红线</span>
+                  <span class="font-mono num-negative">-3.0%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 11%;"></div></div>
+                <div class="font-mono text-[10px] mt-1" style="color: var(--text-tertiary);">当前 -0.32%</div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">周回撤红线</span>
+                  <span class="font-mono num-negative">-8.0%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 13%;"></div></div>
+                <div class="font-mono text-[10px] mt-1" style="color: var(--text-tertiary);">当前 -1.04%</div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span style="color: var(--text-secondary);">最低保证金率</span>
+                  <span class="font-mono">50%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill success" style="width: 87%;"></div></div>
+                <div class="font-mono text-[10px] mt-1" style="color: var(--text-tertiary);">当前 87.3%</div>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t text-xs flex items-center gap-2" style="border-color: var(--border-subtle); color: var(--text-tertiary);">
+              <i data-lucide="lock" class="w-3 h-3"></i>
+              <span class="font-mono text-[10px]">需修改 config.yaml 重启系统才能调整</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 熔断历史 -->
+        <div class="card-elevated p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-display text-lg">风控事件日志</h3>
+            <span class="font-mono text-xs" style="color: var(--text-tertiary);">最近 30 天</span>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>层级</th>
+                <th>事件</th>
+                <th>触发指标</th>
+                <th class="text-right">数值</th>
+                <th>处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>04-28 22:14</td>
+                <td><span class="badge badge-warn">TIER 2</span></td>
+                <td>API 错误率告警</td>
+                <td>HTX 5m err rate</td>
+                <td class="text-right">3.2% / 5%</td>
+                <td><span class="font-mono text-[10px]" style="color: var(--accent-emerald);">自动恢复</span></td>
+              </tr>
+              <tr>
+                <td>04-21 09:42</td>
+                <td><span class="badge badge-warn">TIER 1</span></td>
+                <td>WebSocket 断连</td>
+                <td>Bybit WS</td>
+                <td class="text-right">42s</td>
+                <td><span class="font-mono text-[10px]" style="color: var(--accent-emerald);">自动重连</span></td>
+              </tr>
+              <tr>
+                <td>04-15 14:08</td>
+                <td><span class="badge badge-warn">TIER 2</span></td>
+                <td>资金费率反转</td>
+                <td>ARB/USDT funding</td>
+                <td class="text-right num-negative">-0.018%</td>
+                <td><span class="font-mono text-[10px]" style="color: var(--accent-emerald);">已平仓</span></td>
+              </tr>
+              <tr>
+                <td>04-08 03:21</td>
+                <td><span class="badge badge-warn">TIER 1</span></td>
+                <td>建仓滑点超阈值</td>
+                <td>Binance ETH/USDT</td>
+                <td class="text-right">0.34%</td>
+                <td><span class="font-mono text-[10px]" style="color: var(--text-tertiary);">已撤单</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ============= 视图 5:用户管理(超管) ============= -->
+      <div id="view-users" class="view hidden space-y-6">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <p class="font-mono text-xs" style="color: var(--text-tertiary);">白名单模式 · 4 个用户(含超管)· 永久免费</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="btn-secondary text-xs flex items-center gap-1.5">
+              <i data-lucide="link-2" class="w-3.5 h-3.5"></i>
+              <span>生成邀请码</span>
+            </button>
+            <button class="btn-secondary text-xs">审计日志</button>
+          </div>
+        </div>
+
+        <div class="card-elevated p-5">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th class="text-right">总资本</th>
+                <th class="text-right">月度 PnL</th>
+                <th class="text-right">运行策略</th>
+                <th>2FA</th>
+                <th>最近登录</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="flex items-center gap-2 font-sans">
+                  <div class="w-7 h-7 rounded flex items-center justify-center font-mono text-xs" style="background: var(--accent-blood); color: white;">老</div>
+                  <div>
+                    <div class="text-xs">老虎</div>
+                    <div class="font-mono text-[10px]" style="color: var(--text-tertiary);">tiger@dracula.local</div>
+                  </div>
+                </td>
+                <td><span class="badge badge-critical">SUPER ADMIN</span></td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td class="text-right">$34,827</td>
+                <td class="text-right num-positive">+$612</td>
+                <td class="text-right">5</td>
+                <td><i data-lucide="check" class="w-3.5 h-3.5 inline-block" style="color: var(--accent-emerald);"></i></td>
+                <td>2 mins ago</td>
+                <td><span class="font-mono text-[10px]" style="color: var(--text-tertiary);">—</span></td>
+              </tr>
+              <tr>
+                <td class="flex items-center gap-2 font-sans">
+                  <div class="w-7 h-7 rounded flex items-center justify-center font-mono text-xs" style="background: var(--accent-azure); color: white;">A</div>
+                  <div>
+                    <div class="text-xs">alice</div>
+                    <div class="font-mono text-[10px]" style="color: var(--text-tertiary);">alice@example.com</div>
+                  </div>
+                </td>
+                <td><span class="badge badge-info">USER</span></td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td class="text-right">$8,420</td>
+                <td class="text-right num-positive">+$132</td>
+                <td class="text-right">3</td>
+                <td><i data-lucide="check" class="w-3.5 h-3.5 inline-block" style="color: var(--accent-emerald);"></i></td>
+                <td>32 mins ago</td>
+                <td>
+                  <button class="font-mono text-[10px]" style="color: var(--accent-blood);">暂停</button>
+                </td>
+              </tr>
+              <tr>
+                <td class="flex items-center gap-2 font-sans">
+                  <div class="w-7 h-7 rounded flex items-center justify-center font-mono text-xs" style="background: var(--accent-emerald); color: var(--bg-base);">B</div>
+                  <div>
+                    <div class="text-xs">bob_dev</div>
+                    <div class="font-mono text-[10px]" style="color: var(--text-tertiary);">bob@example.com</div>
+                  </div>
+                </td>
+                <td><span class="badge badge-info">USER</span></td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td class="text-right">$12,300</td>
+                <td class="text-right num-positive">+$198</td>
+                <td class="text-right">4</td>
+                <td><i data-lucide="check" class="w-3.5 h-3.5 inline-block" style="color: var(--accent-emerald);"></i></td>
+                <td>5 hours ago</td>
+                <td>
+                  <button class="font-mono text-[10px]" style="color: var(--accent-blood);">暂停</button>
+                </td>
+              </tr>
+              <tr>
+                <td class="flex items-center gap-2 font-sans">
+                  <div class="w-7 h-7 rounded flex items-center justify-center font-mono text-xs" style="background: var(--text-tertiary); color: var(--bg-base);">C</div>
+                  <div>
+                    <div class="text-xs">charlie</div>
+                    <div class="font-mono text-[10px]" style="color: var(--text-tertiary);">charlie@example.com</div>
+                  </div>
+                </td>
+                <td><span class="badge badge-info">USER</span></td>
+                <td><span class="status-dot warn"></span> Risk Halted</td>
+                <td class="text-right">$2,840</td>
+                <td class="text-right num-negative">-$48</td>
+                <td class="text-right">2</td>
+                <td><i data-lucide="x" class="w-3.5 h-3.5 inline-block" style="color: var(--accent-blood);"></i></td>
+                <td>2 days ago</td>
+                <td>
+                  <button class="font-mono text-[10px]" style="color: var(--accent-emerald);">解除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 邀请码管理 -->
+        <div class="card-elevated p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-display text-lg">邀请码</h3>
+            <span class="font-mono text-xs" style="color: var(--text-tertiary);">2 个待使用 · 1 个已使用</span>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>邀请码</th>
+                <th>限定邮箱</th>
+                <th>过期时间</th>
+                <th>备注</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="font-mono">DRACULA-X8K2P9M</td>
+                <td>david@example.com</td>
+                <td>2026-05-15 23:59</td>
+                <td>给 David 试用</td>
+                <td><span class="badge badge-info">PENDING</span></td>
+                <td>
+                  <button class="font-mono text-[10px]" style="color: var(--text-tertiary);">复制</button>
+                  <span class="mx-2" style="color: var(--text-muted);">·</span>
+                  <button class="font-mono text-[10px]" style="color: var(--accent-blood);">撤销</button>
+                </td>
+              </tr>
+              <tr>
+                <td class="font-mono">DRACULA-J3M7QN4</td>
+                <td>—</td>
+                <td>2026-05-12 18:00</td>
+                <td>朋友圈临时码</td>
+                <td><span class="badge badge-info">PENDING</span></td>
+                <td>
+                  <button class="font-mono text-[10px]" style="color: var(--text-tertiary);">复制</button>
+                  <span class="mx-2" style="color: var(--text-muted);">·</span>
+                  <button class="font-mono text-[10px]" style="color: var(--accent-blood);">撤销</button>
+                </td>
+              </tr>
+              <tr style="opacity: 0.5;">
+                <td class="font-mono">DRACULA-A1B2C3D</td>
+                <td>charlie@example.com</td>
+                <td>2026-04-20 12:00</td>
+                <td>给 Charlie</td>
+                <td><span class="badge badge-active">USED</span></td>
+                <td><span class="font-mono text-[10px]" style="color: var(--text-tertiary);">2026-04-18 已使用</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ============= 视图 6:设置 ============= -->
+      <div id="view-settings" class="view hidden space-y-6">
+        <!-- 通知矩阵 -->
+        <div class="card-elevated p-5">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-display text-lg">通知矩阵</h3>
+              <p class="font-mono text-[11px] mt-0.5" style="color: var(--text-tertiary);">5 渠道 × 4 级别</p>
+            </div>
+            <div class="text-xs flex items-center gap-2" style="color: var(--text-tertiary);">
+              <i data-lucide="lock" class="w-3 h-3"></i>
+              <span class="font-mono text-[10px]">CRITICAL 级别强制全开</span>
+            </div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>级别</th>
+                <th class="text-center">Telegram</th>
+                <th class="text-center">Discord</th>
+                <th class="text-center">Email</th>
+                <th class="text-center">Toast</th>
+                <th class="text-center">系统通知</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-info">INFO</span></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-active">SUCCESS</span></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-warn">WARN</span></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500"></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-critical">CRITICAL</span></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked disabled></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked disabled></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked disabled></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked disabled></td>
+                <td class="text-center"><input type="checkbox" class="accent-rose-500" checked disabled></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- API key 管理 -->
+        <div class="card-elevated p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-display text-lg">交易所 API 密钥</h3>
+            <button class="btn-primary text-xs flex items-center gap-1.5">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+              <span>添加</span>
+            </button>
+          </div>
+
+          <div class="text-xs px-3 py-2.5 rounded mb-4 flex items-start gap-2" style="background: rgba(232, 176, 77, 0.06); border: 1px solid rgba(232, 176, 77, 0.2); color: var(--accent-gold);">
+            <i data-lucide="info" class="w-3.5 h-3.5 mt-0.5 flex-shrink-0"></i>
+            <div>API key 三层加密存储 · 添加 API key 前必须开启 2FA · 必须关闭"提币"权限并设置 IP 白名单</div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>交易所</th>
+                <th>标签</th>
+                <th>API Key</th>
+                <th>权限</th>
+                <th>状态</th>
+                <th>最近使用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="font-mono">Binance</td>
+                <td>主账户</td>
+                <td class="font-mono text-[11px]">CD34···AB12</td>
+                <td>现货 + 永续</td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td>2 mins ago</td>
+                <td><button class="font-mono text-[10px]" style="color: var(--accent-blood);">删除</button></td>
+              </tr>
+              <tr>
+                <td class="font-mono">Bybit</td>
+                <td>主账户</td>
+                <td class="font-mono text-[11px]">XY89···PQ34</td>
+                <td>现货 + 永续</td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td>5 mins ago</td>
+                <td><button class="font-mono text-[10px]" style="color: var(--accent-blood);">删除</button></td>
+              </tr>
+              <tr>
+                <td class="font-mono">OKX</td>
+                <td>主账户</td>
+                <td class="font-mono text-[11px]">MN56···RS78</td>
+                <td>现货 + 永续 + 期权</td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td>12 mins ago</td>
+                <td><button class="font-mono text-[10px]" style="color: var(--accent-blood);">删除</button></td>
+              </tr>
+              <tr>
+                <td class="font-mono">Hyperliquid</td>
+                <td>交易钱包</td>
+                <td class="font-mono text-[11px]">0xF9···6c4D</td>
+                <td>DEX 永续</td>
+                <td><span class="status-dot active"></span> Active</td>
+                <td>14 mins ago</td>
+                <td><button class="font-mono text-[10px]" style="color: var(--accent-blood);">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 关于 -->
+        <div class="card-elevated p-5">
+          <h3 class="font-display text-lg mb-4">关于系统</h3>
+          <div class="grid grid-cols-2 gap-x-8 gap-y-3 text-xs">
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">系统版本</span>
+              <span class="font-mono">v1.0.0</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">已运行时间</span>
+              <span class="font-mono">12d 04h 23m</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">主密钥版本</span>
+              <span class="font-mono">v3 (已轮换 2 次)</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">数据库</span>
+              <span class="font-mono">PostgreSQL 16 + TimescaleDB</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">事件总线</span>
+              <span class="font-mono">Redis 7.2</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">部署位置</span>
+              <span class="font-mono">Tokyo · AWS</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">最近备份</span>
+              <span class="font-mono">04:00:01 UTC (今天)</span>
+            </div>
+            <div class="flex justify-between">
+              <span style="color: var(--text-secondary);">仓库</span>
+              <span class="font-mono">github.com/pretaxt/Dracula-System</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  // ===== 主题系统(必须最先执行,避免闪烁) =====
+  (function initTheme() {
+    // 优先级:用户保存的 > 默认深色(金融终端惯例,无视系统偏好)
+    const saved = localStorage.getItem('dracula-theme');
+    const theme = saved || 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('dracula-theme', next);
+    updateThemeIcons(next);
+  }
+
+  function updateThemeIcons(theme) {
+    const moonIcon = document.querySelector('.theme-icon-dark');
+    const sunIcon = document.querySelector('.theme-icon-light');
+    if (theme === 'dark') {
+      // 深色主题 → 显示月亮(点击换到浅色)
+      if (moonIcon) moonIcon.style.display = '';
+      if (sunIcon) sunIcon.style.display = 'none';
+    } else {
+      // 浅色主题 → 显示太阳(点击换到深色)
+      if (moonIcon) moonIcon.style.display = 'none';
+      if (sunIcon) sunIcon.style.display = '';
+    }
+  }
+
+  // 初始化 lucide 图标(用 try-catch,避免 CDN 加载失败影响后续代码)
+  try {
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  } catch (e) { console.warn('lucide unavailable:', e); }
+
+  // 同步初始图标状态
+  updateThemeIcons(document.documentElement.getAttribute('data-theme'));
+
+  // 视图切换
+  function switchView(viewName) {
+    // 隐藏所有视图
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    // 显示目标视图
+    document.getElementById('view-' + viewName).classList.remove('hidden');
+
+    // 更新导航激活状态
+    document.querySelectorAll('.nav-item').forEach(n => {
+      n.classList.remove('active');
+      n.style.color = 'var(--text-secondary)';
+    });
+    const activeNav = document.querySelector(`[data-view="${viewName}"]`);
+    activeNav.classList.add('active');
+    activeNav.style.color = 'var(--text-primary)';
+
+    // 更新页面标题
+    const titles = {
+      'dashboard': '总览',
+      'strategies': '策略中心',
+      'positions': '持仓与订单',
+      'risk': '风控中心',
+      'users': '用户管理',
+      'settings': '设置'
+    };
+    document.getElementById('page-title').textContent = titles[viewName];
+
+    // 重新初始化图标
+    try { if (typeof lucide !== 'undefined') lucide.createIcons(); } catch (e) {}
+    // 重新同步主题图标
+    updateThemeIcons(document.documentElement.getAttribute('data-theme'));
+  }
+
+  // UTC 时间实时更新
+  function updateTime() {
+    const now = new Date();
+    const utc = now.toISOString().substring(11, 19);
+    document.getElementById('utc-time').textContent = utc + ' UTC';
+  }
+  updateTime();
+  setInterval(updateTime, 1000);
+
+  // ============================================
+  // 中英文切换系统
+  // ============================================
+  // 用 window 全局,避免 TDZ 问题
+  window.i18nDict = {
+    // 通用
+    "全部": "All",
+    "查看详情": "View Details",
+    "配置": "Configure",
+    "删除": "Delete",
+    "复制": "Copy",
+    "撤销": "Revoke",
+    "添加": "Add",
+    "暂停": "Pause",
+    "解除": "Resume",
+    "启用监控": "Enable Monitor",
+    "审计日志": "Audit Log",
+    "推送配置": "Notify Config",
+    "今天": "Today",
+
+    // 侧边栏
+    "总览": "Overview",
+    "策略中心": "Strategies",
+    "持仓与订单": "Positions",
+    "风控中心": "Risk",
+    "用户管理": "Users",
+    "设置": "Settings",
+
+    // 总览页 KPI
+    "总资本": "Total Capital",
+    "今日 PnL": "Today PnL",
+    "月度 PnL": "Monthly PnL",
+    "单日回撤": "Daily DD",
+    "USDT 等值": "USDT equiv.",
+    "距 Tier 3 红线": "To Tier 3 Limit",
+
+    // 总览页 - 区块标题
+    "权益曲线": "Equity Curve",
+    "起始": "Start",
+    "最高": "High",
+    "最低": "Low",
+    "策略表现": "Strategy Performance",
+    "查看全部 17 个策略 →": "View All 17 Strategies →",
+    "风控状态": "Risk Status",
+    "周回撤": "Weekly DD",
+    "最低保证金率": "Min Margin Rate",
+    "API 错误率 (5m)": "API Error (5m)",
+    "WS 连接稳定性": "WS Stability",
+    "三层风控全部正常": "All 3-tier risk normal",
+    "实时套利机会": "Live Opportunities",
+    "实时": "Live",
+    "已建仓": "Open",
+    "监控中": "Monitor",
+    "手动": "Manual",
+    "系统活动": "Activity Feed",
+
+    // 表头
+    "策略": "Strategy",
+    "币对": "Pair",
+    "交易所": "Exchange",
+    "指标": "Metric",
+    "规模": "Size",
+    "方向": "Side",
+    "入场价": "Entry",
+    "现价": "Mark",
+    "浮动盈亏": "Unrealized",
+    "持仓": "Holding",
+    "状态": "Status",
+    "时间": "Time",
+    "类型": "Type",
+    "数量": "Amount",
+    "成交均价": "Avg Price",
+    "层级": "Tier",
+    "事件": "Event",
+    "触发指标": "Trigger",
+    "数值": "Value",
+    "处理": "Action",
+    "用户": "User",
+    "角色": "Role",
+    "运行策略": "Strategies",
+    "最近登录": "Last Login",
+    "操作": "Actions",
+    "邀请码": "Invitation",
+    "限定邮箱": "Email",
+    "过期时间": "Expires",
+    "备注": "Note",
+    "标签": "Label",
+    "权限": "Permission",
+    "最近使用": "Last Used",
+
+    // 策略名
+    "资金费率套利": "Funding Rate Arb",
+    "期现套利": "Spot-Perp Arb",
+    "三角套利": "Triangular Arb",
+    "跨所基差套利": "Perp Basis Arb",
+    "配对交易": "Pairs Trading",
+    "CEX-DEX 套利": "CEX-DEX Arb",
+    "CEX-DEX 监控": "CEX-DEX Monitor",
+    "期权波动率套利": "Options Vol Arb",
+    "基差套利": "Basis Arb",
+    "资金费率": "Funding",
+
+    // 策略中心
+    "17 个策略 · 5 个运行中 · 1 个监控 · 11 个候选": "17 strategies · 5 running · 1 monitor · 11 candidates",
+    "全部 17": "All 17",
+    "运行中 5": "Running 5",
+    "Phase 0 主力": "Phase 0 Core",
+    "未来候选": "Candidates",
+    "分配资金": "Capital",
+    "月化收益": "Monthly",
+    "今日触发": "Today Triggers",
+    "配对": "Pairs",
+    "本月推送": "This Month",
+    "手动获利": "Manual Profit",
+    "解锁条件": "Unlock At",
+    "当前资金": "Current",
+    "回撤上限": "Max DD",
+    "未来候选策略": "Future Strategies",
+    "10 个策略待评估激活": "10 strategies pending eval",
+    "查看候选清单": "View Candidates",
+
+    // 策略卡片描述
+    "用 Delta 中性的姿势收资金费率,白嫖多头给空头交的钱。":
+      "Earn funding rates with Delta-neutral positions, capturing payments from longs to shorts.",
+    "抓\"短期溢价扩大→收敛\"的窗口,跟资金费率套利不同时间尺度。":
+      "Capture short-term premium expansion → convergence cycles, on different timescale than funding arb.",
+    "用 3 笔交易吃同一交易所内不同币对之间的微小价差。":
+      "Three trades capturing tiny price discrepancies between pairs on the same exchange.",
+    "做多便宜的合约,做空贵的合约,等基差收敛。":
+      "Long the cheaper contract, short the expensive one, wait for basis convergence.",
+    "ETH-BNB 配对当前 z-score = -2.4,等待回归到 0。":
+      "ETH-BNB pair currently z-score=-2.4, waiting to revert to 0.",
+    "监控 CEX 和 DEX 之间的价差,推送有利润机会(MEV 风险下不自动执行)。":
+      "Monitor CEX-DEX price gaps, alert profitable opportunities (no auto-exec due to MEV risk).",
+    "资金已达解锁线,但高风险策略默认禁用。需要手动启用并先进入监控模式。":
+      "Capital threshold reached, but high-risk strategy disabled by default. Enable manually in monitor mode first.",
+
+    // 持仓与订单
+    "持仓总数": "Total Positions",
+    "名义价值": "Notional Value",
+    "已实现盈亏": "Realized PnL",
+    "当前持仓": "Current Positions",
+    "最近订单": "Recent Orders",
+    "导出 CSV": "Export CSV",
+    "紧急平仓所有": "Emergency Close All",
+    "多+空对冲": "Long+Short Hedge",
+    "多现+空永": "Long Spot+Short Perp",
+    "多季+空永": "Long Q+Short Perp",
+    "多 ETH 空 BNB": "Long ETH Short BNB",
+    "三角执行": "Triangular Exec",
+
+    // 风控中心
+    "Tier 1 · 仪表盘可调": "Tier 1 · Dashboard Tunable",
+    "Tier 2 · 延迟生效": "Tier 2 · Delayed Apply",
+    "Tier 3 · 锁定红线": "Tier 3 · Hard Lock",
+    "扫描最低 APR": "Min Scan APR",
+    "默认仓位规模": "Default Size",
+    "最大同时仓位": "Max Concurrent",
+    "单交易所占比": "Per-Exchange %",
+    "单币种占比": "Per-Symbol %",
+    "最低进场 APR": "Min Entry APR",
+    "单日回撤红线": "Daily DD Limit",
+    "周回撤红线": "Weekly DD Limit",
+    "当前": "Current",
+    "需修改 config.yaml 重启系统才能调整": "Edit config.yaml + restart to modify",
+    "风控事件日志": "Risk Event Log",
+    "最近 30 天": "Last 30 days",
+    "API 错误率告警": "API Error Rate Alert",
+    "WebSocket 断连": "WebSocket Disconnect",
+    "资金费率反转": "Funding Reversed",
+    "建仓滑点超阈值": "Entry Slippage Exceeded",
+    "自动恢复": "Auto-recovered",
+    "自动重连": "Auto-reconnected",
+    "已平仓": "Closed",
+    "已撤单": "Cancelled",
+
+    // 用户管理
+    "白名单模式 · 4 个用户(含超管)· 永久免费": "Whitelist · 4 users (incl. admin) · Free forever",
+    "生成邀请码": "Generate Invite",
+    "2 个待使用 · 1 个已使用": "2 pending · 1 used",
+    "已使用": "Used",
+    "给 David 试用": "For David trial",
+    "朋友圈临时码": "Temp invite",
+    "给 Charlie": "For Charlie",
+
+    // 设置
+    "通知矩阵": "Notification Matrix",
+    "5 渠道 × 4 级别": "5 channels × 4 levels",
+    "CRITICAL 级别强制全开": "CRITICAL forced all-on",
+    "系统通知": "Desktop",
+    "级别": "Level",
+    "交易所 API 密钥": "Exchange API Keys",
+    "API key 三层加密存储 · 添加 API key 前必须开启 2FA · 必须关闭\"提币\"权限并设置 IP 白名单":
+      "API keys triple-encrypted · 2FA required · Must disable withdrawal + set IP whitelist",
+    "关于系统": "About System",
+    "系统版本": "Version",
+    "已运行时间": "Uptime",
+    "主密钥版本": "Master Key",
+    "数据库": "Database",
+    "事件总线": "Event Bus",
+    "部署位置": "Region",
+    "最近备份": "Last Backup",
+    "仓库": "Repository",
+    "主账户": "Main",
+    "交易钱包": "Trading Wallet",
+    "现货 + 永续": "Spot + Perp",
+    "现货 + 永续 + 期权": "Spot + Perp + Options",
+    "DEX 永续": "DEX Perp",
+
+    // 用户名(保留中文,但顶部"老虎"和侧边栏)
+    "老虎": "TigerLao",
+    "老": "T",
+
+    // 通知活动
+    "资金费率结算 · HYPE/USDC @ Hyperliquid": "Funding settled · HYPE/USDC @ Hyperliquid",
+    "建仓成功 · ETH/USDT @ Binance · APR 18.4% · 仓位 $500": "Position opened · ETH/USDT @ Binance · APR 18.4% · Size $500",
+    "HTX API 延迟升高 · 当前 P95 延迟 480ms": "HTX API latency rising · P95 480ms",
+    "CEX-DEX 机会推送 · PEPE 价差 1.41% · 已发 Telegram": "CEX-DEX alert · PEPE spread 1.41% · sent to Telegram",
+    "平仓 · ARB/USDT @ Bybit · 资金费率连续 2 期转负 · ": "Closed · ARB/USDT @ Bybit · Funding flipped negative 2x · ",
+    "1 分钟前": "1 min ago",
+    "19 分钟前": "19 min ago",
+    "33 分钟前": "33 min ago",
+    "47 分钟前": "47 min ago",
+    "1 小时前": "1 hr ago",
+
+    // 顶部副标题
+    "ARBITRAGE SYSTEM": "ARBITRAGE SYSTEM"
+  };
+
+  // 反向字典(英→中,切回中文用)
+  window.i18nReverseDict = {};
+  Object.keys(window.i18nDict).forEach(zh => { window.i18nReverseDict[window.i18nDict[zh]] = zh; });
+
+  // 切换语言
+  function setLanguage(lang) {
+    const isToEn = lang === 'en';
+    const dict = isToEn ? window.i18nDict : window.i18nReverseDict;
+
+    // 遍历所有文本节点
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.trim();
+        if (text && dict[text]) {
+          // 保留原前后空白
+          node.textContent = node.textContent.replace(text, dict[text]);
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // 跳过 script 和 style
+        if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE') return;
+        for (const child of node.childNodes) walk(child);
+      }
+    }
+    walk(document.body);
+
+    document.documentElement.setAttribute('lang', isToEn ? 'en' : 'zh-CN');
+    localStorage.setItem('dracula-lang', lang);
+    updateLangButton(lang);
+  }
+
+  function updateLangButton(lang) {
+    const btn = document.getElementById('lang-toggle');
+    if (btn) {
+      // 显示"对方"语言(点击切到对方)
+      btn.textContent = lang === 'zh' ? 'EN' : '中';
+    }
+  }
+
+  function toggleLanguage() {
+    const current = localStorage.getItem('dracula-lang') || 'zh';
+    const next = current === 'zh' ? 'en' : 'zh';
+    setLanguage(next);
+  }
+
+  // 初始化:如果保存了英文,启动后切换
+  (function initLanguage() {
+    const saved = localStorage.getItem('dracula-lang') || 'zh';
+    updateLangButton(saved);
+    if (saved === 'en') {
+      // 等 DOM 渲染完成后再切换
+      setTimeout(() => setLanguage('en'), 50);
+    }
+  })();
+</script>
+
+</body>
+</html>

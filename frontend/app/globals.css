@@ -3,22 +3,141 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  html { font-family: var(--font-ui); }
-  body {
-    background-color: var(--color-bg);
-    color: var(--color-text);
-    -webkit-font-smoothing: antialiased;
-  }
-  /* Tabular numerics for all data cells */
-  td, .tabular { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+/* ============================================================
+ * Base
+ * ============================================================ */
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@layer utilities {
-  .text-positive { color: var(--color-positive); }
-  .text-negative { color: var(--color-negative); }
-  .text-accent   { color: var(--color-accent); }
-  .text-dim      { color: var(--color-text-dim); }
-  .surface       { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
-  .surface-elev  { background: var(--color-surface-elev); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  overflow-x: hidden;
 }
+
+/* Tabular numerics for data cells */
+td,
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* 主题切换平滑过渡 */
+body,
+header,
+aside,
+main,
+.card,
+.card-elevated,
+.data-table {
+  transition:
+    background-color var(--duration-normal) var(--ease-in-out),
+    color var(--duration-normal) var(--ease-in-out),
+    border-color var(--duration-normal) var(--ease-in-out);
+}
+
+/* ============================================================
+ * 装饰: 噪点纹理 (仅 dark) + 顶部血色光晕
+ * ============================================================ */
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: var(--noise-opacity);
+  pointer-events: none;
+  z-index: 1000;
+  mix-blend-mode: overlay;
+  transition: opacity var(--duration-normal) var(--ease-in-out);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  top: -200px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  height: 400px;
+  background: radial-gradient(ellipse at center, var(--top-glow) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+  transition: background var(--duration-normal) var(--ease-in-out);
+}
+
+/* ============================================================
+ * 字体辅助类
+ * ============================================================ */
+
+.font-display { font-family: var(--font-display); font-weight: 600; letter-spacing: 0.04em; }
+.font-serif   { font-family: var(--font-serif);   font-weight: 600; }
+.font-sans    { font-family: var(--font-sans); }
+.font-mono    { font-family: var(--font-mono); }
+
+/* ============================================================
+ * 滚动条
+ * ============================================================ */
+
+::-webkit-scrollbar       { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-md);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+/* ============================================================
+ * 全局动画 (供组件复用)
+ * ============================================================ */
+
+@keyframes pulse-blood {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 数据闪烁: 上行 (绿) / 下行 (红) */
+@keyframes flash-up {
+  0%   { color: var(--accent-emerald); }
+  100% { color: var(--text-primary); }
+}
+@keyframes flash-down {
+  0%   { color: var(--accent-blood); }
+  100% { color: var(--text-primary); }
+}
+
+/* Logo shimmer */
+@keyframes logo-shimmer {
+  0%, 100% { filter: drop-shadow(0 0 4px var(--accent-blood-glow)); }
+  50%      { filter: drop-shadow(0 0 12px var(--accent-blood-glow)); }
+}
+
+@keyframes logo-shimmer-light {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(184, 26, 48, 0.2),
+      0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  50% {
+    box-shadow:
+      0 0 16px 2px rgba(184, 26, 48, 0.25),
+      0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* 应用类 */
+.pulse-blood { animation: pulse-blood 2s ease-in-out infinite; }
+.animate-in  { animation: slide-in-up 0.4s var(--ease-out-expo) backwards; }
