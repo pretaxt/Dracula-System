@@ -31,3 +31,27 @@ export async function stopStrategyById(strategyId: string) {
   const { data } = await apiClient.post(`/strategies/${strategyId}/stop`)
   return data
 }
+
+export type SpotPerpOpportunity = {
+  symbol: string
+  exchange: string
+  spot_price: string
+  perp_price: string
+  basis_abs: string
+  basis_pct: string
+  direction: 'premium' | 'discount'
+  timestamp_ms: number
+}
+
+export type SpotPerpOpportunitiesResponse = {
+  running: boolean
+  last_scan_at: string | null
+  data: SpotPerpOpportunity[]
+}
+
+export async function getSpotPerpOpportunities(): Promise<SpotPerpOpportunitiesResponse> {
+  const { data } = await apiClient.get<SpotPerpOpportunitiesResponse>(
+    '/strategies/spot-perp/opportunities',
+  )
+  return data
+}

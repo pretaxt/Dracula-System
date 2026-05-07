@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from app.api.deps import CurrentUser
 from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
+    SpotPerpOpportunitiesResponse,
+    SpotPerpOpportunityOut,
     StrategyActionResponse,
     StrategyConfig,
     StrategyStatusResponse,
@@ -89,6 +91,29 @@ async def update_config(
         max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "500")),
         max_concurrent_positions=cfg.get("position", {}).get("max_positions", 3),
         scan_interval_seconds=cfg.get("scan_interval_seconds", 60.0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# spot-perp basis: B.1 monitor only — 暴露 scanner 状态 + 最新机会
+# ---------------------------------------------------------------------------
+
+
+@router.get("/spot-perp/opportunities", response_model=SpotPerpOpportunitiesResponse)
+async def spot_perp_opportunities(
+    _: CurrentUser, request: Request
+) -> SpotPerpOpportunitiesResponse:
+    """spot-perp 基差扫描器最新机会(每 60s 刷新)。"""
+    runner = getattr(request.app.state, "spot_perp_runner", None)
+    if runner is None:
+        return SpotPerpOpportunitiesResponse(running=False, last_scan_at=None, data=[])
+    opps = [
+        SpotPerpOpportunityOut(**opp.to_dict()) for opp in runner.latest_opportunities
+    ]
+    return SpotPerpOpportunitiesResponse(
+        running=runner.is_running,
+        last_scan_at=runner.last_scan_at,
+        data=opps,
     )
 
 

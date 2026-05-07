@@ -113,6 +113,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.warning("no_adapters_available_runner_not_started")
 
+    # --- Start spot-perp basis scanner (B.1: monitor only) ---
+    spot_perp_runner = None
+    spot_perp_task: asyncio.Task | None = None  # type: ignore[type-arg]
+    if adapters:
+        try:
+            from app.strategies.spot_perp_basis.runner import SpotPerpRunner  # noqa: PLC0415
+            from app.strategies.spot_perp_basis.scanner import (  # noqa: PLC0415
+                SpotPerpBasisScanner,
+                SpotPerpConfig,
+            )
+            sp_scanner = SpotPerpBasisScanner(
+                adapters=adapters,
+                config=SpotPerpConfig(),
+            )
+            spot_perp_runner = SpotPerpRunner(
+                scanner=sp_scanner, scan_interval_seconds=60.0
+            )
+            spot_perp_task = asyncio.create_task(
+                spot_perp_runner.run_forever(), name="spot_perp_runner"
+            )
+            logger.info("spot_perp_runner_task_created")
+        except Exception:
+            logger.exception("spot_perp_runner_init_failed")
+
     app.state.runner = runner
     app.state.paper_session = paper_session
     app.state.paper_task = paper_task
@@ -120,6 +144,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.adapters = adapters
     app.state.symbols = _DEFAULT_SYMBOLS
     app.state.startup_time = datetime.now(timezone.utc)
+    app.state.spot_perp_runner = spot_perp_runner
+    app.state.spot_perp_task = spot_perp_task
 
     yield  # ← application handles requests here
 
@@ -139,6 +165,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         runner_task.cancel()
         try:
             await runner_task
+        except asyncio.CancelledError:
+            pass
+
+    if spot_perp_runner is not None:
+        spot_perp_runner.stop()
+    if spot_perp_task is not None:
+        spot_perp_task.cancel()
+        try:
+            await spot_perp_task
         except asyncio.CancelledError:
             pass
 

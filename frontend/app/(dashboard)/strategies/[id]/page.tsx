@@ -6,7 +6,7 @@ import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
-import { getStrategyStatus, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
+import { getStrategyStatus, getSpotPerpOpportunities, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
 
 const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
   RUNNING:    'active',
@@ -37,6 +37,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryFn: getStrategyStatus,
     refetchInterval: 10_000,
     enabled: params.id === 'funding-rate',
+  })
+  const { data: spotPerpOpps } = useQuery({
+    queryKey: ['spot-perp-opps'],
+    queryFn: getSpotPerpOpportunities,
+    refetchInterval: 5_000,
+    enabled: params.id === 'spot-perp',
   })
 
   const startMut = useMutation({
@@ -73,6 +79,10 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     strategy.id === 'funding-rate' && live
       ? live.paper_running
         ? 'RUNNING'
+        : 'PLANNED'
+      : strategy.id === 'spot-perp' && spotPerpOpps
+      ? spotPerpOpps.running
+        ? 'MONITOR'
         : 'PLANNED'
       : strategy.status
 
@@ -208,6 +218,135 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               </li>
             ))}
           </ul>
+        </CardElevated>
+      )}
+
+      {/* spot-perp 实时机会(B.1 监控扫描器) */}
+      {strategy.id === 'spot-perp' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('实时基差机会')}
+            subtitle="LIVE BASIS OPPORTUNITIES · BINANCE"
+            right={
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: spotPerpOpps?.running
+                    ? 'var(--accent-emerald)'
+                    : 'var(--text-tertiary)',
+                }}
+              >
+                {spotPerpOpps?.running
+                  ? `● ${t('扫描中')}`
+                  : `○ ${t('未启动')}`}
+                {spotPerpOpps?.last_scan_at && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    {t('上次扫描')}{' '}
+                    {new Date(spotPerpOpps.last_scan_at).toLocaleTimeString(
+                      'en-US',
+                      { hour12: false },
+                    )}
+                  </span>
+                )}
+              </span>
+            }
+          />
+          {(spotPerpOpps?.data ?? []).length === 0 ? (
+            <div
+              style={{
+                padding: 24,
+                textAlign: 'center',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              {spotPerpOpps?.running
+                ? t('当前无基差超过阈值的标的')
+                : t('扫描器未运行')}
+            </div>
+          ) : (
+            <div className="table-scroll-x">
+              <table
+                className="data-table"
+                style={{
+                  width: '100%',
+                  borderCollapse: 'separate',
+                  borderSpacing: 0,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                }}
+              >
+                <thead>
+                  <tr>
+                    {[t('币对'), t('方向'), t('现货'), t('永续'), t('基差'), t('基差 %')].map((h, i) => (
+                      <th
+                        key={i}
+                        style={{
+                          textAlign: i === 0 || i === 1 ? 'left' : 'right',
+                          padding: '10px 12px',
+                          color: 'var(--text-tertiary)',
+                          fontWeight: 500,
+                          fontSize: 10,
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                          borderBottom: '1px solid var(--border-default)',
+                          background: 'var(--bg-deepest)',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(spotPerpOpps?.data ?? []).map((o) => {
+                    const basisPct = parseFloat(o.basis_pct)
+                    const isPremium = o.direction === 'premium'
+                    const dirColor = isPremium
+                      ? 'var(--accent-emerald)'
+                      : 'var(--accent-blood)'
+                    return (
+                      <tr
+                        key={o.symbol}
+                        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                      >
+                        <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                          {o.symbol}
+                        </td>
+                        <td style={{ padding: '12px', color: dirColor, fontWeight: 500 }}>
+                          {isPremium ? `↑ ${t('升水')}` : `↓ ${t('贴水')}`}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                          ${parseFloat(o.spot_price).toLocaleString('en-US', { maximumFractionDigits: 4 })}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                          ${parseFloat(o.perp_price).toLocaleString('en-US', { maximumFractionDigits: 4 })}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: dirColor }}>
+                          {basisPct >= 0 ? '+' : ''}${parseFloat(o.basis_abs).toFixed(4)}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: dirColor, fontWeight: 600 }}>
+                          {basisPct >= 0 ? '+' : ''}{basisPct.toFixed(4)}%
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div
+            style={{
+              marginTop: 12,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              color: 'var(--text-muted)',
+            }}
+          >
+            {t('B.1: 仅监控扫描,自动开平仓 (B.2) 待实现 · 阈值 |basis| ≥ 0.10% · 5 秒刷新')}
+          </div>
         </CardElevated>
       )}
 

@@ -45,3 +45,20 @@ class ConfigPatchRequest(BaseModel):
         if v is not None and v < 10:
             raise ValueError("scan_interval_seconds must be >= 10")
         return v
+
+
+class SpotPerpOpportunityOut(BaseModel):
+    symbol: str
+    exchange: str
+    spot_price: str
+    perp_price: str
+    basis_abs: str
+    basis_pct: str
+    direction: str
+    timestamp_ms: int
+
+
+class SpotPerpOpportunitiesResponse(BaseModel):
+    running: bool
+    last_scan_at: datetime | None
+    data: list[SpotPerpOpportunityOut]
