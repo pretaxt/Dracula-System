@@ -20,20 +20,26 @@ const INTERVALS: { k: KlineInterval; l: string }[] = [
 ]
 
 const CHART_W = 760
-const CHART_H = 380
+const CHART_H = 460
 const PAD_L = 84
 const PAD_R = 12
-const PAD_T = 12
+const PAD_T = 8
 const PAD_B = 22
 const PRICE_H = 200
-const VOL_TOP = PAD_T + PRICE_H + 8
-const VOL_H = 50
-const RSI_TOP = VOL_TOP + VOL_H + 8
-const RSI_H = 60
+const VOL_TOP = PAD_T + PRICE_H + 8           // 216
+const VOL_H = 56
+const RSI_TOP = VOL_TOP + VOL_H + 8           // 280
+const RSI_H = 50
+const MACD_TOP = RSI_TOP + RSI_H + 8          // 338
+const MACD_H = 80                             // padding bottom for x-label = 22
 
 const MA_SHORT = 20
 const MA_LONG = 60
+const VOL_MA_PERIOD = 20
 const RSI_PERIOD = 14
+const MACD_FAST = 12
+const MACD_SLOW = 26
+const MACD_SIGNAL = 9
 
 type KlineDrawerProps = {
   symbol: string
@@ -53,15 +59,30 @@ function formatVolume(v: number): string {
   return v.toFixed(0)
 }
 
-function computeSMA(closes: number[], period: number): (number | null)[] {
-  const out: (number | null)[] = new Array(closes.length).fill(null)
-  if (closes.length < period) return out
+function computeSMA(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null)
+  if (values.length < period) return out
   let sum = 0
-  for (let i = 0; i < period; i++) sum += closes[i]
+  for (let i = 0; i < period; i++) sum += values[i]
   out[period - 1] = sum / period
-  for (let i = period; i < closes.length; i++) {
-    sum += closes[i] - closes[i - period]
+  for (let i = period; i < values.length; i++) {
+    sum += values[i] - values[i - period]
     out[i] = sum / period
+  }
+  return out
+}
+
+function computeEMA(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null)
+  if (values.length < period) return out
+  const k = 2 / (period + 1)
+  let sum = 0
+  for (let i = 0; i < period; i++) sum += values[i]
+  let prev = sum / period
+  out[period - 1] = prev
+  for (let i = period; i < values.length; i++) {
+    prev = values[i] * k + prev * (1 - k)
+    out[i] = prev
   }
   return out
 }
@@ -88,6 +109,31 @@ function computeRSI(closes: number[], period = 14): (number | null)[] {
     out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL)
   }
   return out
+}
+
+function computeMACD(closes: number[]) {
+  const emaFast = computeEMA(closes, MACD_FAST)
+  const emaSlow = computeEMA(closes, MACD_SLOW)
+  const macd: (number | null)[] = closes.map((_, i) => {
+    const a = emaFast[i]
+    const b = emaSlow[i]
+    return a !== null && b !== null ? a - b : null
+  })
+  // signal = EMA9 of MACD (only on the non-null slice)
+  const validStart = macd.findIndex((v) => v !== null)
+  const signal: (number | null)[] = new Array(closes.length).fill(null)
+  if (validStart >= 0) {
+    const valid = macd.slice(validStart).map((v) => v as number)
+    const sig = computeEMA(valid, MACD_SIGNAL)
+    for (let i = 0; i < sig.length; i++) {
+      if (sig[i] !== null) signal[validStart + i] = sig[i]
+    }
+  }
+  const hist: (number | null)[] = macd.map((m, i) => {
+    const s = signal[i]
+    return m !== null && s !== null ? m - s : null
+  })
+  return { macd, signal, hist }
 }
 
 export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
@@ -122,9 +168,12 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   const numBars = bars.length
 
   const closes = useMemo(() => bars.map((b) => parseFloat(b.close)), [bars])
+  const volumes = useMemo(() => bars.map((b) => parseFloat(b.volume)), [bars])
   const ma20 = useMemo(() => computeSMA(closes, MA_SHORT), [closes])
   const ma60 = useMemo(() => computeSMA(closes, MA_LONG), [closes])
+  const volMa = useMemo(() => computeSMA(volumes, VOL_MA_PERIOD), [volumes])
   const rsi = useMemo(() => computeRSI(closes, RSI_PERIOD), [closes])
+  const macdData = useMemo(() => computeMACD(closes), [closes])
 
   const stats = useMemo(() => {
     if (numBars === 0) return null
@@ -151,7 +200,6 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
       if (h > hi) hi = h
       if (v > vM) vM = v
     }
-    // include MA lines in price range
     for (const m of [...ma20, ...ma60]) {
       if (m === null) continue
       if (m < lo) lo = m
@@ -167,6 +215,17 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
     return { yMin: yMinV, yMax: yMaxV, vMax: vM || 1, priceTicks: ticks }
   }, [bars, numBars, ma20, ma60])
 
+  // MACD 范围(对称取最大绝对值)
+  const macdAbsMax = useMemo(() => {
+    let m = 0
+    for (const v of [...macdData.macd, ...macdData.signal, ...macdData.hist]) {
+      if (v === null) continue
+      const a = Math.abs(v)
+      if (a > m) m = a
+    }
+    return m || 1
+  }, [macdData])
+
   const innerW = CHART_W - PAD_L - PAD_R
   const barW = numBars > 0 ? innerW / numBars : 0
   const bodyW = Math.max(1, barW * 0.7)
@@ -178,6 +237,8 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   }
   const yOfVol = (v: number) => VOL_TOP + ((vMax - v) / vMax) * VOL_H
   const yOfRsi = (r: number) => RSI_TOP + ((100 - r) / 100) * RSI_H
+  const macdMid = MACD_TOP + MACD_H / 2
+  const yOfMacd = (m: number) => macdMid - (m / macdAbsMax) * (MACD_H / 2 - 4)
 
   const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget
@@ -193,34 +254,19 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
 
   const hoverBar = hover ? bars[hover.idx] : null
 
-  // build MA polyline path
-  const maPath = (arr: (number | null)[]) => {
+  const linePath = (arr: (number | null)[], yFn: (v: number) => number) => {
     let path = ''
     let started = false
     for (let i = 0; i < arr.length; i++) {
       const v = arr[i]
       if (v === null) continue
       const x = xOf(i)
-      const y = yOfPrice(v)
+      const y = yFn(v)
       path += (started ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1)
       started = true
     }
     return path
   }
-
-  const rsiPath = (() => {
-    let path = ''
-    let started = false
-    for (let i = 0; i < rsi.length; i++) {
-      const v = rsi[i]
-      if (v === null) continue
-      const x = xOf(i)
-      const y = yOfRsi(v)
-      path += (started ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1)
-      started = true
-    }
-    return path
-  })()
 
   return (
     <>
@@ -354,6 +400,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                 display: 'flex',
                 gap: 4,
                 borderBottom: '1px solid var(--border-subtle)',
+                flexWrap: 'wrap',
               }}
             >
               {INTERVALS.map((it) => (
@@ -377,8 +424,18 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   {it.l}
                 </button>
               ))}
-              {/* MA legend */}
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 10, alignItems: 'center', color: 'var(--text-tertiary)' }}>
+              <div
+                style={{
+                  marginLeft: 'auto',
+                  display: 'flex',
+                  gap: 12,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 10,
+                  alignItems: 'center',
+                  color: 'var(--text-tertiary)',
+                  flexWrap: 'wrap',
+                }}
+              >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 12, height: 2, background: 'var(--accent-gold)' }} />
                   MA20
@@ -390,6 +447,10 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 12, height: 2, background: 'var(--accent-blood)' }} />
                   RSI14
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: 'var(--accent-emerald)' }} />
+                  MACD
                 </span>
               </div>
             </div>
@@ -500,7 +561,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     </g>
                   ))}
 
-                  {/* 蜡烛 */}
+                  {/* 蜡烛 + 成交量柱 */}
                   {bars.map((b, i) => {
                     const o = parseFloat(b.open)
                     const c = parseFloat(b.close)
@@ -541,10 +602,11 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   })}
 
                   {/* MA 叠加 */}
-                  <path d={maPath(ma20)} stroke="var(--accent-gold)" strokeWidth={1.2} fill="none" />
-                  <path d={maPath(ma60)} stroke="var(--accent-azure)" strokeWidth={1.2} fill="none" />
+                  <path d={linePath(ma20, yOfPrice)} stroke="var(--accent-gold)" strokeWidth={1.2} fill="none" />
+                  <path d={linePath(ma60, yOfPrice)} stroke="var(--accent-azure)" strokeWidth={1.2} fill="none" />
 
-                  {/* 成交量底线 */}
+                  {/* VOL MA20 叠加 */}
+                  <path d={linePath(volMa, yOfVol)} stroke="var(--accent-gold)" strokeWidth={1} fill="none" opacity={0.85} />
                   <line
                     x1={PAD_L}
                     x2={PAD_L + innerW}
@@ -552,8 +614,29 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     y2={VOL_TOP + VOL_H}
                     stroke="var(--border-default)"
                   />
+                  {/* VOL section label */}
+                  <text
+                    x={PAD_L - 8}
+                    y={VOL_TOP + 12}
+                    textAnchor="end"
+                    fontSize={9}
+                    fontFamily="var(--font-mono)"
+                    fill="var(--text-tertiary)"
+                  >
+                    VOL
+                  </text>
+                  <text
+                    x={PAD_L - 8}
+                    y={VOL_TOP + VOL_H - 2}
+                    textAnchor="end"
+                    fontSize={9}
+                    fontFamily="var(--font-mono)"
+                    fill="var(--text-muted)"
+                  >
+                    {formatVolume(vMax)}
+                  </text>
 
-                  {/* RSI 副图背景 + 30/70 ref */}
+                  {/* RSI 副图 */}
                   <rect
                     x={PAD_L}
                     y={RSI_TOP}
@@ -582,6 +665,16 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   />
                   <text
                     x={PAD_L - 8}
+                    y={RSI_TOP + 12}
+                    textAnchor="end"
+                    fontSize={9}
+                    fontFamily="var(--font-mono)"
+                    fill="var(--text-tertiary)"
+                  >
+                    RSI
+                  </text>
+                  <text
+                    x={PAD_L - 8}
                     y={yOfRsi(70) + 3}
                     textAnchor="end"
                     fontSize={9}
@@ -602,9 +695,70 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   >
                     30
                   </text>
+                  <path d={linePath(rsi, yOfRsi)} stroke="var(--accent-blood)" strokeWidth={1.2} fill="none" />
 
-                  {/* RSI 折线 */}
-                  <path d={rsiPath} stroke="var(--accent-blood)" strokeWidth={1.2} fill="none" />
+                  {/* MACD 副图 */}
+                  <rect
+                    x={PAD_L}
+                    y={MACD_TOP}
+                    width={innerW}
+                    height={MACD_H}
+                    fill="var(--bg-card)"
+                    opacity={0.3}
+                  />
+                  {/* zero line */}
+                  <line
+                    x1={PAD_L}
+                    x2={PAD_L + innerW}
+                    y1={macdMid}
+                    y2={macdMid}
+                    stroke="var(--border-default)"
+                  />
+                  {/* histogram bars */}
+                  {macdData.hist.map((h, i) => {
+                    if (h === null) return null
+                    const x = xOf(i)
+                    const y = yOfMacd(h)
+                    const baseY = macdMid
+                    const top = Math.min(y, baseY)
+                    const height = Math.max(1, Math.abs(y - baseY))
+                    const color =
+                      h >= 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)'
+                    return (
+                      <rect
+                        key={`hist-${i}`}
+                        x={x - bodyW / 2}
+                        y={top}
+                        width={bodyW}
+                        height={height}
+                        fill={color}
+                        opacity={0.65}
+                      />
+                    )
+                  })}
+                  {/* MACD line + signal */}
+                  <path d={linePath(macdData.macd, yOfMacd)} stroke="var(--accent-emerald)" strokeWidth={1.2} fill="none" />
+                  <path d={linePath(macdData.signal, yOfMacd)} stroke="var(--accent-gold)" strokeWidth={1.2} fill="none" />
+                  <text
+                    x={PAD_L - 8}
+                    y={MACD_TOP + 12}
+                    textAnchor="end"
+                    fontSize={9}
+                    fontFamily="var(--font-mono)"
+                    fill="var(--text-tertiary)"
+                  >
+                    MACD
+                  </text>
+                  <text
+                    x={PAD_L - 8}
+                    y={MACD_TOP + MACD_H - 2}
+                    textAnchor="end"
+                    fontSize={9}
+                    fontFamily="var(--font-mono)"
+                    fill="var(--text-muted)"
+                  >
+                    12,26,9
+                  </text>
 
                   {/* X 轴时间 */}
                   {[0, Math.floor(numBars / 2), numBars - 1].map((i) => {
@@ -657,7 +811,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     fontSize: 11,
                     color: 'var(--text-secondary)',
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(6, 1fr)',
+                    gridTemplateColumns: 'repeat(7, 1fr)',
                     gap: 8,
                   }}
                 >
@@ -667,6 +821,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   <span>C: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.close))}</b></span>
                   <span>V: <b style={{ color: 'var(--text-secondary)' }}>{formatVolume(parseFloat(hoverBar.volume))}</b></span>
                   <span>RSI: <b style={{ color: 'var(--accent-blood)' }}>{rsi[hover!.idx] !== null ? (rsi[hover!.idx] as number).toFixed(1) : '—'}</b></span>
+                  <span>MACD: <b style={{ color: 'var(--accent-emerald)' }}>{macdData.macd[hover!.idx] !== null ? (macdData.macd[hover!.idx] as number).toFixed(3) : '—'}</b></span>
                 </div>
               )}
             </div>
@@ -695,8 +850,8 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
           }}
         >
           {tab === 'kline'
-            ? `${t('5 秒刷新')} · Binance USDM Perpetual · ${t('共')} ${numBars} ${t('根')}`
-            : `${t('3 秒刷新')} · Binance USDM Perpetual · ${t('盘口前 20 档')}`}
+            ? `${t('5 秒刷新')} · MA20/60 · VOL MA20 · RSI14 · MACD(12,26,9) · ${numBars} ${t('根')}`
+            : `${t('3 秒刷新')} · Binance USDM Perpetual · ${t('盘口前 20 档(左买盘 / 右卖盘)')}`}
         </div>
       </aside>
     </>
@@ -704,7 +859,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Orderbook 子组件
+// Orderbook 子组件 — 左买盘 + 右卖盘 并排
 // ---------------------------------------------------------------------------
 
 function OrderbookView({
@@ -744,112 +899,158 @@ function OrderbookView({
     )
   }
 
-  // 中间 spread
   const bestBid = bids.length > 0 ? parseFloat(bids[0][0]) : 0
   const bestAsk = asks.length > 0 ? parseFloat(asks[0][0]) : 0
   const spread = bestAsk && bestBid ? bestAsk - bestBid : 0
   const spreadPct = bestBid ? (spread / bestBid) * 100 : 0
 
+  const ROWS = 20
+
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* 卖盘(降序,最高在上) */}
-      <div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, padding: '0 12px', display: 'flex', justifyContent: 'space-between' }}>
-          <span>{t('卖盘 ASK')}</span>
-          <span>{t('数量')}</span>
-        </div>
-        {asks.slice(0, 20).reverse().map(([p, q], i) => {
-          const qty = parseFloat(q)
-          const widthPct = (qty / maxQty) * 100
-          return (
-            <div
-              key={`ask-${i}`}
-              style={{
-                position: 'relative',
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '4px 12px',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                color: 'var(--text-primary)',
-              }}
-            >
-              <span
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: `${widthPct}%`,
-                  background: 'rgba(227, 64, 88, 0.10)',
-                  pointerEvents: 'none',
-                }}
-              />
-              <span style={{ color: 'var(--accent-blood)', position: 'relative' }}>{formatPrice(parseFloat(p))}</span>
-              <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>{qty.toFixed(3)}</span>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Spread */}
+      {/* Spread 顶部 */}
       <div
         style={{
-          padding: '8px 12px',
+          padding: '10px 12px',
           background: 'var(--bg-card)',
           border: '1px solid var(--border-default)',
           borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--font-mono)',
-          fontSize: 11,
+          fontSize: 12,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
         }}
       >
-        <span style={{ color: 'var(--text-tertiary)' }}>{t('价差 SPREAD')}</span>
-        <span style={{ color: 'var(--text-primary)' }}>
-          {spread.toFixed(2)} <span style={{ color: 'var(--text-tertiary)' }}>({spreadPct.toFixed(4)}%)</span>
+        <span style={{ color: 'var(--text-tertiary)' }}>{t('最优买')} </span>
+        <span style={{ color: 'var(--accent-emerald)' }}>{bestBid > 0 ? formatPrice(bestBid) : '—'}</span>
+        <span style={{ color: 'var(--text-tertiary)' }}>
+          {t('价差')}{' '}
+          <b style={{ color: 'var(--text-primary)' }}>
+            {spread.toFixed(2)} ({spreadPct.toFixed(4)}%)
+          </b>
         </span>
+        <span style={{ color: 'var(--accent-blood)' }}>{bestAsk > 0 ? formatPrice(bestAsk) : '—'}</span>
+        <span style={{ color: 'var(--text-tertiary)' }}>{t('最优卖')}</span>
       </div>
 
-      {/* 买盘 */}
-      <div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, padding: '0 12px', display: 'flex', justifyContent: 'space-between' }}>
-          <span>{t('买盘 BID')}</span>
-          <span>{t('数量')}</span>
-        </div>
-        {bids.slice(0, 20).map(([p, q], i) => {
-          const qty = parseFloat(q)
-          const widthPct = (qty / maxQty) * 100
-          return (
-            <div
-              key={`bid-${i}`}
-              style={{
-                position: 'relative',
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '4px 12px',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                color: 'var(--text-primary)',
-              }}
-            >
-              <span
+      {/* 双栏 grid: 左 BID / 右 ASK */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        {/* 左 — 买盘 BID */}
+        <div>
+          <div
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              color: 'var(--accent-emerald)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              marginBottom: 6,
+              padding: '0 12px',
+              display: 'flex',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>{t('买盘 BID')}</span>
+            <span>{t('数量')}</span>
+          </div>
+          {bids.slice(0, ROWS).map(([p, q], i) => {
+            const qty = parseFloat(q)
+            const widthPct = (qty / maxQty) * 100
+            return (
+              <div
+                key={`bid-${i}`}
                 style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: `${widthPct}%`,
-                  background: 'rgba(62, 212, 146, 0.10)',
-                  pointerEvents: 'none',
+                  position: 'relative',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  padding: '4px 12px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
                 }}
-              />
-              <span style={{ color: 'var(--accent-emerald)', position: 'relative' }}>{formatPrice(parseFloat(p))}</span>
-              <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>{qty.toFixed(3)}</span>
-            </div>
-          )
-        })}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: `${widthPct}%`,
+                    background: 'rgba(62, 212, 146, 0.12)',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <span style={{ color: 'var(--accent-emerald)', position: 'relative' }}>
+                  {formatPrice(parseFloat(p))}
+                </span>
+                <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>
+                  {qty.toFixed(3)}
+                </span>
+              </div>
+            )
+          })}
+          {bids.length === 0 && (
+            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>—</div>
+          )}
+        </div>
+
+        {/* 右 — 卖盘 ASK */}
+        <div>
+          <div
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              color: 'var(--accent-blood)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              marginBottom: 6,
+              padding: '0 12px',
+              display: 'flex',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>{t('卖盘 ASK')}</span>
+            <span>{t('数量')}</span>
+          </div>
+          {asks.slice(0, ROWS).map(([p, q], i) => {
+            const qty = parseFloat(q)
+            const widthPct = (qty / maxQty) * 100
+            return (
+              <div
+                key={`ask-${i}`}
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  padding: '4px 12px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: `${widthPct}%`,
+                    background: 'rgba(227, 64, 88, 0.12)',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <span style={{ color: 'var(--accent-blood)', position: 'relative' }}>
+                  {formatPrice(parseFloat(p))}
+                </span>
+                <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>
+                  {qty.toFixed(3)}
+                </span>
+              </div>
+            )
+          })}
+          {asks.length === 0 && (
+            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>—</div>
+          )}
+        </div>
       </div>
     </div>
   )
