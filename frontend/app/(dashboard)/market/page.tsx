@@ -10,6 +10,7 @@ import KlineDrawer from '@/components/market/KlineDrawer'
 
 type SortKey = 'change' | 'volume' | 'funding' | 'symbol'
 type SortDir = 'asc' | 'desc'
+type Filter = 'all' | 'gainers' | 'losers'
 
 function formatNumber(n: number, dp = 2): string {
   if (!Number.isFinite(n)) return '—'
@@ -56,6 +57,7 @@ export default function MarketPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('volume')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [filter, setFilter] = useState<Filter>('all')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   const { data, isLoading, isError } = useQuery({
@@ -66,9 +68,25 @@ export default function MarketPage() {
 
   const rows: MarketTicker[] = useMemo(() => {
     const all = data?.data ?? []
-    const filtered = search
+    let filtered = search
       ? all.filter((r) => r.symbol.toLowerCase().includes(search.toLowerCase()))
       : all
+
+    if (filter === 'gainers') {
+      filtered = [...filtered]
+        .filter((r) => parseFloat(r.change_24h_pct) > 0)
+        .sort((a, b) => parseFloat(b.change_24h_pct) - parseFloat(a.change_24h_pct))
+        .slice(0, 5)
+      return filtered
+    }
+    if (filter === 'losers') {
+      filtered = [...filtered]
+        .filter((r) => parseFloat(r.change_24h_pct) < 0)
+        .sort((a, b) => parseFloat(a.change_24h_pct) - parseFloat(b.change_24h_pct))
+        .slice(0, 5)
+      return filtered
+    }
+
     const sorted = [...filtered].sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1
       switch (sortKey) {
@@ -83,7 +101,7 @@ export default function MarketPage() {
       }
     })
     return sorted
-  }, [data, search, sortKey, sortDir])
+  }, [data, search, sortKey, sortDir, filter])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -132,6 +150,43 @@ export default function MarketPage() {
             </div>
           }
         />
+
+        {/* Filter chips */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {([
+            { k: 'all' as const, l: t('全部') },
+            { k: 'gainers' as const, l: t('涨幅榜 TOP 5') },
+            { k: 'losers' as const, l: t('跌幅榜 TOP 5') },
+          ]).map(({ k, l }) => (
+            <button
+              key={k}
+              onClick={() => setFilter(k)}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer',
+                background:
+                  filter === k
+                    ? k === 'gainers'
+                      ? 'var(--accent-emerald)'
+                      : k === 'losers'
+                      ? 'var(--accent-blood)'
+                      : 'var(--accent-blood)'
+                    : 'var(--bg-card)',
+                color: filter === k ? '#fff' : 'var(--text-secondary)',
+                border:
+                  filter === k
+                    ? '1px solid transparent'
+                    : '1px solid var(--border-default)',
+                transition: 'all var(--duration-fast)',
+              }}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
 
         <div style={{ position: 'relative', marginBottom: 16 }}>
           <Search
@@ -188,6 +243,8 @@ export default function MarketPage() {
                   { k: null,               l: t('交易所'),   align: 'left' },
                   { k: null,               l: t('现价'),     align: 'right' },
                   { k: 'change' as const,  l: '24H',        align: 'right' },
+                  { k: null,               l: t('24H 高'),  align: 'right' },
+                  { k: null,               l: t('24H 低'),  align: 'right' },
                   { k: 'volume' as const,  l: t('24H 成交'), align: 'right' },
                   { k: 'funding' as const, l: t('资金费率'), align: 'right' },
                   { k: null,               l: t('下次结算'), align: 'right' },
@@ -229,7 +286,7 @@ export default function MarketPage() {
               {rows.length === 0 && !isLoading && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={9}
                     style={{
                       padding: 40,
                       textAlign: 'center',
@@ -298,6 +355,16 @@ export default function MarketPage() {
                     >
                       {change > 0 ? '+' : ''}
                       {change.toFixed(2)}%
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: 'var(--accent-emerald)' }}>
+                      {r.high_24h && parseFloat(r.high_24h) > 0
+                        ? `$${formatPrice(parseFloat(r.high_24h))}`
+                        : '—'}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: 'var(--accent-blood)' }}>
+                      {r.low_24h && parseFloat(r.low_24h) > 0
+                        ? `$${formatPrice(parseFloat(r.low_24h))}`
+                        : '—'}
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
                       {formatVolume(vol)}

@@ -68,12 +68,16 @@ async def get_tickers(
         funding_pct = funding_rate * Decimal("100")
         next_ms = int(r.get("fundingTimestamp") or 0)
 
+        high_24h = _to_dec(t.get("high"))
+        low_24h = _to_dec(t.get("low"))
         out.append({
             "symbol": display,
             "exchange": exchange,
             "last": str(last),
             "change_24h_pct": str(round(change_pct, 4)),
             "volume_24h_usd": str(round(quote_vol, 2)),
+            "high_24h": str(high_24h),
+            "low_24h": str(low_24h),
             "funding_rate": str(funding_rate),
             "funding_rate_pct": str(round(funding_pct, 6)),
             "next_funding_time_ms": next_ms,
@@ -173,3 +177,44 @@ async def get_klines(
             "volume": str(_to_dec(r[5])),
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Order book depth
+# ---------------------------------------------------------------------------
+
+
+async def get_orderbook(
+    adapters: dict[str, Any] | None,
+    symbol: str,
+    depth: int = 20,
+    exchange: str = "binance",
+) -> dict:
+    """USDM perp 盘口深度 (top N bids + asks)."""
+    depth = max(5, min(depth, 50))
+    adapters = adapters or {}
+    adapter = adapters.get(exchange)
+    if adapter is None:
+        return {"bids": [], "asks": [], "ts": 0}
+
+    clients = getattr(adapter, "_clients", {}) or {}
+    client = clients.get(InstrumentType.PERPETUAL)
+    if client is None:
+        return {"bids": [], "asks": [], "ts": 0}
+
+    base = symbol.upper().split("/")[0]
+    ccxt_symbol = f"{base}/USDT:USDT"
+
+    try:
+        retry = getattr(adapter, "_call_with_retry", None)
+        if retry is not None:
+            raw = await retry(client.fetch_order_book, ccxt_symbol, depth)
+        else:
+            raw = await client.fetch_order_book(ccxt_symbol, depth)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("fetch_order_book_failed", symbol=ccxt_symbol, error=str(e))
+        return {"bids": [], "asks": [], "ts": 0}
+
+    bids = [[str(_to_dec(p)), str(_to_dec(q))] for p, q in (raw.get("bids") or [])[:depth]]
+    asks = [[str(_to_dec(p)), str(_to_dec(q))] for p, q in (raw.get("asks") or [])[:depth]]
+    return {"bids": bids, "asks": asks, "ts": int(raw.get("timestamp") or time.time() * 1000)}

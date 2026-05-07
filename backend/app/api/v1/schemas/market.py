@@ -10,6 +10,8 @@ class MarketTicker(BaseModel):
     last: str
     change_24h_pct: str
     volume_24h_usd: str
+    high_24h: str = "0"
+    low_24h: str = "0"
     funding_rate: str
     funding_rate_pct: str
     next_funding_time_ms: int
@@ -34,3 +36,10 @@ class KlinesResponse(BaseModel):
     symbol: str
     interval: str
     data: list[KlineBar]
+
+
+class OrderbookResponse(BaseModel):
+    symbol: str
+    bids: list[list[str]]   # [[price, qty], ...]
+    asks: list[list[str]]
+    ts: int

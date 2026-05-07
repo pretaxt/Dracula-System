@@ -11,8 +11,9 @@ from app.api.v1.schemas.market import (
     KlinesResponse,
     MarketTicker,
     MarketTickersResponse,
+    OrderbookResponse,
 )
-from app.services.market_service import get_klines, get_tickers
+from app.services.market_service import get_klines, get_orderbook, get_tickers
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -56,4 +57,23 @@ async def klines(
         symbol=symbol.upper(),
         interval=interval,
         data=[KlineBar(**r) for r in raw],
+    )
+
+
+@router.get("/orderbook", response_model=OrderbookResponse)
+async def orderbook(
+    _: CurrentUser,
+    request: Request,
+    symbol: str = Query(..., description="base symbol, e.g. BTC"),
+    depth: int = Query(default=20, ge=5, le=50),
+    exchange: str = Query(default="binance"),
+) -> OrderbookResponse:
+    """USDM perp 盘口深度."""
+    adapters = getattr(request.app.state, "adapters", None) or {}
+    raw = await get_orderbook(adapters, symbol=symbol, depth=depth, exchange=exchange)
+    return OrderbookResponse(
+        symbol=symbol.upper(),
+        bids=raw.get("bids", []),
+        asks=raw.get("asks", []),
+        ts=raw.get("ts", 0),
     )

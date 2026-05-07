@@ -6,6 +6,8 @@ export type MarketTicker = {
   last: string
   change_24h_pct: string
   volume_24h_usd: string
+  high_24h?: string
+  low_24h?: string
   funding_rate: string
   funding_rate_pct: string
   next_funding_time_ms: number
@@ -62,6 +64,28 @@ export async function getKlines(opts: {
       symbol: opts.symbol,
       interval: opts.interval ?? '1h',
       limit: opts.limit ?? 100,
+      exchange: opts.exchange ?? 'binance',
+    },
+  })
+  return data
+}
+
+export type OrderbookResponse = {
+  symbol: string
+  bids: [string, string][]
+  asks: [string, string][]
+  ts: number
+}
+
+export async function getOrderbook(opts: {
+  symbol: string
+  depth?: number
+  exchange?: string
+}): Promise<OrderbookResponse> {
+  const { data } = await apiClient.get<OrderbookResponse>('/market/orderbook', {
+    params: {
+      symbol: opts.symbol,
+      depth: opts.depth ?? 20,
       exchange: opts.exchange ?? 'binance',
     },
   })

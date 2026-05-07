@@ -3,7 +3,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider'
-import { getKlines, type KlineBar, type KlineInterval } from '@/lib/api/market'
+import {
+  getKlines,
+  getOrderbook,
+  type KlineBar,
+  type KlineInterval,
+} from '@/lib/api/market'
+
+type Tab = 'kline' | 'orderbook'
 
 const INTERVALS: { k: KlineInterval; l: string }[] = [
   { k: '15m', l: '15M' },
@@ -13,12 +20,20 @@ const INTERVALS: { k: KlineInterval; l: string }[] = [
 ]
 
 const CHART_W = 760
-const CHART_H = 360
+const CHART_H = 380
 const PAD_L = 84
 const PAD_R = 12
 const PAD_T = 12
-const PAD_B = 36
-const VOL_H = 70
+const PAD_B = 22
+const PRICE_H = 200
+const VOL_TOP = PAD_T + PRICE_H + 8
+const VOL_H = 50
+const RSI_TOP = VOL_TOP + VOL_H + 8
+const RSI_H = 60
+
+const MA_SHORT = 20
+const MA_LONG = 60
+const RSI_PERIOD = 14
 
 type KlineDrawerProps = {
   symbol: string
@@ -38,10 +53,48 @@ function formatVolume(v: number): string {
   return v.toFixed(0)
 }
 
+function computeSMA(closes: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null)
+  if (closes.length < period) return out
+  let sum = 0
+  for (let i = 0; i < period; i++) sum += closes[i]
+  out[period - 1] = sum / period
+  for (let i = period; i < closes.length; i++) {
+    sum += closes[i] - closes[i - period]
+    out[i] = sum / period
+  }
+  return out
+}
+
+function computeRSI(closes: number[], period = 14): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null)
+  if (closes.length < period + 1) return out
+  let gain = 0
+  let loss = 0
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1]
+    if (diff >= 0) gain += diff
+    else loss -= diff
+  }
+  let avgG = gain / period
+  let avgL = loss / period
+  out[period] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL)
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1]
+    const g = diff > 0 ? diff : 0
+    const l = diff < 0 ? -diff : 0
+    avgG = (avgG * (period - 1) + g) / period
+    avgL = (avgL * (period - 1) + l) / period
+    out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL)
+  }
+  return out
+}
+
 export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   const { t } = useT()
-  const [interval, setInterval] = useState<KlineInterval>('1h')
-  const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null)
+  const [tab, setTab] = useState<Tab>('kline')
+  const [interval, setIntervalState] = useState<KlineInterval>('1h')
+  const [hover, setHover] = useState<{ idx: number } | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -51,14 +104,27 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const { data, isLoading, isError } = useQuery({
+  const klineQuery = useQuery({
     queryKey: ['kline', symbol, interval],
     queryFn: () => getKlines({ symbol, interval, limit: 120 }),
     refetchInterval: 5_000,
+    enabled: tab === 'kline',
   })
 
-  const bars: KlineBar[] = data?.data ?? []
+  const obQuery = useQuery({
+    queryKey: ['orderbook', symbol],
+    queryFn: () => getOrderbook({ symbol, depth: 20 }),
+    refetchInterval: 3_000,
+    enabled: tab === 'orderbook',
+  })
+
+  const bars: KlineBar[] = klineQuery.data?.data ?? []
   const numBars = bars.length
+
+  const closes = useMemo(() => bars.map((b) => parseFloat(b.close)), [bars])
+  const ma20 = useMemo(() => computeSMA(closes, MA_SHORT), [closes])
+  const ma60 = useMemo(() => computeSMA(closes, MA_LONG), [closes])
+  const rsi = useMemo(() => computeRSI(closes, RSI_PERIOD), [closes])
 
   const stats = useMemo(() => {
     if (numBars === 0) return null
@@ -85,6 +151,12 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
       if (h > hi) hi = h
       if (v > vM) vM = v
     }
+    // include MA lines in price range
+    for (const m of [...ma20, ...ma60]) {
+      if (m === null) continue
+      if (m < lo) lo = m
+      if (m > hi) hi = m
+    }
     const pad = (hi - lo) * 0.05 || hi * 0.01 || 1
     const yMinV = lo - pad
     const yMaxV = hi + pad
@@ -93,21 +165,19 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
       ticks.push(yMinV + ((yMaxV - yMinV) * i) / 4)
     }
     return { yMin: yMinV, yMax: yMaxV, vMax: vM || 1, priceTicks: ticks }
-  }, [bars, numBars])
+  }, [bars, numBars, ma20, ma60])
 
   const innerW = CHART_W - PAD_L - PAD_R
-  const innerH = CHART_H - PAD_T - PAD_B
-  const priceH = innerH - VOL_H - 8
-  const volTop = PAD_T + priceH + 8
   const barW = numBars > 0 ? innerW / numBars : 0
   const bodyW = Math.max(1, barW * 0.7)
 
   const xOf = (i: number) => PAD_L + i * barW + barW / 2
   const yOfPrice = (p: number) => {
-    if (yMax === yMin) return PAD_T + priceH / 2
-    return PAD_T + ((yMax - p) / (yMax - yMin)) * priceH
+    if (yMax === yMin) return PAD_T + PRICE_H / 2
+    return PAD_T + ((yMax - p) / (yMax - yMin)) * PRICE_H
   }
-  const yOfVol = (v: number) => volTop + ((vMax - v) / vMax) * VOL_H
+  const yOfVol = (v: number) => VOL_TOP + ((vMax - v) / vMax) * VOL_H
+  const yOfRsi = (r: number) => RSI_TOP + ((100 - r) / 100) * RSI_H
 
   const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget
@@ -118,10 +188,39 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
     if (!ctm) return
     const local = pt.matrixTransform(ctm.inverse())
     const idx = Math.max(0, Math.min(numBars - 1, Math.floor((local.x - PAD_L) / Math.max(barW, 1))))
-    setHover({ idx, x: local.x, y: local.y })
+    setHover({ idx })
   }
 
   const hoverBar = hover ? bars[hover.idx] : null
+
+  // build MA polyline path
+  const maPath = (arr: (number | null)[]) => {
+    let path = ''
+    let started = false
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i]
+      if (v === null) continue
+      const x = xOf(i)
+      const y = yOfPrice(v)
+      path += (started ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1)
+      started = true
+    }
+    return path
+  }
+
+  const rsiPath = (() => {
+    let path = ''
+    let started = false
+    for (let i = 0; i < rsi.length; i++) {
+      const v = rsi[i]
+      if (v === null) continue
+      const x = xOf(i)
+      const y = yOfRsi(v)
+      path += (started ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1)
+      started = true
+    }
+    return path
+  })()
 
   return (
     <>
@@ -210,27 +309,35 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
           </button>
         </header>
 
+        {/* Tab 切换 */}
         <div
           style={{
-            padding: '12px 20px',
             display: 'flex',
-            gap: 4,
-            borderBottom: '1px solid var(--border-subtle)',
+            gap: 0,
+            borderBottom: '1px solid var(--border-default)',
+            background: 'var(--bg-deepest)',
           }}
         >
-          {INTERVALS.map((it) => (
+          {([
+            { k: 'kline' as const, l: t('K 线') },
+            { k: 'orderbook' as const, l: t('盘口') },
+          ]).map((it) => (
             <button
               key={it.k}
-              onClick={() => setInterval(it.k)}
+              onClick={() => setTab(it.k)}
               style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                padding: '4px 10px',
-                borderRadius: 'var(--radius-sm)',
+                fontFamily: 'var(--font-display)',
+                fontSize: 12,
+                letterSpacing: '0.06em',
+                padding: '10px 20px',
                 cursor: 'pointer',
-                background: interval === it.k ? 'var(--accent-blood)' : 'var(--bg-card)',
-                color: interval === it.k ? '#fff' : 'var(--text-secondary)',
-                border: interval === it.k ? '1px solid var(--accent-blood)' : '1px solid var(--border-default)',
+                background: 'transparent',
+                color: tab === it.k ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                border: 'none',
+                borderBottom:
+                  tab === it.k
+                    ? '2px solid var(--accent-blood)'
+                    : '2px solid transparent',
               }}
             >
               {it.l}
@@ -238,220 +345,343 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
           ))}
         </div>
 
-        {stats && (
-          <div
-            style={{
-              padding: '12px 20px',
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: 12,
-              borderBottom: '1px solid var(--border-subtle)',
-            }}
-          >
-            {[
-              { l: t('开始'), v: `$${formatPrice(stats.first)}` },
-              { l: t('最高'), v: `$${formatPrice(stats.high)}`, c: 'var(--accent-emerald)' },
-              { l: t('最低'), v: `$${formatPrice(stats.low)}`, c: 'var(--accent-blood)' },
-              { l: t('当前'), v: `$${formatPrice(stats.last)}` },
-            ].map((s, i) => (
-              <div key={i}>
-                <div
+        {/* K 线视图 */}
+        {tab === 'kline' && (
+          <>
+            <div
+              style={{
+                padding: '12px 20px',
+                display: 'flex',
+                gap: 4,
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+            >
+              {INTERVALS.map((it) => (
+                <button
+                  key={it.k}
+                  onClick={() => setIntervalState(it.k)}
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 9,
-                    color: 'var(--text-tertiary)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
+                    fontSize: 11,
+                    padding: '4px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    background: interval === it.k ? 'var(--accent-blood)' : 'var(--bg-card)',
+                    color: interval === it.k ? '#fff' : 'var(--text-secondary)',
+                    border:
+                      interval === it.k
+                        ? '1px solid var(--accent-blood)'
+                        : '1px solid var(--border-default)',
                   }}
                 >
-                  {s.l}
-                </div>
-                <div
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 13,
-                    marginTop: 4,
-                    color: s.c || 'var(--text-primary)',
-                  }}
-                >
-                  {s.v}
-                </div>
+                  {it.l}
+                </button>
+              ))}
+              {/* MA legend */}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 10, alignItems: 'center', color: 'var(--text-tertiary)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: 'var(--accent-gold)' }} />
+                  MA20
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: 'var(--accent-azure)' }} />
+                  MA60
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: 'var(--accent-blood)' }} />
+                  RSI14
+                </span>
               </div>
-            ))}
-          </div>
-        )}
+            </div>
 
-        <div style={{ padding: 16, minHeight: CHART_H + 24 }}>
-          {isLoading && numBars === 0 && (
-            <div
-              style={{
-                height: CHART_H,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                color: 'var(--text-tertiary)',
-              }}
-            >
-              {t('加载中…')}
-            </div>
-          )}
-          {isError && (
-            <div
-              style={{
-                height: CHART_H,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                color: 'var(--accent-blood)',
-              }}
-            >
-              {t('加载失败')}
-            </div>
-          )}
-          {numBars > 0 && (
-            <svg
-              width="100%"
-              viewBox={`0 0 ${CHART_W} ${CHART_H}`}
-              onMouseMove={handleMove}
-              onMouseLeave={() => setHover(null)}
-              style={{ display: 'block', cursor: 'crosshair' }}
-            >
-              {priceTicks.map((p, i) => (
-                <g key={`grid-${i}`}>
+            {stats && (
+              <div
+                style={{
+                  padding: '12px 20px',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(4, 1fr)',
+                  gap: 12,
+                  borderBottom: '1px solid var(--border-subtle)',
+                }}
+              >
+                {[
+                  { l: t('开始'), v: `$${formatPrice(stats.first)}` },
+                  { l: t('最高'), v: `$${formatPrice(stats.high)}`, c: 'var(--accent-emerald)' },
+                  { l: t('最低'), v: `$${formatPrice(stats.low)}`, c: 'var(--accent-blood)' },
+                  { l: t('当前'), v: `$${formatPrice(stats.last)}` },
+                ].map((s, i) => (
+                  <div key={i}>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 9,
+                        color: 'var(--text-tertiary)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.08em',
+                      }}
+                    >
+                      {s.l}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 13,
+                        marginTop: 4,
+                        color: s.c || 'var(--text-primary)',
+                      }}
+                    >
+                      {s.v}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ padding: 16, minHeight: CHART_H + 24 }}>
+              {klineQuery.isLoading && numBars === 0 && (
+                <div
+                  style={{
+                    height: CHART_H,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    color: 'var(--text-tertiary)',
+                  }}
+                >
+                  {t('加载中…')}
+                </div>
+              )}
+              {klineQuery.isError && (
+                <div
+                  style={{
+                    height: CHART_H,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    color: 'var(--accent-blood)',
+                  }}
+                >
+                  {t('加载失败')}
+                </div>
+              )}
+              {numBars > 0 && (
+                <svg
+                  width="100%"
+                  viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+                  onMouseMove={handleMove}
+                  onMouseLeave={() => setHover(null)}
+                  style={{ display: 'block', cursor: 'crosshair' }}
+                >
+                  {/* 价格网格 */}
+                  {priceTicks.map((p, i) => (
+                    <g key={`grid-${i}`}>
+                      <line
+                        x1={PAD_L}
+                        x2={PAD_L + innerW}
+                        y1={yOfPrice(p)}
+                        y2={yOfPrice(p)}
+                        stroke="var(--border-subtle)"
+                        strokeDasharray="2 4"
+                      />
+                      <text
+                        x={PAD_L - 8}
+                        y={yOfPrice(p) + 4}
+                        textAnchor="end"
+                        fontSize={10}
+                        fontFamily="var(--font-mono)"
+                        fill="var(--text-tertiary)"
+                      >
+                        {formatPrice(p)}
+                      </text>
+                    </g>
+                  ))}
+
+                  {/* 蜡烛 */}
+                  {bars.map((b, i) => {
+                    const o = parseFloat(b.open)
+                    const c = parseFloat(b.close)
+                    const h = parseFloat(b.high)
+                    const l = parseFloat(b.low)
+                    const v = parseFloat(b.volume)
+                    const up = c >= o
+                    const color = up ? 'var(--accent-emerald)' : 'var(--accent-blood)'
+                    const x = xOf(i)
+                    const yHigh = yOfPrice(h)
+                    const yLow = yOfPrice(l)
+                    const yOpen = yOfPrice(o)
+                    const yClose = yOfPrice(c)
+                    const bodyTop = Math.min(yOpen, yClose)
+                    const bodyH = Math.max(1, Math.abs(yOpen - yClose))
+                    const volH = VOL_TOP + VOL_H - yOfVol(v)
+                    return (
+                      <g key={i}>
+                        <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke={color} strokeWidth={1} />
+                        <rect
+                          x={x - bodyW / 2}
+                          y={bodyTop}
+                          width={bodyW}
+                          height={bodyH}
+                          fill={color}
+                          opacity={up ? 0.9 : 1}
+                        />
+                        <rect
+                          x={x - bodyW / 2}
+                          y={yOfVol(v)}
+                          width={bodyW}
+                          height={Math.max(0, volH)}
+                          fill={color}
+                          opacity={0.45}
+                        />
+                      </g>
+                    )
+                  })}
+
+                  {/* MA 叠加 */}
+                  <path d={maPath(ma20)} stroke="var(--accent-gold)" strokeWidth={1.2} fill="none" />
+                  <path d={maPath(ma60)} stroke="var(--accent-azure)" strokeWidth={1.2} fill="none" />
+
+                  {/* 成交量底线 */}
                   <line
                     x1={PAD_L}
                     x2={PAD_L + innerW}
-                    y1={yOfPrice(p)}
-                    y2={yOfPrice(p)}
-                    stroke="var(--border-subtle)"
-                    strokeDasharray="2 4"
+                    y1={VOL_TOP + VOL_H}
+                    y2={VOL_TOP + VOL_H}
+                    stroke="var(--border-default)"
+                  />
+
+                  {/* RSI 副图背景 + 30/70 ref */}
+                  <rect
+                    x={PAD_L}
+                    y={RSI_TOP}
+                    width={innerW}
+                    height={RSI_H}
+                    fill="var(--bg-card)"
+                    opacity={0.3}
+                  />
+                  <line
+                    x1={PAD_L}
+                    x2={PAD_L + innerW}
+                    y1={yOfRsi(70)}
+                    y2={yOfRsi(70)}
+                    stroke="var(--accent-blood)"
+                    strokeDasharray="2 3"
+                    opacity={0.4}
+                  />
+                  <line
+                    x1={PAD_L}
+                    x2={PAD_L + innerW}
+                    y1={yOfRsi(30)}
+                    y2={yOfRsi(30)}
+                    stroke="var(--accent-emerald)"
+                    strokeDasharray="2 3"
+                    opacity={0.4}
                   />
                   <text
                     x={PAD_L - 8}
-                    y={yOfPrice(p) + 4}
+                    y={yOfRsi(70) + 3}
                     textAnchor="end"
-                    fontSize={10}
+                    fontSize={9}
                     fontFamily="var(--font-mono)"
-                    fill="var(--text-tertiary)"
+                    fill="var(--accent-blood)"
+                    opacity={0.7}
                   >
-                    {formatPrice(p)}
+                    70
                   </text>
-                </g>
-              ))}
-
-              <line
-                x1={PAD_L}
-                x2={PAD_L + innerW}
-                y1={volTop + VOL_H}
-                y2={volTop + VOL_H}
-                stroke="var(--border-default)"
-              />
-
-              {bars.map((b, i) => {
-                const o = parseFloat(b.open)
-                const c = parseFloat(b.close)
-                const h = parseFloat(b.high)
-                const l = parseFloat(b.low)
-                const v = parseFloat(b.volume)
-                const up = c >= o
-                const color = up ? 'var(--accent-emerald)' : 'var(--accent-blood)'
-                const x = xOf(i)
-                const yHigh = yOfPrice(h)
-                const yLow = yOfPrice(l)
-                const yOpen = yOfPrice(o)
-                const yClose = yOfPrice(c)
-                const bodyTop = Math.min(yOpen, yClose)
-                const bodyH = Math.max(1, Math.abs(yOpen - yClose))
-                const volH = volTop + VOL_H - yOfVol(v)
-                return (
-                  <g key={i}>
-                    <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke={color} strokeWidth={1} />
-                    <rect
-                      x={x - bodyW / 2}
-                      y={bodyTop}
-                      width={bodyW}
-                      height={bodyH}
-                      fill={color}
-                      opacity={up ? 0.9 : 1}
-                    />
-                    <rect
-                      x={x - bodyW / 2}
-                      y={yOfVol(v)}
-                      width={bodyW}
-                      height={Math.max(0, volH)}
-                      fill={color}
-                      opacity={0.45}
-                    />
-                  </g>
-                )
-              })}
-
-              {[0, Math.floor(numBars / 2), numBars - 1].map((i) => {
-                if (i < 0 || i >= numBars) return null
-                const ts = bars[i].time
-                const dt = new Date(ts)
-                const label = `${dt.getUTCMonth() + 1}/${dt.getUTCDate()} ${dt
-                  .getUTCHours()
-                  .toString()
-                  .padStart(2, '0')}:${dt.getUTCMinutes().toString().padStart(2, '0')}`
-                return (
                   <text
-                    key={`xt-${i}`}
-                    x={xOf(i)}
-                    y={CHART_H - 12}
-                    textAnchor="middle"
-                    fontSize={10}
+                    x={PAD_L - 8}
+                    y={yOfRsi(30) + 3}
+                    textAnchor="end"
+                    fontSize={9}
                     fontFamily="var(--font-mono)"
-                    fill="var(--text-tertiary)"
+                    fill="var(--accent-emerald)"
+                    opacity={0.7}
                   >
-                    {label}
+                    30
                   </text>
-                )
-              })}
 
-              {hover && hoverBar && (
-                <g pointerEvents="none">
-                  <line
-                    x1={xOf(hover.idx)}
-                    x2={xOf(hover.idx)}
-                    y1={PAD_T}
-                    y2={CHART_H - PAD_B}
-                    stroke="var(--text-tertiary)"
-                    strokeDasharray="3 3"
-                    strokeWidth={1}
-                  />
-                </g>
+                  {/* RSI 折线 */}
+                  <path d={rsiPath} stroke="var(--accent-blood)" strokeWidth={1.2} fill="none" />
+
+                  {/* X 轴时间 */}
+                  {[0, Math.floor(numBars / 2), numBars - 1].map((i) => {
+                    if (i < 0 || i >= numBars) return null
+                    const ts = bars[i].time
+                    const dt = new Date(ts)
+                    const label = `${dt.getUTCMonth() + 1}/${dt.getUTCDate()} ${dt
+                      .getUTCHours()
+                      .toString()
+                      .padStart(2, '0')}:${dt.getUTCMinutes().toString().padStart(2, '0')}`
+                    return (
+                      <text
+                        key={`xt-${i}`}
+                        x={xOf(i)}
+                        y={CHART_H - 6}
+                        textAnchor="middle"
+                        fontSize={10}
+                        fontFamily="var(--font-mono)"
+                        fill="var(--text-tertiary)"
+                      >
+                        {label}
+                      </text>
+                    )
+                  })}
+
+                  {/* 十字光标 */}
+                  {hover && hoverBar && (
+                    <line
+                      x1={xOf(hover.idx)}
+                      x2={xOf(hover.idx)}
+                      y1={PAD_T}
+                      y2={CHART_H - PAD_B}
+                      stroke="var(--text-tertiary)"
+                      strokeDasharray="3 3"
+                      strokeWidth={1}
+                      pointerEvents="none"
+                    />
+                  )}
+                </svg>
               )}
-            </svg>
-          )}
-          {hoverBar && (
-            <div
-              style={{
-                marginTop: 8,
-                padding: '8px 12px',
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 'var(--radius-sm)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                color: 'var(--text-secondary)',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(5, 1fr)',
-                gap: 8,
-              }}
-            >
-              <span>O: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.open))}</b></span>
-              <span>H: <b style={{ color: 'var(--accent-emerald)' }}>{formatPrice(parseFloat(hoverBar.high))}</b></span>
-              <span>L: <b style={{ color: 'var(--accent-blood)' }}>{formatPrice(parseFloat(hoverBar.low))}</b></span>
-              <span>C: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.close))}</b></span>
-              <span>V: <b style={{ color: 'var(--text-secondary)' }}>{formatVolume(parseFloat(hoverBar.volume))}</b></span>
+              {hoverBar && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: '8px 12px',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                    color: 'var(--text-secondary)',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(6, 1fr)',
+                    gap: 8,
+                  }}
+                >
+                  <span>O: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.open))}</b></span>
+                  <span>H: <b style={{ color: 'var(--accent-emerald)' }}>{formatPrice(parseFloat(hoverBar.high))}</b></span>
+                  <span>L: <b style={{ color: 'var(--accent-blood)' }}>{formatPrice(parseFloat(hoverBar.low))}</b></span>
+                  <span>C: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.close))}</b></span>
+                  <span>V: <b style={{ color: 'var(--text-secondary)' }}>{formatVolume(parseFloat(hoverBar.volume))}</b></span>
+                  <span>RSI: <b style={{ color: 'var(--accent-blood)' }}>{rsi[hover!.idx] !== null ? (rsi[hover!.idx] as number).toFixed(1) : '—'}</b></span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
+
+        {/* 盘口视图 */}
+        {tab === 'orderbook' && (
+          <OrderbookView
+            data={obQuery.data}
+            isLoading={obQuery.isLoading}
+            isError={obQuery.isError}
+            t={t}
+          />
+        )}
 
         <div
           style={{
@@ -461,11 +691,166 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
             fontSize: 10,
             color: 'var(--text-muted)',
             textAlign: 'center',
+            marginTop: 'auto',
           }}
         >
-          {t('5 秒刷新 · Binance USDM Perpetual · 共')} {numBars} {t('根')}
+          {tab === 'kline'
+            ? `${t('5 秒刷新')} · Binance USDM Perpetual · ${t('共')} ${numBars} ${t('根')}`
+            : `${t('3 秒刷新')} · Binance USDM Perpetual · ${t('盘口前 20 档')}`}
         </div>
       </aside>
     </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Orderbook 子组件
+// ---------------------------------------------------------------------------
+
+function OrderbookView({
+  data,
+  isLoading,
+  isError,
+  t,
+}: {
+  data: { bids: [string, string][]; asks: [string, string][] } | undefined
+  isLoading: boolean
+  isError: boolean
+  t: (s: string) => string
+}) {
+  const bids = data?.bids ?? []
+  const asks = data?.asks ?? []
+  const maxQty = useMemo(() => {
+    let m = 0
+    for (const [, q] of [...bids, ...asks]) {
+      const v = parseFloat(q)
+      if (v > m) m = v
+    }
+    return m || 1
+  }, [bids, asks])
+
+  if (isLoading && bids.length === 0) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+        {t('加载中…')}
+      </div>
+    )
+  }
+  if (isError) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)' }}>
+        {t('加载失败')}
+      </div>
+    )
+  }
+
+  // 中间 spread
+  const bestBid = bids.length > 0 ? parseFloat(bids[0][0]) : 0
+  const bestAsk = asks.length > 0 ? parseFloat(asks[0][0]) : 0
+  const spread = bestAsk && bestBid ? bestAsk - bestBid : 0
+  const spreadPct = bestBid ? (spread / bestBid) * 100 : 0
+
+  return (
+    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* 卖盘(降序,最高在上) */}
+      <div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, padding: '0 12px', display: 'flex', justifyContent: 'space-between' }}>
+          <span>{t('卖盘 ASK')}</span>
+          <span>{t('数量')}</span>
+        </div>
+        {asks.slice(0, 20).reverse().map(([p, q], i) => {
+          const qty = parseFloat(q)
+          const widthPct = (qty / maxQty) * 100
+          return (
+            <div
+              key={`ask-${i}`}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                justifyContent: 'space-between',
+                padding: '4px 12px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: `${widthPct}%`,
+                  background: 'rgba(227, 64, 88, 0.10)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <span style={{ color: 'var(--accent-blood)', position: 'relative' }}>{formatPrice(parseFloat(p))}</span>
+              <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>{qty.toFixed(3)}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Spread */}
+      <div
+        style={{
+          padding: '8px 12px',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 'var(--radius-sm)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span style={{ color: 'var(--text-tertiary)' }}>{t('价差 SPREAD')}</span>
+        <span style={{ color: 'var(--text-primary)' }}>
+          {spread.toFixed(2)} <span style={{ color: 'var(--text-tertiary)' }}>({spreadPct.toFixed(4)}%)</span>
+        </span>
+      </div>
+
+      {/* 买盘 */}
+      <div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, padding: '0 12px', display: 'flex', justifyContent: 'space-between' }}>
+          <span>{t('买盘 BID')}</span>
+          <span>{t('数量')}</span>
+        </div>
+        {bids.slice(0, 20).map(([p, q], i) => {
+          const qty = parseFloat(q)
+          const widthPct = (qty / maxQty) * 100
+          return (
+            <div
+              key={`bid-${i}`}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                justifyContent: 'space-between',
+                padding: '4px 12px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: `${widthPct}%`,
+                  background: 'rgba(62, 212, 146, 0.10)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <span style={{ color: 'var(--accent-emerald)', position: 'relative' }}>{formatPrice(parseFloat(p))}</span>
+              <span style={{ color: 'var(--text-secondary)', position: 'relative' }}>{qty.toFixed(3)}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
