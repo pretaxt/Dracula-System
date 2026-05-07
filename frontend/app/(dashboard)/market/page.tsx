@@ -358,12 +358,12 @@ export default function MarketPage() {
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right', color: 'var(--accent-emerald)' }}>
                       {r.high_24h && parseFloat(r.high_24h) > 0
-                        ? `$${formatPrice(parseFloat(r.high_24h))}`
+                        ? formatPrice(parseFloat(r.high_24h))
                         : '—'}
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right', color: 'var(--accent-blood)' }}>
                       {r.low_24h && parseFloat(r.low_24h) > 0
-                        ? `$${formatPrice(parseFloat(r.low_24h))}`
+                        ? formatPrice(parseFloat(r.low_24h))
                         : '—'}
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
