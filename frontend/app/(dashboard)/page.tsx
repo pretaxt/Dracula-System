@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import { getOpportunities } from '@/lib/api/funding'
@@ -7,6 +8,8 @@ import { Wallet, TrendingUp, BarChart3, Shield, CheckCircle2, TrendingUp as TrUp
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, StatusDot, type BadgeTone } from '@/components/ui/Button'
 import { ProgressBar, KPICard } from '@/components/ui/Stats'
+import { SkeletonKpiCard, Skeleton } from '@/components/ui/Skeleton'
+import { ErrorBanner } from '@/components/ui/ErrorBanner'
 import { useT } from '@/components/i18n/I18nProvider'
 
 const STRATEGY_PERF: { name: string; pnl: number; pct: number; tone: 'active' | 'warn' | 'paused' }[] = [
@@ -44,11 +47,27 @@ const OPP_TONE: Record<string, BadgeTone> = {
 
 export default function DashboardPage() {
   const { t } = useT()
-  const { data: summary, isLoading } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
-  const { data: opps } = useQuery({ queryKey: ['opportunities'], queryFn: getOpportunities, refetchInterval: 15_000 })
+  const { data: summary, isLoading, isError, error, refetch } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
+  const { data: opps, refetch: refetchOpps } = useQuery({ queryKey: ['opportunities'], queryFn: getOpportunities, refetchInterval: 15_000 })
 
   if (isLoading) {
-    return <div style={{ padding: 48, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{t('加载中…')}</div>
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          <SkeletonKpiCard /><SkeletonKpiCard /><SkeletonKpiCard /><SkeletonKpiCard />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+          <Skeleton height={300} rounded="md" />
+          <Skeleton height={300} rounded="md" />
+        </div>
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <ErrorBanner message={error} onRetry={() => { refetch(); refetchOpps() }} />
+    )
   }
 
   const todayFund = parseFloat(summary?.today_funding_usd || '0')
@@ -229,10 +248,26 @@ export default function DashboardPage() {
             title={t('实时套利机会')}
             subtitle="LIVE OPPORTUNITIES · UPDATING"
             right={
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
-                <StatusDot tone="active" />
-                <span>{t('实时')}</span>
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  <StatusDot tone="active" />
+                  <span>{t('实时')}</span>
+                </span>
+                <Link
+                  href="/funding-rates"
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                    color: 'var(--accent-blood)',
+                    textDecoration: 'none',
+                    transition: 'color var(--duration-fast)',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent-blood-bright)' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--accent-blood)' }}
+                >
+                  查看全部 →
+                </Link>
+              </div>
             }
           />
           <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>

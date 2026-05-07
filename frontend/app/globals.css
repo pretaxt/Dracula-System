@@ -138,6 +138,12 @@ body::after {
   }
 }
 
+/* Skeleton shimmer */
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* 应用类 */
 .pulse-blood { animation: pulse-blood 2s ease-in-out infinite; }
 .animate-in  { animation: slide-in-up 0.4s var(--ease-out-expo) backwards; }

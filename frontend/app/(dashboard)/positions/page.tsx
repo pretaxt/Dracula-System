@@ -1,8 +1,10 @@
 'use client'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getPositions, closePosition } from '@/lib/api/positions'
 import { Card, CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button, StatusDot } from '@/components/ui/Button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useT } from '@/components/i18n/I18nProvider'
 
 type Position = {
@@ -32,7 +34,14 @@ export default function PositionsPage() {
   const { t } = useT()
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['positions'], queryFn: () => getPositions(), refetchInterval: 15_000 })
-  const closeMut = useMutation({ mutationFn: (uuid: string) => closePosition(uuid), onSuccess: () => qc.invalidateQueries({ queryKey: ['positions'] }) })
+  const [pendingClose, setPendingClose] = useState<{ uuid: string; symbol: string } | null>(null)
+  const closeMut = useMutation({
+    mutationFn: (uuid: string) => closePosition(uuid),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['positions'] })
+      setPendingClose(null)
+    },
+  })
 
   const positions: Position[] = data?.data ?? []
   const totalCount     = positions.length
@@ -123,7 +132,7 @@ export default function PositionsPage() {
                   <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                     {p.status === 'open' && (
                       <button
-                        onClick={() => { if (confirm('Close this position?')) closeMut.mutate(p.uuid) }}
+                        onClick={() => setPendingClose({ uuid: p.uuid, symbol: p.symbol })}
                         style={{
                           fontFamily: 'var(--font-mono)',
                           fontSize: 10,
@@ -198,6 +207,27 @@ export default function PositionsPage() {
           </tbody>
         </table>
       </CardElevated>
+
+      <ConfirmDialog
+        open={pendingClose !== null}
+        tone="danger"
+        title="平仓确认"
+        message={
+          <>
+            确认要平仓 <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{pendingClose?.symbol}</strong> 吗?
+            {'\n\n'}此操作不可撤销,系统将立即按市价平掉该仓位的多空两腿。
+          </>
+        }
+        confirmText="确认平仓"
+        cancelText="取消"
+        loading={closeMut.isPending}
+        onConfirm={() => {
+          if (pendingClose) closeMut.mutate(pendingClose.uuid)
+        }}
+        onCancel={() => {
+          if (!closeMut.isPending) setPendingClose(null)
+        }}
+      />
     </div>
   )
 }

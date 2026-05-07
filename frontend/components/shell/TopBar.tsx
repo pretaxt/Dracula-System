@@ -1,11 +1,13 @@
 'use client'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Bell } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Bell, Power } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot, type StatusTone } from '../ui/Button'
 import ThemeToggle from '../theme/ThemeToggle'
 import LangToggle from '../i18n/LangToggle'
+import { stopStrategy } from '@/lib/api/strategies'
 
 const TITLE_MAP: Record<string, string> = {
   '/':              '总览',
@@ -44,6 +46,17 @@ function UtcClock() {
 export default function TopBar() {
   const pathname = usePathname()
   const { t } = useT()
+  const qc = useQueryClient()
+  const stopMut = useMutation({
+    mutationFn: stopStrategy,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }),
+  })
+
+  const handleEmergencyStop = () => {
+    if (confirm('⚠️ 紧急停止 EMERGENCY STOP\n\n确认要立即停止所有运行中的策略？\n现有持仓不会自动平仓。')) {
+      stopMut.mutate()
+    }
+  }
 
   // 当前页面标题 — 优先精确匹配, 其次找以 pathname 开头的 key
   const titleZh =
@@ -116,6 +129,46 @@ export default function TopBar() {
           <UtcClock />
           <ThemeToggle />
           <LangToggle />
+
+          <button
+            type="button"
+            onClick={handleEmergencyStop}
+            disabled={stopMut.isPending}
+            title="紧急停止所有策略 / Emergency stop"
+            style={{
+              background: 'rgba(227, 64, 88, 0.10)',
+              color: 'var(--accent-blood)',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              border: '1px solid var(--accent-blood)',
+              cursor: stopMut.isPending ? 'not-allowed' : 'pointer',
+              opacity: stopMut.isPending ? 0.5 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all var(--duration-fast)',
+            }}
+            onMouseEnter={(e) => {
+              if (!stopMut.isPending) {
+                e.currentTarget.style.background = 'var(--accent-blood)'
+                e.currentTarget.style.color = '#fff'
+                e.currentTarget.style.boxShadow = '0 0 16px var(--accent-blood-glow)'
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(227, 64, 88, 0.10)'
+              e.currentTarget.style.color = 'var(--accent-blood)'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            <Power size={12} />
+            <span>EMERGENCY STOP</span>
+          </button>
 
           <button
             type="button"

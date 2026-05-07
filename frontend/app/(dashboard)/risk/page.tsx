@@ -1,9 +1,10 @@
 'use client'
-import { useQuery } from '@tanstack/react-query'
-import { Lock, CheckCircle2 } from 'lucide-react'
-import { getRiskLimits } from '@/lib/api/risk'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Lock, CheckCircle2, Pencil, X as XIcon } from 'lucide-react'
+import { getRiskLimits, patchRiskLimits } from '@/lib/api/risk'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
-import { Badge } from '@/components/ui/Button'
+import { Badge, Button } from '@/components/ui/Button'
 import { ProgressBar } from '@/components/ui/Stats'
 import { useT } from '@/components/i18n/I18nProvider'
 
@@ -15,7 +16,6 @@ type RiskLimits = {
   max_total_notional_usd: string
 }
 
-// 风控事件日志 mock — 后端无事件日志 API
 const RISK_EVENTS: { time: string; tier: 'TIER 1' | 'TIER 2' | 'TIER 3'; event: string; trigger: string; value: string; valueColor?: 'positive' | 'negative'; action: string; actionColor?: string }[] = [
   { time: '04-28 22:14', tier: 'TIER 2', event: 'API 错误率告警', trigger: 'HTX 5m err rate',  value: '3.2% / 5%',     action: '自动恢复',   actionColor: 'var(--accent-emerald)' },
   { time: '04-21 09:42', tier: 'TIER 1', event: 'WebSocket 断连', trigger: 'Bybit WS',         value: '42s',            action: '自动重连',   actionColor: 'var(--accent-emerald)' },
@@ -25,7 +25,25 @@ const RISK_EVENTS: { time: string; tier: 'TIER 1' | 'TIER 2' | 'TIER 3'; event: 
 
 export default function RiskPage() {
   const { t } = useT()
+  const qc = useQueryClient()
   const { data, isLoading } = useQuery<RiskLimits>({ queryKey: ['risk'], queryFn: getRiskLimits })
+
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<{ min_apr_pct: string; max_positions: string; max_total_notional_usd: string }>({
+    min_apr_pct: '',
+    max_positions: '',
+    max_total_notional_usd: '',
+  })
+  const [confirmWiden, setConfirmWiden] = useState(false)
+
+  const patchMut = useMutation({
+    mutationFn: (patch: Record<string, unknown>) => patchRiskLimits(patch, confirmWiden),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['risk'] })
+      setEditing(false)
+      setConfirmWiden(false)
+    },
+  })
 
   if (isLoading || !data) {
     return <div style={{ padding: 48, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{t('加载中…')}</div>
@@ -35,36 +53,221 @@ export default function RiskPage() {
   const maxPos = data.max_positions
   const maxNot = parseFloat(data.max_total_notional_usd || '0')
 
+  const startEdit = () => {
+    setDraft({
+      min_apr_pct: data.min_apr_pct,
+      max_positions: String(data.max_positions),
+      max_total_notional_usd: data.max_total_notional_usd,
+    })
+    setEditing(true)
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setConfirmWiden(false)
+    patchMut.reset()
+  }
+
+  const saveEdit = () => {
+    const patch: Record<string, unknown> = {}
+    if (draft.min_apr_pct !== data.min_apr_pct) patch.min_apr_pct = draft.min_apr_pct
+    if (draft.max_positions !== String(data.max_positions)) patch.max_positions = parseInt(draft.max_positions, 10)
+    if (draft.max_total_notional_usd !== data.max_total_notional_usd) patch.max_total_notional_usd = draft.max_total_notional_usd
+    if (Object.keys(patch).length === 0) {
+      cancelEdit()
+      return
+    }
+    patchMut.mutate(patch)
+  }
+
+  const isWidening =
+    parseFloat(draft.min_apr_pct || '0') < minApr ||
+    parseInt(draft.max_positions || '0', 10) > maxPos ||
+    parseFloat(draft.max_total_notional_usd || '0') > maxNot
+
+  const errorMsg = patchMut.isError
+    ? String((patchMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败')
+    : null
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '6px 10px',
+    background: 'var(--bg-deepest)',
+    border: '1px solid var(--border-default)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--text-primary)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: 12,
+    outline: 'none',
+    boxSizing: 'border-box',
+    textAlign: 'right',
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* 三层风控状态 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        {/* Tier 1 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, alignItems: 'start' }}>
+        {/* Tier 1 — 可编辑 */}
         <CardElevated style={{ padding: 20 }} className="animate-in">
-          <SectionHeader title={t('Tier 1 · 仪表盘可调')} right={<Badge tone="active">SAFE</Badge>} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{t('扫描最低 APR')}</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>{minApr.toFixed(0)}%</span>
+          <SectionHeader
+            title={t('Tier 1 · 仪表盘可调')}
+            right={
+              editing ? (
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  title="取消"
+                  style={{
+                    background: 'transparent',
+                    color: 'var(--text-tertiary)',
+                    border: '1px solid var(--border-strong)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: 4,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                  }}
+                >
+                  <XIcon size={12} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  title="编辑参数"
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10,
+                    color: 'var(--accent-blood)',
+                    background: 'transparent',
+                    border: '1px solid rgba(227,64,88,0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    transition: 'all var(--duration-fast)',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(227,64,88,0.08)' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                >
+                  <Pencil size={10} />
+                  <span>调整</span>
+                </button>
+              )
+            }
+          />
+
+          {!editing ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{t('扫描最低 APR')}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{minApr.toFixed(0)}%</span>
+                </div>
+                <ProgressBar pct={Math.min(100, (minApr / 25) * 100)} tone="success" />
               </div>
-              <ProgressBar pct={Math.min(100, (minApr / 25) * 100)} tone="success" />
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{t('默认仓位规模')}</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>$500</span>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{maxPos}</span>
+                </div>
+                <ProgressBar pct={Math.min(100, (maxPos / 10) * 100)} tone="success" />
               </div>
-              <ProgressBar pct={50} tone="success" />
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>{maxPos}</span>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>最高名义敞口</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>${maxNot.toFixed(0)}</span>
+                </div>
+                <ProgressBar pct={50} tone="success" />
               </div>
-              <ProgressBar pct={Math.min(100, (maxPos / 10) * 100)} tone="success" />
             </div>
-          </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('扫描最低 APR')} (%)</div>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={draft.min_apr_pct}
+                  onChange={(e) => setDraft((d) => ({ ...d, min_apr_pct: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</div>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={draft.max_positions}
+                  onChange={(e) => setDraft((d) => ({ ...d, max_positions: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>最高名义敞口 ($)</div>
+                <input
+                  type="number"
+                  step="100"
+                  value={draft.max_total_notional_usd}
+                  onChange={(e) => setDraft((d) => ({ ...d, max_total_notional_usd: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+
+              {isWidening && (
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  fontSize: 11,
+                  color: 'var(--accent-gold)',
+                  background: 'rgba(240,184,80,0.08)',
+                  border: '1px solid rgba(240,184,80,0.25)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '8px 10px',
+                  cursor: 'pointer',
+                  marginTop: 4,
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={confirmWiden}
+                    onChange={(e) => setConfirmWiden(e.target.checked)}
+                    style={{ marginTop: 2, accentColor: 'var(--accent-gold)' }}
+                  />
+                  <span>检测到放宽风控,确认要继续吗?</span>
+                </label>
+              )}
+
+              {errorMsg && (
+                <div style={{
+                  fontSize: 11,
+                  color: 'var(--accent-blood)',
+                  background: 'rgba(227,64,88,0.08)',
+                  border: '1px solid rgba(227,64,88,0.25)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '6px 10px',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                  {errorMsg}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <Button
+                  variant="primary"
+                  onClick={saveEdit}
+                  disabled={patchMut.isPending || (isWidening && !confirmWiden)}
+                  style={{ flex: 1, fontSize: 12 }}
+                >
+                  {patchMut.isPending ? '保存中…' : t('保存')}
+                </Button>
+                <Button variant="secondary" onClick={cancelEdit} style={{ flex: 1, fontSize: 12 }}>
+                  {t('取消')}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardElevated>
 
         {/* Tier 2 */}
@@ -87,8 +290,8 @@ export default function RiskPage() {
             </div>
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>最高名义敞口</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>${maxNot.toFixed(0)}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>止损百分比</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{parseFloat(data.stop_loss_pct || '0').toFixed(2)}%</span>
               </div>
               <ProgressBar pct={50} tone="success" />
             </div>

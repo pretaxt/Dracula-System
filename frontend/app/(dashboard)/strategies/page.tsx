@@ -1,7 +1,7 @@
 'use client'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { getStrategyStatus } from '@/lib/api/strategies'
+import { getStrategyStatus, startStrategy, stopStrategy } from '@/lib/api/strategies'
 import { CardElevated } from '@/components/ui/Card'
 import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
@@ -75,7 +75,10 @@ type Filter = 'all' | 'running' | 'p0' | 'p1' | 'planned'
 
 export default function StrategiesPage() {
   const { t } = useT()
+  const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['strategy'], queryFn: getStrategyStatus, refetchInterval: 10_000 })
+  const startMut = useMutation({ mutationFn: startStrategy, onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
+  const stopMut  = useMutation({ mutationFn: stopStrategy,  onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
   const [filter, setFilter] = useState<Filter>('all')
 
   // funding_rate 真状态合并到 #01 卡片
@@ -221,12 +224,34 @@ export default function StrategiesPage() {
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <Button variant="secondary" style={{ flex: 1, fontSize: 12 }}>{t('查看详情')}</Button>
-              <Button
-                variant={s.status === 'DISABLED' ? 'primary' : 'secondary'}
-                style={{ flex: 1, fontSize: 12 }}
-              >
-                {s.status === 'DISABLED' ? '启用监控' : t('配置')}
-              </Button>
+              {s.num === '01' ? (
+                fundingRunning ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => { if (confirm('停止资金费率策略?\n现有持仓不会自动平仓。')) stopMut.mutate() }}
+                    disabled={stopMut.isPending}
+                    style={{ flex: 1, fontSize: 12, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
+                  >
+                    {stopMut.isPending ? '停止中…' : '停止策略'}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    onClick={() => startMut.mutate()}
+                    disabled={startMut.isPending}
+                    style={{ flex: 1, fontSize: 12 }}
+                  >
+                    {startMut.isPending ? '启动中…' : '启动策略'}
+                  </Button>
+                )
+              ) : (
+                <Button
+                  variant={s.status === 'DISABLED' ? 'primary' : 'secondary'}
+                  style={{ flex: 1, fontSize: 12 }}
+                >
+                  {s.status === 'DISABLED' ? '启用监控' : t('配置')}
+                </Button>
+              )}
             </div>
           </CardElevated>
         ))}
