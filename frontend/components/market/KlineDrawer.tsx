@@ -14,7 +14,7 @@ const INTERVALS: { k: KlineInterval; l: string }[] = [
 
 const CHART_W = 760
 const CHART_H = 360
-const PAD_L = 56
+const PAD_L = 84
 const PAD_R = 12
 const PAD_T = 12
 const PAD_B = 36
