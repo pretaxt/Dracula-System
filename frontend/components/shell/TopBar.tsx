@@ -1,13 +1,14 @@
 'use client'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Menu, Power } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot, type StatusTone } from '../ui/Button'
 import ThemeToggle from '../theme/ThemeToggle'
 import LangToggle from '../i18n/LangToggle'
 import { stopStrategy } from '@/lib/api/strategies'
+import { getExchangeHealth, type ExchangeHealth } from '@/lib/api/system'
 
 const TITLE_MAP: Record<string, string> = {
   '/':              '总览',
@@ -18,14 +19,30 @@ const TITLE_MAP: Record<string, string> = {
   '/funding-rates': '机会扫描',
 }
 
-const EXCHANGES: { name: string; tone: StatusTone }[] = [
-  { name: 'Binance',     tone: 'active' },
-  { name: 'Bybit',       tone: 'active' },
-  { name: 'OKX',         tone: 'active' },
-  { name: 'HTX',         tone: 'warn' },
-  { name: 'Bitget',      tone: 'active' },
-  { name: 'Hyperliquid', tone: 'active' },
+const EXCHANGE_DISPLAY_NAMES: Record<string, string> = {
+  binance: 'Binance',
+  bybit: 'Bybit',
+  okx: 'OKX',
+  htx: 'HTX',
+  bitget: 'Bitget',
+  hyperliquid: 'Hyperliquid',
+}
+
+const FALLBACK_EXCHANGES: ExchangeHealth[] = [
+  { name: 'binance',     status: 'unconfigured', ping_ms: null },
+  { name: 'bybit',       status: 'unconfigured', ping_ms: null },
+  { name: 'okx',         status: 'unconfigured', ping_ms: null },
+  { name: 'htx',         status: 'unconfigured', ping_ms: null },
+  { name: 'bitget',      status: 'unconfigured', ping_ms: null },
+  { name: 'hyperliquid', status: 'unconfigured', ping_ms: null },
 ]
+
+const STATUS_TO_TONE: Record<ExchangeHealth['status'], StatusTone> = {
+  active: 'active',
+  warn: 'warn',
+  critical: 'critical',
+  unconfigured: 'paused',
+}
 
 function UtcClock() {
   const [time, setTime] = useState('')
@@ -56,6 +73,12 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
     mutationFn: stopStrategy,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }),
   })
+  const { data: healthData } = useQuery({
+    queryKey: ['exchange-health'],
+    queryFn: getExchangeHealth,
+    refetchInterval: 60_000,
+  })
+  const exchanges: ExchangeHealth[] = healthData?.data ?? FALLBACK_EXCHANGES
 
   const handleEmergencyStop = () => {
     if (confirm('⚠️ 紧急停止 EMERGENCY STOP\n\n确认要立即停止所有运行中的策略？\n现有持仓不会自动平仓。')) {
@@ -143,12 +166,24 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
               flexWrap: 'wrap',
             }}
           >
-            {EXCHANGES.map((ex) => (
-              <span key={ex.name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <StatusDot tone={ex.tone} />
-                <span>{ex.name}</span>
-              </span>
-            ))}
+            {exchanges.map((ex) => {
+              const display = EXCHANGE_DISPLAY_NAMES[ex.name] ?? ex.name
+              const tone = STATUS_TO_TONE[ex.status] ?? 'paused'
+              const tooltip =
+                ex.ping_ms !== null
+                  ? `${display}: ${ex.ping_ms}ms (${ex.status})`
+                  : `${display}: ${ex.status}`
+              return (
+                <span
+                  key={ex.name}
+                  title={tooltip}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <StatusDot tone={tone} />
+                  <span>{display}</span>
+                </span>
+              )
+            })}
           </div>
         </div>
 

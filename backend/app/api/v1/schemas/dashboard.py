@@ -18,6 +18,10 @@ class DashboardSummary(BaseModel):
     today_funding_usd: str
     monthly_pnl_usd: str
     daily_drawdown_pct: str
+    weekly_dd_pct: str
+    margin_usage_pct: str
+    api_error_rate_5m_pct: str
+    ws_stability_pct: str
     total_equity_usd: str
     open_positions: int
     avg_apr_pct: str

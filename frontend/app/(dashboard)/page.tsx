@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import { getOpportunities } from '@/lib/api/funding'
+import { getActivity } from '@/lib/api/system'
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import { Wallet, TrendingUp, BarChart3, Shield, CheckCircle2, TrendingUp as TrUp, AlertTriangle, Zap, XCircle } from 'lucide-react'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
@@ -19,14 +20,6 @@ const STRATEGY_PERF: { name: string; pnl: number; pct: number; tone: 'active' | 
   { name: '跨所基差套利', pnl:  67, pct: 15, tone: 'active' },
   { name: '配对交易',     pnl: -32, pct:  7, tone: 'warn' },
   { name: 'CEX-DEX 监控', pnl:   0, pct:  0, tone: 'paused' },
-]
-
-const ACTIVITY: { icon: 'up' | 'check' | 'warn' | 'zap' | 'x'; text: string; time: string }[] = [
-  { icon: 'up',    text: '资金费率结算 · HYPE/USDC @ Hyperliquid +$2.43',                       time: '14:00:01 UTC · 1 分钟前' },
-  { icon: 'check', text: '建仓成功 · ETH/USDT @ Binance · APR 18.4% · 仓位 $500',               time: '13:42:18 UTC · 19 分钟前' },
-  { icon: 'warn',  text: 'HTX API 延迟升高 · 当前 P95 延迟 480ms',                              time: '13:28:51 UTC · 33 分钟前' },
-  { icon: 'zap',   text: 'CEX-DEX 机会推送 · PEPE 价差 1.41% · 已发 Telegram',                  time: '13:15:02 UTC · 47 分钟前' },
-  { icon: 'x',     text: '平仓 · ARB/USDT @ Bybit · 资金费率连续 2 期转负 · +$8.21',            time: '12:58:33 UTC · 1 小时前' },
 ]
 
 const ACTIVITY_ICON = {
@@ -49,6 +42,7 @@ export default function DashboardPage() {
   const { t } = useT()
   const { data: summary, isLoading, isError, error, refetch } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
   const { data: opps, refetch: refetchOpps } = useQuery({ queryKey: ['opportunities'], queryFn: getOpportunities, refetchInterval: 15_000 })
+  const { data: activityData } = useQuery({ queryKey: ['activity'], queryFn: () => getActivity(8), refetchInterval: 30_000 })
 
   if (isLoading) {
     return (
@@ -227,15 +221,22 @@ export default function DashboardPage() {
       {/* ========== 风控状态 + 实时机会 ========== */}
       <div className="row-12">
         <CardElevated style={{ padding: 20 }} className="animate-in">
-          <SectionHeader title={t('风控状态')} right={<Badge tone="active">SAFE</Badge>} />
+          <SectionHeader title={t('风控状态')} right={<Badge tone={Math.abs(dailyDDPct) >= 3 ? 'critical' : Math.abs(dailyDDPct) >= 2 ? 'warn' : 'active'}>{Math.abs(dailyDDPct) >= 3 ? 'HALT' : Math.abs(dailyDDPct) >= 2 ? 'WARN' : 'SAFE'}</Badge>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[
-              { l: t('单日回撤'),       v: '-0.32%',  cap: '/ -3.00%' },
-              { l: t('周回撤'),         v: '-1.04%',  cap: '/ -8.00%' },
-              { l: t('最低保证金率'),   v: '87.3%',   cap: '/ 50%' },
-              { l: t('API 错误率 (5m)'),v: '0.4%',    cap: '/ 5.0%' },
-              { l: t('WS 连接稳定性'),  v: '100%',    cap: '',           accent: 'positive' as const },
-            ].map((row, i) => (
+            {(() => {
+              const weeklyDD    = parseFloat(summary?.weekly_dd_pct          || '0')
+              const marginUsage = parseFloat(summary?.margin_usage_pct       || '0')
+              const apiErr5m    = parseFloat(summary?.api_error_rate_5m_pct  || '0')
+              const wsStab      = parseFloat(summary?.ws_stability_pct       || '100')
+              const marginAvail = Math.max(0, 100 - marginUsage)
+              return [
+                { l: t('单日回撤'),       v: `${dailyDDPct >= 0 ? '+' : ''}${dailyDDPct.toFixed(2)}%`, cap: '/ -3.00%' },
+                { l: t('周回撤'),         v: `${weeklyDD >= 0 ? '+' : ''}${weeklyDD.toFixed(2)}%`,    cap: '/ -8.00%' },
+                { l: t('最低保证金率'),   v: `${marginAvail.toFixed(1)}%`,                            cap: '/ 50%' },
+                { l: t('API 错误率 (5m)'),v: `${apiErr5m.toFixed(1)}%`,                               cap: '/ 5.0%' },
+                { l: t('WS 连接稳定性'),  v: `${wsStab.toFixed(0)}%`,                                 cap: '',          accent: 'positive' as const },
+              ]
+            })().map((row, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{row.l}</span>
                 <div style={{ display: 'flex', gap: 6, fontFamily: 'var(--font-mono)' }}>
@@ -338,9 +339,14 @@ export default function DashboardPage() {
           right={<span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>LAST 1H</span>}
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {ACTIVITY.map((a, i) => (
+          {(activityData?.data ?? []).length === 0 && (
+            <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+              {t('暂无活动记录')}
+            </div>
+          )}
+          {(activityData?.data ?? []).map((a, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)' }}>
-              <div style={{ marginTop: 2 }}>{ACTIVITY_ICON[a.icon]}</div>
+              <div style={{ marginTop: 2 }}>{ACTIVITY_ICON[a.icon as keyof typeof ACTIVITY_ICON] ?? ACTIVITY_ICON.up}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{a.text}</div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 2, color: 'var(--text-tertiary)' }}>{a.time}</div>

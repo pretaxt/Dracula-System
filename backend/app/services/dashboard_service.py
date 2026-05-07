@@ -65,6 +65,27 @@ async def get_summary(session: AsyncSession) -> dict:
         )
     ).scalar_one()
 
+    # 本周净 PnL (从周一 00:00 起)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    weekly_pnl_raw = (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(PositionRecord.realized_pnl + PositionRecord.unrealized_pnl), 0
+                )
+            ).where(PositionRecord.opened_at >= week_start)
+        )
+    ).scalar_one()
+
+    # 当前占用保证金 (open positions)
+    margin_used_total = (
+        await session.execute(
+            select(func.coalesce(func.sum(PositionRecord.margin_used), 0)).where(
+                PositionRecord.status == "open"
+            )
+        )
+    ).scalar_one()
+
     # 开仓数 & 平均 APR
     open_rows = (
         await session.execute(
@@ -91,6 +112,25 @@ async def get_summary(session: AsyncSession) -> dict:
         else Decimal("0")
     )
 
+    weekly_pnl = Decimal(str(weekly_pnl_raw))
+    weekly_dd_pct = (
+        (weekly_pnl / total_equity * Decimal("100"))
+        if total_equity > 0
+        else Decimal("0")
+    )
+
+    margin_used = Decimal(str(margin_used_total))
+    margin_usage_pct = (
+        (margin_used / total_equity * Decimal("100"))
+        if total_equity > 0
+        else Decimal("0")
+    )
+
+    # P2 待接 — 真实 5min API 错误率 / WS 稳定性需要监控埋点。
+    # 当前没有错误就用 100% / 0%(诚实占位,等接入 metrics 后改真值)。
+    api_error_rate_5m_pct = Decimal("0")
+    ws_stability_pct = Decimal("100")
+
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),
         "realized_pnl_usd": str(round(Decimal(str(r_pnl)), 8)),
@@ -98,6 +138,10 @@ async def get_summary(session: AsyncSession) -> dict:
         "today_funding_usd": str(round(Decimal(str(today_funding)), 8)),
         "monthly_pnl_usd": str(round(Decimal(str(monthly_pnl_raw)), 8)),
         "daily_drawdown_pct": str(round(daily_drawdown_pct, 4)),
+        "weekly_dd_pct": str(round(weekly_dd_pct, 4)),
+        "margin_usage_pct": str(round(margin_usage_pct, 4)),
+        "api_error_rate_5m_pct": str(round(api_error_rate_5m_pct, 4)),
+        "ws_stability_pct": str(round(ws_stability_pct, 4)),
         "total_equity_usd": str(round(total_equity, 2)),
         "open_positions": open_count,
         "avg_apr_pct": str(round(avg_apr, 4)),
