@@ -6,6 +6,7 @@ import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { StatusDot } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getMarketTickers, type MarketTicker } from '@/lib/api/market'
+import KlineDrawer from '@/components/market/KlineDrawer'
 
 type SortKey = 'change' | 'volume' | 'funding' | 'symbol'
 type SortDir = 'asc' | 'desc'
@@ -55,6 +56,7 @@ export default function MarketPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('volume')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['market-tickers'],
@@ -258,9 +260,20 @@ export default function MarketPage() {
                 return (
                   <tr
                     key={r.symbol}
-                    style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                    onClick={() => setSelectedSymbol(r.symbol.split('/')[0])}
+                    style={{
+                      borderBottom: '1px solid var(--border-subtle)',
+                      cursor: 'pointer',
+                      transition: 'background var(--duration-fast)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--bg-card-hover)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                    }}
                   >
-                    <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                    <td style={{ padding: '12px', color: 'var(--accent-blood)', fontWeight: 600 }}>
                       {r.symbol}
                     </td>
                     <td
@@ -311,9 +324,13 @@ export default function MarketPage() {
             color: 'var(--text-muted)',
           }}
         >
-          {t('刷新间隔 5 秒 · 数据来自 Binance USDM Perpetual')}
+          {t('刷新间隔 5 秒 · 数据来自 Binance USDM Perpetual · 点击行查看 K 线')}
         </div>
       </CardElevated>
+
+      {selectedSymbol && (
+        <KlineDrawer symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
+      )}
     </div>
   )
 }

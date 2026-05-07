@@ -19,3 +19,18 @@ class MarketTicker(BaseModel):
 class MarketTickersResponse(BaseModel):
     data: list[MarketTicker]
     snapshot_at: int
+
+
+class KlineBar(BaseModel):
+    time: int
+    open: str
+    high: str
+    low: str
+    close: str
+    volume: str
+
+
+class KlinesResponse(BaseModel):
+    symbol: str
+    interval: str
+    data: list[KlineBar]

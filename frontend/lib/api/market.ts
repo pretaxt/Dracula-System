@@ -33,3 +33,37 @@ export async function getMarketTickers(opts?: {
   })
   return data
 }
+
+export type KlineBar = {
+  time: number
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string
+}
+
+export type KlinesResponse = {
+  symbol: string
+  interval: string
+  data: KlineBar[]
+}
+
+export type KlineInterval = '15m' | '1h' | '4h' | '1d'
+
+export async function getKlines(opts: {
+  symbol: string
+  interval?: KlineInterval
+  limit?: number
+  exchange?: string
+}): Promise<KlinesResponse> {
+  const { data } = await apiClient.get<KlinesResponse>('/market/klines', {
+    params: {
+      symbol: opts.symbol,
+      interval: opts.interval ?? '1h',
+      limit: opts.limit ?? 100,
+      exchange: opts.exchange ?? 'binance',
+    },
+  })
+  return data
+}

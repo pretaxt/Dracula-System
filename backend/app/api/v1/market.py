@@ -1,4 +1,4 @@
-"""Market 路由 — 实时行情批量 ticker。"""
+"""Market 路由 — 实时行情批量 ticker + K 线。"""
 from __future__ import annotations
 
 import time
@@ -6,8 +6,13 @@ import time
 from fastapi import APIRouter, Query, Request
 
 from app.api.deps import CurrentUser
-from app.api.v1.schemas.market import MarketTicker, MarketTickersResponse
-from app.services.market_service import get_tickers
+from app.api.v1.schemas.market import (
+    KlineBar,
+    KlinesResponse,
+    MarketTicker,
+    MarketTickersResponse,
+)
+from app.services.market_service import get_klines, get_tickers
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -30,4 +35,25 @@ async def tickers(
     return MarketTickersResponse(
         data=[MarketTicker(**r) for r in raw],
         snapshot_at=int(time.time() * 1000),
+    )
+
+
+@router.get("/klines", response_model=KlinesResponse)
+async def klines(
+    _: CurrentUser,
+    request: Request,
+    symbol: str = Query(..., description="base symbol, e.g. BTC"),
+    interval: str = Query(default="1h", description="1m/5m/15m/30m/1h/2h/4h/1d/1w"),
+    limit: int = Query(default=100, ge=10, le=500),
+    exchange: str = Query(default="binance"),
+) -> KlinesResponse:
+    """USDM perp K 线 (OHLCV)."""
+    adapters = getattr(request.app.state, "adapters", None) or {}
+    raw = await get_klines(
+        adapters, symbol=symbol, interval=interval, limit=limit, exchange=exchange
+    )
+    return KlinesResponse(
+        symbol=symbol.upper(),
+        interval=interval,
+        data=[KlineBar(**r) for r in raw],
     )

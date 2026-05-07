@@ -111,3 +111,65 @@ async def _safe_fetch_funding_rates(
     except Exception as e:  # noqa: BLE001
         logger.warning("fetch_funding_rates_failed", error=str(e))
         return {}
+
+
+# ---------------------------------------------------------------------------
+# K-line / OHLCV
+# ---------------------------------------------------------------------------
+
+_VALID_INTERVALS = {"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"}
+
+
+async def get_klines(
+    adapters: dict[str, Any] | None,
+    symbol: str,
+    interval: str = "1h",
+    limit: int = 100,
+    exchange: str = "binance",
+) -> list[dict]:
+    """USDM perp K 线 (CCXT fetch_ohlcv)。
+
+    返回字段::
+      [{"time": int_ms, "open": str, "high": str, "low": str,
+        "close": str, "volume": str}]
+    """
+    if interval not in _VALID_INTERVALS:
+        interval = "1h"
+    limit = max(1, min(limit, 500))
+
+    adapters = adapters or {}
+    adapter = adapters.get(exchange)
+    if adapter is None:
+        return []
+
+    clients = getattr(adapter, "_clients", {}) or {}
+    client = clients.get(InstrumentType.PERPETUAL)
+    if client is None:
+        return []
+
+    base = symbol.upper().split("/")[0]
+    ccxt_symbol = f"{base}/USDT:USDT"
+
+    try:
+        retry = getattr(adapter, "_call_with_retry", None)
+        if retry is not None:
+            raw = await retry(client.fetch_ohlcv, ccxt_symbol, interval, None, limit)
+        else:
+            raw = await client.fetch_ohlcv(ccxt_symbol, interval, None, limit)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("fetch_ohlcv_failed", symbol=ccxt_symbol, error=str(e))
+        return []
+
+    out: list[dict] = []
+    for r in (raw or []):
+        if len(r) < 6:
+            continue
+        out.append({
+            "time": int(r[0]),
+            "open": str(_to_dec(r[1])),
+            "high": str(_to_dec(r[2])),
+            "low": str(_to_dec(r[3])),
+            "close": str(_to_dec(r[4])),
+            "volume": str(_to_dec(r[5])),
+        })
+    return out
