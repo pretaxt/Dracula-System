@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Lock, CheckCircle2, Pencil, X as XIcon } from 'lucide-react'
-import { getRiskLimits, patchRiskLimits } from '@/lib/api/risk'
+import { getRiskLimits, patchRiskLimits, getRiskEvents, type RiskEvent } from '@/lib/api/risk'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button } from '@/components/ui/Button'
 import { ProgressBar } from '@/components/ui/Stats'
@@ -16,17 +16,34 @@ type RiskLimits = {
   max_total_notional_usd: string
 }
 
-const RISK_EVENTS: { time: string; tier: 'TIER 1' | 'TIER 2' | 'TIER 3'; event: string; trigger: string; value: string; valueColor?: 'positive' | 'negative'; action: string; actionColor?: string }[] = [
-  { time: '04-28 22:14', tier: 'TIER 2', event: 'API 错误率告警', trigger: 'HTX 5m err rate',  value: '3.2% / 5%',     action: '自动恢复',   actionColor: 'var(--accent-emerald)' },
-  { time: '04-21 09:42', tier: 'TIER 1', event: 'WebSocket 断连', trigger: 'Bybit WS',         value: '42s',            action: '自动重连',   actionColor: 'var(--accent-emerald)' },
-  { time: '04-15 14:08', tier: 'TIER 2', event: '资金费率反转',   trigger: 'ARB/USDT funding', value: '-0.018%',        valueColor: 'negative', action: '已平仓',     actionColor: 'var(--accent-emerald)' },
-  { time: '04-08 03:21', tier: 'TIER 1', event: '建仓滑点超阈值', trigger: 'Binance ETH/USDT', value: '0.34%',          action: '已撤单',     actionColor: 'var(--text-tertiary)' },
-]
+const ACTION_COLOR: Record<string, string> = {
+  auto_recovered: 'var(--accent-emerald)',
+  closed:         'var(--accent-emerald)',
+  cancelled:      'var(--text-tertiary)',
+  triggered:      'var(--accent-blood)',
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  auto_recovered: '自动恢复',
+  closed:         '已平仓',
+  cancelled:      '已撤单',
+  triggered:      '已触发',
+}
+
+function formatEventTime(iso: string): string {
+  const d = new Date(iso)
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const hh = String(d.getUTCHours()).padStart(2, '0')
+  const mm = String(d.getUTCMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hh}:${mm}`
+}
 
 export default function RiskPage() {
   const { t } = useT()
   const qc = useQueryClient()
   const { data, isLoading } = useQuery<RiskLimits>({ queryKey: ['risk'], queryFn: getRiskLimits })
+  const { data: eventsData } = useQuery({ queryKey: ['risk-events'], queryFn: () => getRiskEvents(30), refetchInterval: 60_000 })
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<{ min_apr_pct: string; max_positions: string; max_total_notional_usd: string }>({
@@ -374,16 +391,24 @@ export default function RiskPage() {
             </tr>
           </thead>
           <tbody>
-            {RISK_EVENTS.map((e, i) => (
-              <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{e.time}</td>
-                <td style={{ padding: '10px 12px' }}><Badge tone="warn">{e.tier}</Badge></td>
-                <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{e.event}</td>
-                <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{e.trigger}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: e.valueColor === 'negative' ? 'var(--accent-blood)' : 'var(--text-primary)' }}>{e.value}</td>
-                <td style={{ padding: '10px 12px', fontSize: 10, color: e.actionColor }}>{e.action}</td>
-              </tr>
-            ))}
+            {(eventsData?.data ?? []).map((e: RiskEvent, i: number) => {
+              const isNegativeValue = e.value.startsWith('-')
+              return (
+                <tr key={`${e.time}-${i}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{formatEventTime(e.time)}</td>
+                  <td style={{ padding: '10px 12px' }}><Badge tone="warn">{e.tier}</Badge></td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{e.event}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{e.trigger}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: isNegativeValue ? 'var(--accent-blood)' : 'var(--text-primary)' }}>{e.value}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 10, color: ACTION_COLOR[e.action] || 'var(--text-tertiary)' }}>
+                    {ACTION_LABEL[e.action] || e.action}
+                  </td>
+                </tr>
+              )
+            })}
+            {(eventsData?.data ?? []).length === 0 && (
+              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>{t('三层风控全部正常')}</td></tr>
+            )}
           </tbody>
         </table>
       </CardElevated>

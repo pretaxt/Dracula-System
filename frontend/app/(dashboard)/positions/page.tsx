@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getPositions, closePosition } from '@/lib/api/positions'
+import { getOrders, type Order } from '@/lib/api/orders'
 import { Card, CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button, StatusDot } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
@@ -21,19 +22,17 @@ type Position = {
   days_held: string
 }
 
-// 最近订单 mock — 后端无订单流水 API
-const RECENT_ORDERS: { time: string; ex: string; pair: string; type: string; side: string; sideTone: 'positive' | 'negative' | 'neutral'; amount: string; price: string; status: string }[] = [
-  { time: '14:31:05', ex: 'Binance',     pair: 'BTC/USDT',         type: 'LIMIT', side: 'BUY',  sideTone: 'positive', amount: '0.00595', price: '67189.40',     status: 'FILLED' },
-  { time: '14:31:05', ex: 'Binance',     pair: 'BTC/USDT-PERP',    type: 'LIMIT', side: 'SELL', sideTone: 'negative', amount: '0.00595', price: '67188.20',     status: 'FILLED' },
-  { time: '14:24:31', ex: 'Binance',     pair: 'USDT-BTC-ETH',     type: 'IOC',   side: '三角执行', sideTone: 'neutral', amount: '$200',  price: '+0.41% spread', status: 'FILLED' },
-  { time: '14:18:02', ex: 'Bybit',       pair: 'ENA/USDT',         type: 'LIMIT', side: 'BUY',  sideTone: 'positive', amount: '594.0',   price: '0.842',         status: 'FILLED' },
-  { time: '13:42:18', ex: 'Hyperliquid', pair: 'HYPE/USDC',        type: 'LIMIT', side: 'BUY',  sideTone: 'positive', amount: '14.82',   price: '28.34',         status: 'FILLED' },
-]
+function sideTone(side: string): 'positive' | 'negative' | 'neutral' {
+  if (side.includes('open') || side === 'BUY') return 'positive'
+  if (side.includes('close') || side === 'SELL') return 'negative'
+  return 'neutral'
+}
 
 export default function PositionsPage() {
   const { t } = useT()
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['positions'], queryFn: () => getPositions(), refetchInterval: 15_000 })
+  const { data: ordersData } = useQuery({ queryKey: ['orders'], queryFn: () => getOrders(20), refetchInterval: 30_000 })
   const [pendingClose, setPendingClose] = useState<{ uuid: string; symbol: string } | null>(null)
   const closeMut = useMutation({
     mutationFn: (uuid: string) => closePosition(uuid),
@@ -163,9 +162,9 @@ export default function PositionsPage() {
         )}
       </CardElevated>
 
-      {/* 最近订单 (mock) */}
+      {/* 最近订单 */}
       <CardElevated style={{ padding: 20 }}>
-        <SectionHeader title={t('最近订单')} subtitle="RECENT ORDERS · MOCK" />
+        <SectionHeader title={t('最近订单')} subtitle="RECENT ORDERS · LAST 20" />
         <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
           <thead>
             <tr>
@@ -187,23 +186,32 @@ export default function PositionsPage() {
             </tr>
           </thead>
           <tbody>
-            {RECENT_ORDERS.map((o, i) => (
-              <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.time}</td>
-                <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.ex}</td>
-                <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.pair}</td>
-                <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{o.type}</td>
-                <td style={{
-                  padding: '10px 12px',
-                  color: o.sideTone === 'positive' ? 'var(--accent-emerald)' : o.sideTone === 'negative' ? 'var(--accent-blood)' : 'var(--text-secondary)',
-                }}>
-                  {o.side}
-                </td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>{o.amount}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>{o.price}</td>
-                <td style={{ padding: '10px 12px' }}><Badge tone="active">{o.status}</Badge></td>
-              </tr>
-            ))}
+            {(ordersData?.data ?? []).map((o: Order, i: number) => {
+              const tone = sideTone(o.side)
+              const time = new Date(o.time)
+              return (
+                <tr key={`${o.position_uuid}-${i}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>
+                    {time.toISOString().substring(11, 19)}
+                  </td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.exchange}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.symbol}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{o.order_type}</td>
+                  <td style={{
+                    padding: '10px 12px',
+                    color: tone === 'positive' ? 'var(--accent-emerald)' : tone === 'negative' ? 'var(--accent-blood)' : 'var(--text-secondary)',
+                  }}>
+                    {o.side}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>${o.amount}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>{o.price}</td>
+                  <td style={{ padding: '10px 12px' }}><Badge tone="active">{o.status.toUpperCase()}</Badge></td>
+                </tr>
+              )
+            })}
+            {(ordersData?.data ?? []).length === 0 && (
+              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>暂无订单</td></tr>
+            )}
           </tbody>
         </table>
       </CardElevated>

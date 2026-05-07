@@ -1,7 +1,7 @@
 'use client'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { getStrategyStatus, startStrategy, stopStrategy } from '@/lib/api/strategies'
+import { getStrategyStatus, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
 import { CardElevated } from '@/components/ui/Card'
 import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
@@ -11,6 +11,7 @@ type StrategyStatus = 'RUNNING' | 'PLANNED' | 'MONITOR' | 'DISABLED' | 'UNDERWAT
 
 type Strategy = {
   num: string
+  id: string  // 后端 strategy_id (与 _VALID_STRATEGY_IDS 对齐)
   zhName: string
   enLabel: string
   phase: Phase
@@ -25,40 +26,40 @@ type Strategy = {
 
 // 12 个保留策略 (2026-05-07 决策, 砍掉 #8 #11 #12 #15 #17)
 const STRATEGIES: Strategy[] = [
-  { num: '01', zhName: '资金费率套利', enLabel: 'FUNDING RATE ARBITRAGE · 主力 P0', phase: 'P0', status: 'RUNNING',
+  { num: '01', id: 'funding-rate',     zhName: '资金费率套利', enLabel: 'FUNDING RATE ARBITRAGE · 主力 P0', phase: 'P0', status: 'RUNNING',
     capital: '$2,000', monthly: '+1.74%', positions: '3 / 5', posLabel: '持仓',
     desc: '用 Delta 中性的姿势收资金费率,白嫖多头给空头交的钱。', monthlyTone: 'positive' },
-  { num: '04', zhName: '期现套利', enLabel: 'SPOT-PERP PREMIUM · P0', phase: 'P0', status: 'RUNNING',
+  { num: '04', id: 'spot-perp',        zhName: '期现套利', enLabel: 'SPOT-PERP PREMIUM · P0', phase: 'P0', status: 'RUNNING',
     capital: '$1,000', monthly: '+1.42%', positions: '2 / 5', posLabel: '持仓',
     desc: '抓"短期溢价扩大→收敛"的窗口,跟资金费率套利不同时间尺度。', monthlyTone: 'positive' },
-  { num: '13', zhName: '三角套利', enLabel: 'TRIANGULAR ARBITRAGE · P0', phase: 'P0', status: 'RUNNING',
+  { num: '13', id: 'triangular',       zhName: '三角套利', enLabel: 'TRIANGULAR ARBITRAGE · P0', phase: 'P0', status: 'RUNNING',
     capital: '$500', monthly: '+0.62%', positions: '14 次', posLabel: '今日触发',
     desc: '用 3 笔交易吃同一交易所内不同币对之间的微小价差。', monthlyTone: 'positive' },
-  { num: '02', zhName: '跨所基差套利', enLabel: 'PERP BASIS ARB · P1', phase: 'P1', status: 'RUNNING',
+  { num: '02', id: 'perp-basis',       zhName: '跨所基差套利', enLabel: 'PERP BASIS ARB · P1', phase: 'P1', status: 'RUNNING',
     capital: '$1,000', monthly: '+0.83%', positions: '1 / 3', posLabel: '持仓',
     desc: '做多便宜的合约,做空贵的合约,等基差收敛。', monthlyTone: 'positive' },
-  { num: '03', zhName: '跨所价差套利', enLabel: 'SPOT SPREAD ARB · P1', phase: 'P1', status: 'PLANNED',
+  { num: '03', id: 'spot-spread',      zhName: '跨所价差套利', enLabel: 'SPOT SPREAD ARB · P1', phase: 'P1', status: 'PLANNED',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '抓不同交易所现货价格的瞬时差异 (低延迟+提币速度敏感)。' },
-  { num: '16', zhName: '配对交易', enLabel: 'PAIRS TRADING · P1', phase: 'P1', status: 'UNDERWATER',
+  { num: '16', id: 'pairs-trading',    zhName: '配对交易', enLabel: 'PAIRS TRADING · P1', phase: 'P1', status: 'UNDERWATER',
     capital: '$5,000', monthly: '-0.64%', positions: '2 / 5', posLabel: '配对',
     desc: 'ETH-BNB 配对当前 z-score = -2.4,等待回归到 0。', monthlyTone: 'negative' },
-  { num: '05', zhName: 'CEX-DEX 套利', enLabel: 'CROSS-EXCHANGE · MONITOR ONLY', phase: 'P1', status: 'MONITOR',
+  { num: '05', id: 'cex-dex',          zhName: 'CEX-DEX 套利', enLabel: 'CROSS-EXCHANGE · MONITOR ONLY', phase: 'P1', status: 'MONITOR',
     capital: '$0', monthly: null, positions: '23 次', posLabel: '本月推送',
     desc: '监控 CEX 和 DEX 之间的价差,推送有利润机会(MEV 风险下不自动执行)。' },
-  { num: '06', zhName: '期权波动率套利', enLabel: 'OPTIONS VOL ARB · P3', phase: 'P3', status: 'DISABLED',
+  { num: '06', id: 'options-vol',      zhName: '期权波动率套利', enLabel: 'OPTIONS VOL ARB · P3', phase: 'P3', status: 'DISABLED',
     capital: '$0', monthly: null, positions: '$30k+', posLabel: '解锁条件',
     desc: '资金已达解锁线,但高风险策略默认禁用。需要手动启用并先进入监控模式。' },
-  { num: '07', zhName: '网格策略', enLabel: 'GRID STRATEGY · P1', phase: 'P1', status: 'PLANNED',
+  { num: '07', id: 'grid',             zhName: '网格策略', enLabel: 'GRID STRATEGY · P1', phase: 'P1', status: 'PLANNED',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '区间内自动买卖,震荡行情友好,趋势行情吃亏。' },
-  { num: '09', zhName: '做市策略', enLabel: 'MARKET MAKING · P1', phase: 'P1', status: 'PLANNED',
+  { num: '09', id: 'market-making',    zhName: '做市策略', enLabel: 'MARKET MAKING · P1', phase: 'P1', status: 'PLANNED',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '订单簿挂单赚价差,需要做市返佣资格 + 极低延迟。' },
-  { num: '10', zhName: '趋势跟踪', enLabel: 'TREND FOLLOWING · P1', phase: 'P1', status: 'PLANNED',
+  { num: '10', id: 'trend',            zhName: '趋势跟踪', enLabel: 'TREND FOLLOWING · P1', phase: 'P1', status: 'PLANNED',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '技术指标识别中长期趋势,胜率不稳定,赚大输小。' },
-  { num: '14', zhName: '稳定币利率套利', enLabel: 'STABLECOIN YIELD · P1', phase: 'P1', status: 'PLANNED',
+  { num: '14', id: 'stablecoin-yield', zhName: '稳定币利率套利', enLabel: 'STABLECOIN YIELD · P1', phase: 'P1', status: 'PLANNED',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '跨平台借贷利率差套利,低风险但收益微薄。' },
 ]
@@ -77,8 +78,9 @@ export default function StrategiesPage() {
   const { t } = useT()
   const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['strategy'], queryFn: getStrategyStatus, refetchInterval: 10_000 })
-  const startMut = useMutation({ mutationFn: startStrategy, onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
-  const stopMut  = useMutation({ mutationFn: stopStrategy,  onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
+  const startMut = useMutation({ mutationFn: (id: string) => startStrategyById(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
+  const stopMut  = useMutation({ mutationFn: (id: string) => stopStrategyById(id),  onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
+  const [actionId, setActionId] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
 
   // funding_rate 真状态合并到 #01 卡片
@@ -224,32 +226,34 @@ export default function StrategiesPage() {
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <Button variant="secondary" style={{ flex: 1, fontSize: 12 }}>{t('查看详情')}</Button>
-              {s.num === '01' ? (
-                fundingRunning ? (
-                  <Button
-                    variant="secondary"
-                    onClick={() => { if (confirm('停止资金费率策略?\n现有持仓不会自动平仓。')) stopMut.mutate() }}
-                    disabled={stopMut.isPending}
-                    style={{ flex: 1, fontSize: 12, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
-                  >
-                    {stopMut.isPending ? '停止中…' : '停止策略'}
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    onClick={() => startMut.mutate()}
-                    disabled={startMut.isPending}
-                    style={{ flex: 1, fontSize: 12 }}
-                  >
-                    {startMut.isPending ? '启动中…' : '启动策略'}
-                  </Button>
-                )
+              {s.status === 'DISABLED' ? (
+                <Button variant="primary" style={{ flex: 1, fontSize: 12 }}>启用监控</Button>
+              ) : s.status === 'MONITOR' ? (
+                <Button variant="secondary" style={{ flex: 1, fontSize: 12 }}>推送配置</Button>
+              ) : s.status === 'RUNNING' || s.status === 'UNDERWATER' ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!confirm(`停止策略 #${s.num} ${s.zhName}?\n现有持仓不会自动平仓。`)) return
+                    setActionId(s.id)
+                    stopMut.mutate(s.id, { onSettled: () => setActionId(null) })
+                  }}
+                  disabled={stopMut.isPending && actionId === s.id}
+                  style={{ flex: 1, fontSize: 12, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
+                >
+                  {stopMut.isPending && actionId === s.id ? '停止中…' : '停止'}
+                </Button>
               ) : (
                 <Button
-                  variant={s.status === 'DISABLED' ? 'primary' : 'secondary'}
+                  variant="primary"
+                  onClick={() => {
+                    setActionId(s.id)
+                    startMut.mutate(s.id, { onSettled: () => setActionId(null) })
+                  }}
+                  disabled={startMut.isPending && actionId === s.id}
                   style={{ flex: 1, fontSize: 12 }}
                 >
-                  {s.status === 'DISABLED' ? '启用监控' : t('配置')}
+                  {startMut.isPending && actionId === s.id ? '启动中…' : '启动'}
                 </Button>
               )}
             </div>

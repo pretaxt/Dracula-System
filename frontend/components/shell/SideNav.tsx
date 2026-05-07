@@ -2,9 +2,11 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot } from '../ui/Button'
 import { useAuthStore } from '@/lib/auth/token-store'
+import { getHealth, formatUptime } from '@/lib/api/health'
 
 const NAV = [
   { href: '/',           labelZh: '总览',       Icon: LayoutGrid },
@@ -19,6 +21,7 @@ export default function SideNav() {
   const { t } = useT()
   const router = useRouter()
   const clearToken = useAuthStore((s) => s.clearToken)
+  const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth, refetchInterval: 60_000 })
   const handleLogout = () => {
     clearToken()
     router.replace('/login')
@@ -120,7 +123,9 @@ export default function SideNav() {
           <StatusDot tone="active" />
         </div>
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>{t('RUNNING')}</div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>↑ 12d 04h 23m</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>
+          ↑ {formatUptime(health?.uptime_seconds ?? 0)}
+        </div>
       </div>
 
       {/* 导航 */}

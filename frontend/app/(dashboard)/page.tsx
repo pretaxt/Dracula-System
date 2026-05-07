@@ -70,11 +70,13 @@ export default function DashboardPage() {
     )
   }
 
-  const todayFund = parseFloat(summary?.today_funding_usd || '0')
-  const netPnl    = parseFloat(summary?.net_pnl_usd || '0')
-  const openPos   = summary?.open_positions ?? 0
-  const series    = summary?.pnl_series_30d ?? []
-  const last7     = series.slice(-7).reduce((sum: number, p: { net_pnl_usd: string }) => sum + parseFloat(p.net_pnl_usd), 0)
+  const todayFund    = parseFloat(summary?.today_funding_usd || '0')
+  const netPnl       = parseFloat(summary?.net_pnl_usd || '0')
+  const openPos      = summary?.open_positions ?? 0
+  const series       = summary?.pnl_series_30d ?? []
+  const totalEquity  = parseFloat(summary?.total_equity_usd || '0')
+  const monthlyPnl   = parseFloat(summary?.monthly_pnl_usd || '0')
+  const dailyDDPct   = parseFloat(summary?.daily_drawdown_pct || '0')
 
   const chartData = series.map((p: { date: string; net_pnl_usd: string }) => ({
     date: p.date.slice(5),
@@ -89,7 +91,7 @@ export default function DashboardPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
         <KPICard
           label={t('总资本')}
-          value={<>$34,827.<span style={{ color: 'var(--text-tertiary)', fontSize: '70%' }}>52</span></>}
+          value={`$${totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           meta={t('USDT 等值')}
           icon={<Wallet size={14} />}
           animationDelay="0s"
@@ -103,22 +105,28 @@ export default function DashboardPage() {
         />
         <KPICard
           label={t('月度 PnL')}
-          value={`${last7 >= 0 ? '+' : ''}$${last7.toFixed(2)}`}
-          accent={last7 >= 0 ? 'positive' : 'negative'}
-          meta={`${last7 >= 0 ? '+' : ''}${last7 !== 0 ? (last7 / 348 * 100).toFixed(2) : '0'}% MTD`}
+          value={`${monthlyPnl >= 0 ? '+' : ''}$${monthlyPnl.toFixed(2)}`}
+          accent={monthlyPnl >= 0 ? 'positive' : 'negative'}
+          meta={totalEquity > 0 ? `${monthlyPnl >= 0 ? '+' : ''}${(monthlyPnl / totalEquity * 100).toFixed(2)}% MTD` : '— MTD'}
           icon={<BarChart3 size={14} style={{ color: 'var(--accent-emerald)' }} />}
           animationDelay="0.1s"
         />
         <KPICard
           label={t('单日回撤')}
-          value={<>-0.32<span style={{ color: 'var(--text-tertiary)', fontSize: '70%' }}>%</span></>}
-          icon={<Shield size={14} style={{ color: 'var(--accent-emerald)' }} />}
+          value={
+            <>
+              {dailyDDPct >= 0 ? '+' : ''}{dailyDDPct.toFixed(2)}
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '70%' }}>%</span>
+            </>
+          }
+          accent={dailyDDPct < 0 ? 'negative' : 'default'}
+          icon={<Shield size={14} style={{ color: dailyDDPct > -2 ? 'var(--accent-emerald)' : 'var(--accent-blood)' }} />}
           footer={
             <>
-              <ProgressBar pct={11} tone="success" />
+              <ProgressBar pct={Math.min(100, Math.abs(dailyDDPct) / 3 * 100)} tone={Math.abs(dailyDDPct) < 2 ? 'success' : 'warn'} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 6, color: 'var(--text-tertiary)' }}>
                 <span>{t('距 Tier 3 红线')}</span>
-                <span style={{ color: 'var(--accent-emerald)' }}>2.68%</span>
+                <span style={{ color: 'var(--accent-emerald)' }}>{(3 - Math.abs(dailyDDPct)).toFixed(2)}%</span>
               </div>
             </>
           }
