@@ -16,7 +16,12 @@ const NAV = [
   { href: '/settings',   labelZh: '设置',       Icon: Settings },
 ] as const
 
-export default function SideNav() {
+type SideNavProps = {
+  isMobileOpen?: boolean
+  onClose?: () => void
+}
+
+export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps = {}) {
   const pathname = usePathname()
   const { t } = useT()
   const router = useRouter()
@@ -29,8 +34,10 @@ export default function SideNav() {
 
   return (
     <aside
+      className="sidenav-aside"
+      data-open={isMobileOpen ? 'true' : 'false'}
       style={{
-        width: 'var(--sidenav-width)',
+        width: 256,
         background: 'var(--bg-deepest)',
         borderRight: '1px solid var(--border-default)',
         display: 'flex',
@@ -138,6 +145,7 @@ export default function SideNav() {
             <Link
               key={href}
               href={href}
+              onClick={onClose}
               style={{
                 position: 'relative',
                 display: 'flex',

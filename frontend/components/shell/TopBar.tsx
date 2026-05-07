@@ -2,7 +2,7 @@
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Power } from 'lucide-react'
+import { Bell, Menu, Power } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot, type StatusTone } from '../ui/Button'
 import ThemeToggle from '../theme/ThemeToggle'
@@ -43,7 +43,12 @@ function UtcClock() {
   )
 }
 
-export default function TopBar() {
+type TopBarProps = {
+  onMenuClick?: () => void
+  onNotifClick?: () => void
+}
+
+export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) {
   const pathname = usePathname()
   const { t } = useT()
   const qc = useQueryClient()
@@ -58,7 +63,6 @@ export default function TopBar() {
     }
   }
 
-  // 当前页面标题 — 优先精确匹配, 其次找以 pathname 开头的 key
   const titleZh =
     TITLE_MAP[pathname] ??
     Object.entries(TITLE_MAP).find(
@@ -68,7 +72,6 @@ export default function TopBar() {
 
   return (
     <>
-      {/* 顶部血色细线 */}
       <div
         style={{
           height: 2,
@@ -89,11 +92,33 @@ export default function TopBar() {
           position: 'sticky',
           top: 0,
           zIndex: 9,
+          gap: 12,
         }}
       >
-        {/* 左: 页面标题 + 交易所状态 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0, flex: 1 }}>
+          <button
+            type="button"
+            className="topbar-menu-btn"
+            onClick={onMenuClick}
+            aria-label={t('打开导航')}
+            style={{
+              display: 'none',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 36,
+              height: 36,
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <Menu size={18} />
+          </button>
           <h2
+            className="topbar-title"
             style={{
               margin: 0,
               fontFamily: 'var(--font-display)',
@@ -101,11 +126,13 @@ export default function TopBar() {
               fontWeight: 600,
               letterSpacing: '0.04em',
               color: 'var(--text-primary)',
+              whiteSpace: 'nowrap',
             }}
           >
             {t(titleZh)}
           </h2>
           <div
+            className="topbar-exchanges"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -113,6 +140,7 @@ export default function TopBar() {
               fontFamily: 'var(--font-mono)',
               fontSize: 12,
               color: 'var(--text-tertiary)',
+              flexWrap: 'wrap',
             }}
           >
             {EXCHANGES.map((ex) => (
@@ -124,9 +152,8 @@ export default function TopBar() {
           </div>
         </div>
 
-        {/* 右: 时钟 + 主题 + 语言 + 通知 + 退出 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <UtcClock />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+          <span className="topbar-clock"><UtcClock /></span>
           <ThemeToggle />
           <LangToggle />
 
@@ -167,11 +194,12 @@ export default function TopBar() {
             }}
           >
             <Power size={12} />
-            <span>EMERGENCY STOP</span>
+            <span className="topbar-emergency-label">EMERGENCY STOP</span>
           </button>
 
           <button
             type="button"
+            onClick={onNotifClick}
             title="通知 / Notifications"
             style={{
               background: 'transparent',

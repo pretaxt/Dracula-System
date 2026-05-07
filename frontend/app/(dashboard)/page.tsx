@@ -53,10 +53,10 @@ export default function DashboardPage() {
   if (isLoading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+        <div className="kpi-grid">
           <SkeletonKpiCard /><SkeletonKpiCard /><SkeletonKpiCard /><SkeletonKpiCard />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+        <div className="row-21">
           <Skeleton height={300} rounded="md" />
           <Skeleton height={300} rounded="md" />
         </div>
@@ -88,7 +88,7 @@ export default function DashboardPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* ========== 4 KPI ========== */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+      <div className="kpi-grid">
         <KPICard
           label={t('总资本')}
           value={`$${totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -135,7 +135,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ========== 权益曲线 + 策略表现 ========== */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+      <div className="row-21">
         <CardElevated style={{ padding: 20 }} className="animate-in">
           <SectionHeader
             title={t('权益曲线')}
@@ -225,7 +225,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ========== 风控状态 + 实时机会 ========== */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
+      <div className="row-12">
         <CardElevated style={{ padding: 20 }} className="animate-in">
           <SectionHeader title={t('风控状态')} right={<Badge tone="active">SAFE</Badge>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
