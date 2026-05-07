@@ -12,6 +12,7 @@ import { getExchangeHealth, type ExchangeHealth } from '@/lib/api/system'
 
 const TITLE_MAP: Record<string, string> = {
   '/':              '总览',
+  '/market':        '行情中心',
   '/strategies':    '策略中心',
   '/positions':     '持仓与订单',
   '/risk':          '风控中心',

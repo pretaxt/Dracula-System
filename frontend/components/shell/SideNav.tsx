@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut } from 'lucide-react'
+import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut, TrendingUp } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot } from '../ui/Button'
@@ -10,6 +10,7 @@ import { getHealth, formatUptime } from '@/lib/api/health'
 
 const NAV = [
   { href: '/',           labelZh: '总览',       Icon: LayoutGrid },
+  { href: '/market',     labelZh: '行情中心',   Icon: TrendingUp },
   { href: '/strategies', labelZh: '策略中心',   Icon: Target,      badge: '12' },
   { href: '/positions',  labelZh: '持仓与订单', Icon: Layers,      badge: '8',  badgeColor: 'var(--accent-emerald)' },
   { href: '/risk',       labelZh: '风控中心',   Icon: ShieldAlert },

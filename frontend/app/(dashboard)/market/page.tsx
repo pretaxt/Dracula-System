@@ -1,0 +1,319 @@
+'use client'
+import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowDown, ArrowUp, Search } from 'lucide-react'
+import { CardElevated, SectionHeader } from '@/components/ui/Card'
+import { StatusDot } from '@/components/ui/Button'
+import { useT } from '@/components/i18n/I18nProvider'
+import { getMarketTickers, type MarketTicker } from '@/lib/api/market'
+
+type SortKey = 'change' | 'volume' | 'funding' | 'symbol'
+type SortDir = 'asc' | 'desc'
+
+function formatNumber(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString('en-US', {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  })
+}
+
+function formatPrice(last: number): string {
+  if (last === 0) return '—'
+  if (last >= 1000) return `$${formatNumber(last, 2)}`
+  if (last >= 1) return `$${formatNumber(last, 4)}`
+  return `$${last.toFixed(6)}`
+}
+
+function formatVolume(vol: number): string {
+  if (vol >= 1_000_000_000) return `$${(vol / 1_000_000_000).toFixed(2)}B`
+  if (vol >= 1_000_000) return `$${(vol / 1_000_000).toFixed(2)}M`
+  if (vol >= 1_000) return `$${(vol / 1_000).toFixed(1)}K`
+  return `$${vol.toFixed(0)}`
+}
+
+function CountdownToFunding({ nextMs }: { nextMs: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  if (!nextMs) return <span style={{ color: 'var(--text-muted)' }}>—</span>
+  const remaining = Math.max(0, nextMs - now)
+  const h = Math.floor(remaining / 3_600_000)
+  const m = Math.floor((remaining % 3_600_000) / 60_000)
+  const s = Math.floor((remaining % 60_000) / 1000)
+  return (
+    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+      {h.toString().padStart(2, '0')}:{m.toString().padStart(2, '0')}:{s.toString().padStart(2, '0')}
+    </span>
+  )
+}
+
+export default function MarketPage() {
+  const { t } = useT()
+  const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('volume')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['market-tickers'],
+    queryFn: () => getMarketTickers({ exchange: 'binance' }),
+    refetchInterval: 5_000,
+  })
+
+  const rows: MarketTicker[] = useMemo(() => {
+    const all = data?.data ?? []
+    const filtered = search
+      ? all.filter((r) => r.symbol.toLowerCase().includes(search.toLowerCase()))
+      : all
+    const sorted = [...filtered].sort((a, b) => {
+      const dir = sortDir === 'asc' ? 1 : -1
+      switch (sortKey) {
+        case 'symbol':
+          return a.symbol.localeCompare(b.symbol) * dir
+        case 'change':
+          return (parseFloat(a.change_24h_pct) - parseFloat(b.change_24h_pct)) * dir
+        case 'volume':
+          return (parseFloat(a.volume_24h_usd) - parseFloat(b.volume_24h_usd)) * dir
+        case 'funding':
+          return (parseFloat(a.funding_rate_pct) - parseFloat(b.funding_rate_pct)) * dir
+      }
+    })
+    return sorted
+  }, [data, search, sortKey, sortDir])
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
+
+  const SortIcon = ({ k }: { k: SortKey }) => {
+    if (sortKey !== k) return <span style={{ width: 12, display: 'inline-block' }} />
+    return sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
+  }
+
+  const lastUpdate = data?.snapshot_at
+    ? new Date(data.snapshot_at).toLocaleTimeString('en-US', { hour12: false })
+    : null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <CardElevated style={{ padding: 20 }}>
+        <SectionHeader
+          title={t('行情中心')}
+          subtitle="LIVE TICKERS · BINANCE USDM PERPETUAL"
+          right={
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              <StatusDot tone={isError ? 'critical' : isLoading ? 'warn' : 'active'} />
+              <span>
+                {isError ? t('断流') : isLoading ? t('加载中…') : t('实时')}
+              </span>
+              {lastUpdate && (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {t('上次更新')} {lastUpdate}
+                </span>
+              )}
+            </div>
+          }
+        />
+
+        <div style={{ position: 'relative', marginBottom: 16 }}>
+          <Search
+            size={14}
+            style={{
+              position: 'absolute',
+              left: 12,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--text-tertiary)',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            type="text"
+            placeholder={t('搜索币种(如 BTC)')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px 12px 8px 36px',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 13,
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-primary)',
+              outline: 'none',
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = 'var(--accent-blood)'
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border-default)'
+            }}
+          />
+        </div>
+
+        <div className="table-scroll-x">
+          <table
+            className="data-table"
+            style={{
+              width: '100%',
+              borderCollapse: 'separate',
+              borderSpacing: 0,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+            }}
+          >
+            <thead>
+              <tr>
+                {([
+                  { k: 'symbol' as const,  l: t('币种'),     align: 'left' },
+                  { k: null,               l: t('交易所'),   align: 'left' },
+                  { k: null,               l: t('现价'),     align: 'right' },
+                  { k: 'change' as const,  l: '24H',        align: 'right' },
+                  { k: 'volume' as const,  l: t('24H 成交'), align: 'right' },
+                  { k: 'funding' as const, l: t('资金费率'), align: 'right' },
+                  { k: null,               l: t('下次结算'), align: 'right' },
+                ]).map((h, i) => (
+                  <th
+                    key={i}
+                    onClick={h.k ? () => toggleSort(h.k!) : undefined}
+                    style={{
+                      textAlign: h.align as 'left' | 'right',
+                      padding: '10px 12px',
+                      color: 'var(--text-tertiary)',
+                      fontWeight: 500,
+                      fontSize: 10,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      borderBottom: '1px solid var(--border-default)',
+                      background: 'var(--bg-deepest)',
+                      cursor: h.k ? 'pointer' : 'default',
+                      userSelect: 'none',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        justifyContent: h.align === 'right' ? 'flex-end' : 'flex-start',
+                      }}
+                    >
+                      {h.l}
+                      {h.k && <SortIcon k={h.k} />}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && !isLoading && (
+                <tr>
+                  <td
+                    colSpan={7}
+                    style={{
+                      padding: 40,
+                      textAlign: 'center',
+                      color: 'var(--text-tertiary)',
+                    }}
+                  >
+                    {isError ? t('加载失败,5 秒后自动重试') : t('暂无行情数据')}
+                  </td>
+                </tr>
+              )}
+              {rows.map((r) => {
+                const last = parseFloat(r.last)
+                const change = parseFloat(r.change_24h_pct)
+                const vol = parseFloat(r.volume_24h_usd)
+                const funding = parseFloat(r.funding_rate_pct)
+                const changeColor =
+                  change > 0
+                    ? 'var(--accent-emerald)'
+                    : change < 0
+                    ? 'var(--accent-blood)'
+                    : 'var(--text-tertiary)'
+                const fundingColor =
+                  funding > 0.01
+                    ? 'var(--accent-emerald)'
+                    : funding < -0.01
+                    ? 'var(--accent-blood)'
+                    : 'var(--text-tertiary)'
+                return (
+                  <tr
+                    key={r.symbol}
+                    style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                  >
+                    <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                      {r.symbol}
+                    </td>
+                    <td
+                      style={{
+                        padding: '12px',
+                        color: 'var(--text-tertiary)',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {r.exchange}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                      {formatPrice(last)}
+                    </td>
+                    <td
+                      style={{
+                        padding: '12px',
+                        textAlign: 'right',
+                        color: changeColor,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {change > 0 ? '+' : ''}
+                      {change.toFixed(2)}%
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                      {formatVolume(vol)}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: fundingColor }}>
+                      {funding > 0 ? '+' : ''}
+                      {funding.toFixed(4)}%
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>
+                      <CountdownToFunding nextMs={r.next_funding_time_ms} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div
+          style={{
+            marginTop: 12,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: 'var(--text-muted)',
+          }}
+        >
+          {t('刷新间隔 5 秒 · 数据来自 Binance USDM Perpetual')}
+        </div>
+      </CardElevated>
+    </div>
+  )
+}

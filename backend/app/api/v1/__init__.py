@@ -15,6 +15,7 @@ from app.api.v1.positions import router as positions_router
 from app.api.v1.risk import router as risk_router
 from app.api.v1.strategies import router as strategies_router
 from app.api.v1.system import router as system_router
+from app.api.v1.market import router as market_router
 
 # 无需鉴权的路由
 router = APIRouter()
@@ -32,5 +33,6 @@ _protected.include_router(risk_router)
 _protected.include_router(orders_router)
 _protected.include_router(account_router)
 _protected.include_router(system_router)
+_protected.include_router(market_router)
 
 router.include_router(_protected)

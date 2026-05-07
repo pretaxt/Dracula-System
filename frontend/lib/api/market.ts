@@ -1,0 +1,35 @@
+import { apiClient } from './client'
+
+export type MarketTicker = {
+  symbol: string
+  exchange: string
+  last: string
+  change_24h_pct: string
+  volume_24h_usd: string
+  funding_rate: string
+  funding_rate_pct: string
+  next_funding_time_ms: number
+  ts: number
+}
+
+export type MarketTickersResponse = {
+  data: MarketTicker[]
+  snapshot_at: number
+}
+
+export async function getMarketTickers(opts?: {
+  symbols?: string[]
+  exchange?: string
+}): Promise<MarketTickersResponse> {
+  const params: Record<string, string> = {}
+  if (opts?.symbols && opts.symbols.length > 0) {
+    params.symbols = opts.symbols.join(',')
+  }
+  if (opts?.exchange) {
+    params.exchange = opts.exchange
+  }
+  const { data } = await apiClient.get<MarketTickersResponse>('/market/tickers', {
+    params,
+  })
+  return data
+}
