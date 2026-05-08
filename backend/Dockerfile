@@ -27,7 +27,8 @@ RUN uv pip install --system --no-cache \
     ccxt \
     aiohttp \
     websockets \
-    "python-jose[cryptography]"
+    "python-jose[cryptography]" \
+    httpx
 
 # Copy application code
 COPY app/ ./app/
