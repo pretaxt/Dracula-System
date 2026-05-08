@@ -20,7 +20,6 @@ const INTERVALS: { k: KlineInterval; l: string }[] = [
 ]
 
 const CHART_W = 760
-const CHART_H = 460
 const PAD_L = 84
 const PAD_R = 12
 const PAD_T = 8
@@ -31,7 +30,10 @@ const VOL_H = 56
 const RSI_TOP = VOL_TOP + VOL_H + 8           // 280
 const RSI_H = 50
 const MACD_TOP = RSI_TOP + RSI_H + 8          // 338
-const MACD_H = 80                             // padding bottom for x-label = 22
+const MACD_H = 80
+const KDJ_TOP = MACD_TOP + MACD_H + 8         // 426
+const KDJ_H = 50
+const CHART_H = KDJ_TOP + KDJ_H + PAD_B       // 498
 
 const MA_SHORT = 20
 const MA_LONG = 60
@@ -40,6 +42,9 @@ const RSI_PERIOD = 14
 const MACD_FAST = 12
 const MACD_SLOW = 26
 const MACD_SIGNAL = 9
+const BB_PERIOD = 20
+const BB_MULT = 2
+const KDJ_PERIOD = 9
 
 type KlineDrawerProps = {
   symbol: string
@@ -136,6 +141,58 @@ function computeMACD(closes: number[]) {
   return { macd, signal, hist }
 }
 
+function computeBB(
+  closes: number[],
+  period = 20,
+  mult = 2,
+): { upper: (number | null)[]; lower: (number | null)[] } {
+  const sma = computeSMA(closes, period)
+  const upper: (number | null)[] = new Array(closes.length).fill(null)
+  const lower: (number | null)[] = new Array(closes.length).fill(null)
+  for (let i = period - 1; i < closes.length; i++) {
+    const avg = sma[i] as number
+    const slice = closes.slice(i - period + 1, i + 1)
+    const variance = slice.reduce((s, v) => s + (v - avg) ** 2, 0) / period
+    const sd = Math.sqrt(variance)
+    upper[i] = avg + mult * sd
+    lower[i] = avg - mult * sd
+  }
+  return { upper, lower }
+}
+
+function computeKDJ(
+  bars: KlineBar[],
+  period = 9,
+): { k: (number | null)[]; d: (number | null)[]; j: (number | null)[] } {
+  const n = bars.length
+  const k: (number | null)[] = new Array(n).fill(null)
+  const d: (number | null)[] = new Array(n).fill(null)
+  const j: (number | null)[] = new Array(n).fill(null)
+  if (n < period) return { k, d, j }
+  let prevK = 50
+  let prevD = 50
+  for (let i = period - 1; i < n; i++) {
+    let lo = Infinity
+    let hi = -Infinity
+    for (let p = i - period + 1; p <= i; p++) {
+      const l = parseFloat(bars[p].low)
+      const h = parseFloat(bars[p].high)
+      if (l < lo) lo = l
+      if (h > hi) hi = h
+    }
+    const c = parseFloat(bars[i].close)
+    const rsv = hi === lo ? 50 : ((c - lo) / (hi - lo)) * 100
+    const kv = (prevK * 2 + rsv) / 3
+    const dv = (prevD * 2 + kv) / 3
+    k[i] = kv
+    d[i] = dv
+    j[i] = 3 * kv - 2 * dv
+    prevK = kv
+    prevD = dv
+  }
+  return { k, d, j }
+}
+
 export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   const { t } = useT()
   const [tab, setTab] = useState<Tab>('kline')
@@ -174,6 +231,8 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   const volMa = useMemo(() => computeSMA(volumes, VOL_MA_PERIOD), [volumes])
   const rsi = useMemo(() => computeRSI(closes, RSI_PERIOD), [closes])
   const macdData = useMemo(() => computeMACD(closes), [closes])
+  const bb = useMemo(() => computeBB(closes, BB_PERIOD, BB_MULT), [closes])
+  const kdjData = useMemo(() => computeKDJ(bars, KDJ_PERIOD), [bars])
 
   const stats = useMemo(() => {
     if (numBars === 0) return null
@@ -200,7 +259,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
       if (h > hi) hi = h
       if (v > vM) vM = v
     }
-    for (const m of [...ma20, ...ma60]) {
+    for (const m of [...ma20, ...ma60, ...bb.upper, ...bb.lower]) {
       if (m === null) continue
       if (m < lo) lo = m
       if (m > hi) hi = m
@@ -213,7 +272,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
       ticks.push(yMinV + ((yMaxV - yMinV) * i) / 4)
     }
     return { yMin: yMinV, yMax: yMaxV, vMax: vM || 1, priceTicks: ticks }
-  }, [bars, numBars, ma20, ma60])
+  }, [bars, numBars, ma20, ma60, bb])
 
   // MACD 范围(对称取最大绝对值)
   const macdAbsMax = useMemo(() => {
@@ -239,6 +298,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
   const yOfRsi = (r: number) => RSI_TOP + ((100 - r) / 100) * RSI_H
   const macdMid = MACD_TOP + MACD_H / 2
   const yOfMacd = (m: number) => macdMid - (m / macdAbsMax) * (MACD_H / 2 - 4)
+  const yOfKdj = (v: number) => KDJ_TOP + ((100 - Math.min(Math.max(v, -20), 120)) / 140) * KDJ_H
 
   const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget
@@ -445,12 +505,20 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   MA60
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, borderTop: '1px dashed rgba(147,112,219,0.8)' }} />
+                  BB20
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 12, height: 2, background: 'var(--accent-blood)' }} />
                   RSI14
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 12, height: 2, background: 'var(--accent-emerald)' }} />
                   MACD
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: '#FF9500' }} />
+                  KDJ9
                 </span>
               </div>
             </div>
@@ -604,6 +672,25 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   {/* MA 叠加 */}
                   <path d={linePath(ma20, yOfPrice)} stroke="var(--accent-gold)" strokeWidth={1.2} fill="none" />
                   <path d={linePath(ma60, yOfPrice)} stroke="var(--accent-azure)" strokeWidth={1.2} fill="none" />
+
+                  {/* Bollinger Bands */}
+                  {(() => {
+                    const up: string[] = []
+                    const lo: string[] = []
+                    for (let i = 0; i < bb.upper.length; i++) {
+                      if (bb.upper[i] !== null) up.push(`${xOf(i).toFixed(1)},${yOfPrice(bb.upper[i] as number).toFixed(1)}`)
+                      if (bb.lower[i] !== null) lo.push(`${xOf(i).toFixed(1)},${yOfPrice(bb.lower[i] as number).toFixed(1)}`)
+                    }
+                    if (up.length === 0) return null
+                    const fillPts = [...up, ...[...lo].reverse()].join(' ')
+                    return (
+                      <>
+                        <polygon points={fillPts} fill="rgba(147,112,219,0.07)" stroke="none" />
+                        <path d={linePath(bb.upper, yOfPrice)} stroke="rgba(147,112,219,0.6)" strokeWidth={1} fill="none" strokeDasharray="3 3" />
+                        <path d={linePath(bb.lower, yOfPrice)} stroke="rgba(147,112,219,0.6)" strokeWidth={1} fill="none" strokeDasharray="3 3" />
+                      </>
+                    )
+                  })()}
 
                   {/* VOL MA20 叠加 */}
                   <path d={linePath(volMa, yOfVol)} stroke="var(--accent-gold)" strokeWidth={1} fill="none" opacity={0.85} />
@@ -760,6 +847,25 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     12,26,9
                   </text>
 
+                  {/* KDJ 副图 */}
+                  <rect x={PAD_L} y={KDJ_TOP} width={innerW} height={KDJ_H} fill="var(--bg-card)" opacity={0.3} />
+                  {([80, 50, 20] as const).map((ref) => (
+                    <line
+                      key={`kdj-ref-${ref}`}
+                      x1={PAD_L} x2={PAD_L + innerW}
+                      y1={yOfKdj(ref)} y2={yOfKdj(ref)}
+                      stroke={ref === 50 ? 'var(--border-default)' : ref === 80 ? 'var(--accent-blood)' : 'var(--accent-emerald)'}
+                      strokeDasharray="2 3"
+                      opacity={0.4}
+                    />
+                  ))}
+                  <path d={linePath(kdjData.k, yOfKdj)} stroke="#FF9500" strokeWidth={1.2} fill="none" />
+                  <path d={linePath(kdjData.d, yOfKdj)} stroke="#FF2D55" strokeWidth={1.2} fill="none" />
+                  <path d={linePath(kdjData.j, yOfKdj)} stroke="#5AC8FA" strokeWidth={1} fill="none" opacity={0.8} />
+                  <text x={PAD_L - 8} y={KDJ_TOP + 12} textAnchor="end" fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-tertiary)">KDJ</text>
+                  <text x={PAD_L - 8} y={yOfKdj(80) + 3} textAnchor="end" fontSize={9} fontFamily="var(--font-mono)" fill="var(--accent-blood)" opacity={0.7}>80</text>
+                  <text x={PAD_L - 8} y={yOfKdj(20) + 3} textAnchor="end" fontSize={9} fontFamily="var(--font-mono)" fill="var(--accent-emerald)" opacity={0.7}>20</text>
+
                   {/* X 轴时间 */}
                   {[0, Math.floor(numBars / 2), numBars - 1].map((i) => {
                     if (i < 0 || i >= numBars) return null
@@ -811,17 +917,37 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     fontSize: 11,
                     color: 'var(--text-secondary)',
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(7, 1fr)',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
                     gap: 8,
                   }}
                 >
-                  <span>O: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.open))}</b></span>
-                  <span>H: <b style={{ color: 'var(--accent-emerald)' }}>{formatPrice(parseFloat(hoverBar.high))}</b></span>
-                  <span>L: <b style={{ color: 'var(--accent-blood)' }}>{formatPrice(parseFloat(hoverBar.low))}</b></span>
-                  <span>C: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.close))}</b></span>
-                  <span>V: <b style={{ color: 'var(--text-secondary)' }}>{formatVolume(parseFloat(hoverBar.volume))}</b></span>
-                  <span>RSI: <b style={{ color: 'var(--accent-blood)' }}>{rsi[hover!.idx] !== null ? (rsi[hover!.idx] as number).toFixed(1) : '—'}</b></span>
-                  <span>MACD: <b style={{ color: 'var(--accent-emerald)' }}>{macdData.macd[hover!.idx] !== null ? (macdData.macd[hover!.idx] as number).toFixed(3) : '—'}</b></span>
+                  {(() => {
+                    const idx = hover!.idx
+                    const close = parseFloat(hoverBar.close)
+                    const bbU = bb.upper[idx]
+                    const bbL = bb.lower[idx]
+                    const bbPct = bbU !== null && bbL !== null && bbU !== bbL
+                      ? ((close - bbL) / (bbU - bbL) * 100).toFixed(1)
+                      : '—'
+                    const kv = kdjData.k[idx]
+                    const dv = kdjData.d[idx]
+                    const jv = kdjData.j[idx]
+                    return (
+                      <>
+                        <span>O: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(parseFloat(hoverBar.open))}</b></span>
+                        <span>H: <b style={{ color: 'var(--accent-emerald)' }}>{formatPrice(parseFloat(hoverBar.high))}</b></span>
+                        <span>L: <b style={{ color: 'var(--accent-blood)' }}>{formatPrice(parseFloat(hoverBar.low))}</b></span>
+                        <span>C: <b style={{ color: 'var(--text-primary)' }}>{formatPrice(close)}</b></span>
+                        <span>V: <b style={{ color: 'var(--text-secondary)' }}>{formatVolume(parseFloat(hoverBar.volume))}</b></span>
+                        <span>RSI: <b style={{ color: 'var(--accent-blood)' }}>{rsi[idx] !== null ? (rsi[idx] as number).toFixed(1) : '—'}</b></span>
+                        <span>MACD: <b style={{ color: 'var(--accent-emerald)' }}>{macdData.macd[idx] !== null ? (macdData.macd[idx] as number).toFixed(3) : '—'}</b></span>
+                        <span>BB%: <b style={{ color: 'rgba(147,112,219,0.9)' }}>{bbPct}</b></span>
+                        <span>K: <b style={{ color: '#FF9500' }}>{kv !== null ? kv.toFixed(1) : '—'}</b></span>
+                        <span>D: <b style={{ color: '#FF2D55' }}>{dv !== null ? dv.toFixed(1) : '—'}</b></span>
+                        <span>J: <b style={{ color: '#5AC8FA' }}>{jv !== null ? jv.toFixed(1) : '—'}</b></span>
+                      </>
+                    )
+                  })()}
                 </div>
               )}
             </div>
@@ -850,7 +976,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
           }}
         >
           {tab === 'kline'
-            ? `${t('5 秒刷新')} · MA20/60 · VOL MA20 · RSI14 · MACD(12,26,9) · ${numBars} ${t('根')}`
+            ? `${t('5 秒刷新')} · MA20/60 · BB20(2σ) · VOL MA20 · RSI14 · MACD(12,26,9) · KDJ9 · ${numBars} ${t('根')}`
             : `${t('3 秒刷新')} · Binance USDM Perpetual · ${t('盘口前 20 档(左买盘 / 右卖盘)')}`}
         </div>
       </aside>

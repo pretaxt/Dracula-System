@@ -12,6 +12,13 @@ type SortKey = 'change' | 'volume' | 'funding' | 'symbol'
 type SortDir = 'asc' | 'desc'
 type Filter = 'all' | 'gainers' | 'losers'
 
+type CompareRow = {
+  symbol: string
+  binance: { funding: number; last: number } | null
+  okx:     { funding: number; last: number } | null
+  spread: number
+}
+
 function formatNumber(n: number, dp = 2): string {
   if (!Number.isFinite(n)) return '—'
   return n.toLocaleString('en-US', {
@@ -65,6 +72,36 @@ export default function MarketPage() {
     queryFn: () => getMarketTickers({ exchange: 'binance' }),
     refetchInterval: 5_000,
   })
+
+  const { data: okxData } = useQuery({
+    queryKey: ['market-tickers-okx'],
+    queryFn: () => getMarketTickers({ exchange: 'okx' }),
+    refetchInterval: 10_000,
+  })
+
+  const compareRows = useMemo<CompareRow[]>(() => {
+    const bnMap = new Map<string, MarketTicker>()
+    for (const r of data?.data ?? []) bnMap.set(r.symbol, r)
+    const okxMap = new Map<string, MarketTicker>()
+    for (const r of okxData?.data ?? []) okxMap.set(r.symbol, r)
+
+    const allSymbols = Array.from(new Set([...Array.from(bnMap.keys()), ...Array.from(okxMap.keys())]))
+    const out: CompareRow[] = []
+    for (const sym of allSymbols) {
+      const bn = bnMap.get(sym)
+      const ok = okxMap.get(sym)
+      const bnF = bn ? parseFloat(bn.funding_rate_pct) : null
+      const okF = ok ? parseFloat(ok.funding_rate_pct) : null
+      const spread = bnF !== null && okF !== null ? Math.abs(bnF - okF) : 0
+      out.push({
+        symbol: sym,
+        binance: bn ? { funding: parseFloat(bn.funding_rate_pct), last: parseFloat(bn.last) } : null,
+        okx:     ok ? { funding: parseFloat(ok.funding_rate_pct), last: parseFloat(ok.last) } : null,
+        spread,
+      })
+    }
+    return out.sort((a, b) => b.spread - a.spread).slice(0, 15)
+  }, [data, okxData])
 
   const rows: MarketTicker[] = useMemo(() => {
     const all = data?.data ?? []
@@ -392,6 +429,104 @@ export default function MarketPage() {
           }}
         >
           {t('刷新间隔 5 秒 · 数据来自 Binance USDM Perpetual · 点击行查看 K 线')}
+        </div>
+      </CardElevated>
+
+      {/* 多交易所资金费对比 */}
+      <CardElevated style={{ padding: 20 }}>
+        <SectionHeader
+          title={t('多交易所资金费对比')}
+          subtitle="BINANCE vs OKX · USDM PERPETUAL · TOP 15 BY SPREAD"
+          right={
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+              {t('按价差降序')}
+            </div>
+          }
+        />
+        <div className="table-scroll-x">
+          <table
+            className="data-table"
+            style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          >
+            <thead>
+              <tr>
+                {[
+                  { l: t('币种'),         align: 'left' },
+                  { l: 'Binance',         align: 'right' },
+                  { l: 'OKX',             align: 'right' },
+                  { l: t('价差 Δ'),       align: 'right' },
+                  { l: t('套利方向'),     align: 'center' },
+                ].map((h, i) => (
+                  <th
+                    key={i}
+                    style={{
+                      textAlign: h.align as 'left' | 'right' | 'center',
+                      padding: '10px 12px',
+                      color: 'var(--text-tertiary)',
+                      fontWeight: 500,
+                      fontSize: 10,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      borderBottom: '1px solid var(--border-default)',
+                      background: 'var(--bg-deepest)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {h.l}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {compareRows.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: 32, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                    {t('加载中…')}
+                  </td>
+                </tr>
+              )}
+              {compareRows.map((row) => {
+                const bnF = row.binance?.funding ?? null
+                const okF = row.okx?.funding ?? null
+                const spreadColor = row.spread >= 0.02
+                  ? 'var(--accent-emerald)'
+                  : row.spread >= 0.005
+                  ? 'var(--accent-gold)'
+                  : 'var(--text-tertiary)'
+                let direction = '—'
+                if (bnF !== null && okF !== null) {
+                  if (bnF > okF) direction = `↑ Binance · ${t('做空')} Binance / ${t('做多')} OKX`
+                  else if (okF > bnF) direction = `↑ OKX · ${t('做空')} OKX / ${t('做多')} Binance`
+                }
+                return (
+                  <tr
+                    key={row.symbol}
+                    onClick={() => setSelectedSymbol(row.symbol.split('/')[0])}
+                    style={{ borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', transition: 'background var(--duration-fast)' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-card-hover)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <td style={{ padding: '10px 12px', color: 'var(--accent-blood)', fontWeight: 600 }}>{row.symbol}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: bnF === null ? 'var(--text-muted)' : bnF > 0 ? 'var(--accent-emerald)' : bnF < 0 ? 'var(--accent-blood)' : 'var(--text-tertiary)' }}>
+                      {bnF !== null ? `${bnF >= 0 ? '+' : ''}${bnF.toFixed(4)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: okF === null ? 'var(--text-muted)' : okF > 0 ? 'var(--accent-emerald)' : okF < 0 ? 'var(--accent-blood)' : 'var(--text-tertiary)' }}>
+                      {okF !== null ? `${okF >= 0 ? '+' : ''}${okF.toFixed(4)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: spreadColor, fontWeight: 600 }}>
+                      {row.spread > 0 ? `Δ ${row.spread.toFixed(4)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 10 }}>
+                      {direction}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
+          {t('Binance 5 秒刷新 · OKX 10 秒刷新 · 价差 ≥ 0.02% 绿色 / ≥ 0.005% 金色 · 点击行查看 K 线')}
         </div>
       </CardElevated>
 

@@ -75,6 +75,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("exchange_adapter_init_failed", exchange="binance")
 
+    try:
+        from app.exchanges.cex.okx import OKXAdapter  # noqa: PLC0415
+
+        adapters["okx"] = OKXAdapter(
+            api_key=settings.okx_api_key,
+            api_secret=settings.okx_api_secret,
+            passphrase=settings.okx_api_passphrase,
+        )
+        logger.info("exchange_adapter_ready", exchange="okx")
+    except Exception:
+        logger.exception("exchange_adapter_init_failed", exchange="okx")
+
     # --- Start funding-rate runner (扫描 → DB + Redis) ---
     runner: FundingRateRunner | None = None
     runner_task: asyncio.Task | None = None  # type: ignore[type-arg]
