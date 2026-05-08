@@ -1,9 +1,11 @@
-"""Market 路由 — 实时行情批量 ticker + K 线。"""
+"""Market 路由 — 实时行情批量 ticker + K 线 + WebSocket 推送。"""
 from __future__ import annotations
 
+import asyncio
 import time
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
+from jose import JWTError
 
 from app.api.deps import CurrentUser
 from app.api.v1.schemas.market import (
@@ -13,6 +15,7 @@ from app.api.v1.schemas.market import (
     MarketTickersResponse,
     OrderbookResponse,
 )
+from app.core.security import decode_token
 from app.services.market_service import get_klines, get_orderbook, get_tickers
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -77,3 +80,32 @@ async def orderbook(
         asks=raw.get("asks", []),
         ts=raw.get("ts", 0),
     )
+
+
+@router.websocket("/ws/tickers")
+async def ws_tickers(
+    websocket: WebSocket,
+    token: str = Query(...),
+    exchange: str = Query(default="binance"),
+) -> None:
+    """WebSocket 实时 ticker 推送 — 每 3 秒广播一次。
+
+    连接: ws://<host>/api/v1/market/ws/tickers?token=<jwt>&exchange=binance
+    """
+    try:
+        decode_token(token)
+    except JWTError:
+        await websocket.close(code=4001)
+        return
+
+    await websocket.accept()
+    adapters = getattr(websocket.app.state, "adapters", None) or {}
+    try:
+        while True:
+            raw = await get_tickers(adapters, symbols=None, exchange=exchange)
+            await websocket.send_json({"data": raw, "snapshot_at": int(time.time() * 1000)})
+            await asyncio.sleep(3)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass

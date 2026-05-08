@@ -1,12 +1,12 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { StatusDot } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
-import { getMarketTickers, type MarketTicker } from '@/lib/api/market'
+import type { MarketTicker } from '@/lib/api/market'
 import KlineDrawer from '@/components/market/KlineDrawer'
+import { useTickerWS } from '@/hooks/useTickerWS'
 
 type SortKey = 'change' | 'volume' | 'funding' | 'symbol'
 type SortDir = 'asc' | 'desc'
@@ -67,17 +67,13 @@ export default function MarketPage() {
   const [filter, setFilter] = useState<Filter>('all')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['market-tickers'],
-    queryFn: () => getMarketTickers({ exchange: 'binance' }),
-    refetchInterval: 5_000,
-  })
+  const { data: bnRaw, isConnected: bnConnected } = useTickerWS('binance')
+  const { data: okxRaw } = useTickerWS('okx')
 
-  const { data: okxData } = useQuery({
-    queryKey: ['market-tickers-okx'],
-    queryFn: () => getMarketTickers({ exchange: 'okx' }),
-    refetchInterval: 10_000,
-  })
+  const data = useMemo(() => bnRaw.length ? { data: bnRaw } : null, [bnRaw])
+  const okxData = useMemo(() => okxRaw.length ? { data: okxRaw } : null, [okxRaw])
+  const isLoading = !bnConnected && bnRaw.length === 0
+  const isError = false
 
   const compareRows = useMemo<CompareRow[]>(() => {
     const bnMap = new Map<string, MarketTicker>()
