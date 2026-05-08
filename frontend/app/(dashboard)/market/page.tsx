@@ -67,7 +67,7 @@ export default function MarketPage() {
   const [filter, setFilter] = useState<Filter>('all')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
-  const { data: bnRaw, isConnected: bnConnected } = useTickerWS('binance')
+  const { data: bnRaw, snapshotAt, isConnected: bnConnected } = useTickerWS('binance')
   const { data: okxRaw } = useTickerWS('okx')
 
   const data = useMemo(() => bnRaw.length ? { data: bnRaw } : null, [bnRaw])
@@ -150,8 +150,8 @@ export default function MarketPage() {
     return sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
   }
 
-  const lastUpdate = data?.snapshot_at
-    ? new Date(data.snapshot_at).toLocaleTimeString('en-US', { hour12: false })
+  const lastUpdate = snapshotAt
+    ? new Date(snapshotAt).toLocaleTimeString('en-US', { hour12: false })
     : null
 
   return (
