@@ -209,8 +209,10 @@ class PaperTradingSession:
     async def _open_positions(
         self, opportunities: Sequence[FundingRateOpportunity]
     ) -> None:
-        """对每个机会尝试开仓；RiskLimitError 和 ValueError 静默跳过。"""
+        """对每个机会尝试开仓；已有同标的持仓则跳过；RiskLimitError 和 ValueError 静默跳过。"""
         for opp in opportunities:
+            if self._manager.get_by_symbol(opp.symbol):
+                continue
             try:
                 pos = await self._executor.open_delta_neutral(
                     opp, size_usd=self._size
