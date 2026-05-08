@@ -1,4 +1,4 @@
-import { apiFetch } from './client'
+import { apiClient } from './client'
 
 export interface BacktestRequest {
   symbol: string
@@ -43,9 +43,6 @@ export interface BacktestResult {
 }
 
 export async function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
-  return apiFetch<BacktestResult>('/api/v1/backtest/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
+  const { data } = await apiClient.post<BacktestResult>('/backtest/run', req)
+  return data
 }
