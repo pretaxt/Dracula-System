@@ -38,6 +38,7 @@ from typing import Sequence
 from app.core.logging import get_logger
 from app.execution.order_executor import OrderExecutor
 from app.exchanges.models import Side
+from app.notifications.telegram import notify_position_closed, notify_position_opened
 from app.risk.limits import RiskLimitError
 from app.risk.models import ExitReason
 from app.risk.position_manager import PositionManager
@@ -221,6 +222,12 @@ class PaperTradingSession:
                     apr_pct=str(opp.apr_pct.quantize(Decimal("0.01"))),
                     position_id=pos.id[:8],
                 )
+                notify_position_opened(
+                    strategy="资金费率套利",
+                    symbol=str(opp.symbol),
+                    basis_pct=opp.apr_pct.quantize(Decimal("0.01")),
+                    notional_usd=self._size,
+                )
             except RiskLimitError as e:
                 logger.debug(
                     "paper_open_blocked_by_risk",
@@ -245,6 +252,12 @@ class PaperTradingSession:
                     reason=reason.value,
                     rules=[v.rule for v in violations],
                     realized_pnl=str(pos.realized_pnl.quantize(Decimal("0.01"))),
+                )
+                notify_position_closed(
+                    strategy="资金费率套利",
+                    symbol=str(pos.symbol),
+                    realized_pnl=pos.realized_pnl,
+                    exit_reason=reason.value,
                 )
             except KeyError:
                 pass  # 已平仓，安全忽略

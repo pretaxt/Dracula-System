@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.logging import get_logger
 from app.models.position import PositionRecord
+from app.notifications.telegram import notify_position_closed, notify_position_opened
 from app.strategies.spot_perp_basis.runner import SpotPerpRunner
 
 logger = get_logger(__name__)
@@ -155,6 +156,12 @@ class SpotPerpPaperSession:
                     realized=str(pnl),
                     reason=exit_reason,
                 )
+                notify_position_closed(
+                    strategy="期现套利",
+                    symbol=r.notes,
+                    realized_pnl=pnl,
+                    exit_reason=exit_reason or "unknown",
+                )
 
         slots = MAX_CONCURRENT - (len(open_rows) - closed_count)
         opened_count = 0
@@ -193,6 +200,12 @@ class SpotPerpPaperSession:
                     basis_pct=str(opp.basis_pct),
                     direction=opp.direction,
                     notional=str(NOTIONAL_PER_POSITION),
+                )
+                notify_position_opened(
+                    strategy="期现套利",
+                    symbol=opp.symbol,
+                    basis_pct=opp.basis_pct,
+                    notional_usd=NOTIONAL_PER_POSITION,
                 )
 
         if closed_count > 0 or opened_count > 0:
