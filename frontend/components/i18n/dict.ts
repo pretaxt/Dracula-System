@@ -29,7 +29,11 @@ export const dict: Record<string, string> = {
   '风控中心': 'Risk',
   '用户管理': 'Users',
   '设置': 'Settings',
-  'SYSTEM STATUS': 'SYSTEM STATUS',
+  '系统状态': 'SYSTEM STATUS',
+  '运行中': 'RUNNING',
+  '已停止': 'STOPPED',
+  // 下面保留是因为 strategy status badge 等用 'RUNNING'/'STOPPED' 作 enum 字符串，
+  // 中英模式都保持英文徽章
   'RUNNING': 'RUNNING',
   'STOPPED': 'STOPPED',
 

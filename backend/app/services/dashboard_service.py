@@ -7,14 +7,29 @@ from decimal import Decimal
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.position import PositionRecord
-
-# 初始资本基准 (用于估算 total_equity 和 drawdown)
-# 真实账户余额 API 待 P1+ (CCXT fetch_balance) 实现
-INITIAL_CAPITAL_USD = Decimal("34000")
+from app.services.balance_service import get_total_equity_usd
 
 
-async def get_summary(session: AsyncSession) -> dict:
+def _initial_capital() -> Decimal:
+    """从 settings 读初始资本（env: INITIAL_CAPITAL_USD，默认 $300）。
+
+    实盘下应反映真实账户 USDT 余额；P1+ 计划接 Binance fetch_balance 自动取值。
+    """
+    raw = get_settings().initial_capital_usd or "300"
+    try:
+        return Decimal(str(raw))
+    except (ValueError, ArithmeticError):
+        return Decimal("300")
+
+
+# 兼容老 import 路径（account.py 直接拿这个常量）
+# 注意：模块级求值——env 变更需重启容器生效
+INITIAL_CAPITAL_USD = _initial_capital()
+
+
+async def get_summary(session: AsyncSession, adapters: dict | None = None) -> dict:
     # 总 realized PnL
     r_pnl = (
         await session.execute(
@@ -103,7 +118,11 @@ async def get_summary(session: AsyncSession) -> dict:
 
     # ---- 估算字段 ----
     net_pnl = Decimal(str(r_pnl)) + Decimal(str(u_pnl))
-    total_equity = INITIAL_CAPITAL_USD + net_pnl
+    # 优先取 Binance 真实账户聚合（spot+USDM），拉不到 fallback 到 env
+    real_balance: Decimal | None = None
+    if adapters:
+        real_balance = await get_total_equity_usd(adapters)
+    total_equity = real_balance if real_balance is not None else _initial_capital() + net_pnl
 
     today_pnl = Decimal(str(today_pnl_raw))
     daily_drawdown_pct = (

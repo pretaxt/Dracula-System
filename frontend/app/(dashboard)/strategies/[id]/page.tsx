@@ -7,6 +7,12 @@ import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
 import { getStrategyStatus, getSpotPerpOpportunities, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
+import { getDashboardSummary } from '@/lib/api/dashboard'
+
+const INSTANCE_MAP: Record<string, string> = {
+  'funding-rate': 'funding_rate_main',
+  'spot-perp':    'spot_perp_main',
+}
 
 const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
   RUNNING:    'active',
@@ -43,6 +49,11 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryFn: getSpotPerpOpportunities,
     refetchInterval: 5_000,
     enabled: params.id === 'spot-perp',
+  })
+  const { data: summary } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: getDashboardSummary,
+    refetchInterval: 30_000,
   })
 
   const startMut = useMutation({
@@ -137,44 +148,92 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         </div>
       </div>
 
-      <div className="kpi-grid">
-        <CardElevated style={{ padding: 20 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {t('分配资金')}
+      {(() => {
+        // 实时数据计算 — capital/monthly/positions 全部从 API 取
+        type Perf = { instance: string; total_pnl: string; open_positions: number }
+        const perfList = (summary?.strategy_performance ?? []) as Perf[]
+        const instance = INSTANCE_MAP[strategy.id]
+        const perf = instance ? perfList.find((p) => p.instance === instance) : undefined
+
+        let liveCapital = '—'
+        let liveMonthly: string | null = null
+        let liveMonthlyTone: 'positive' | 'negative' | undefined
+        let livePositions = '—'
+
+        if (strategy.id === 'funding-rate' && live) {
+          const cfg = live.current_config
+          const sizeUsd = parseFloat(cfg?.max_position_notional_usd ?? '0')
+          const maxPos = cfg?.max_concurrent_positions ?? 0
+          const openCnt = perf?.open_positions ?? live.open_positions ?? 0
+          // 三段：已用 / 账户实际余额 / 策略配置上限
+          const deployed = openCnt * sizeUsd
+          const account = parseFloat(summary?.total_equity_usd ?? '0')
+          const configMax = maxPos * sizeUsd
+          liveCapital = `$${deployed.toFixed(0)} / $${account.toFixed(0)} / $${configMax.toFixed(0)}`
+          livePositions = `${openCnt} / ${maxPos}`
+          if (perf) {
+            const pnl = parseFloat(perf.total_pnl)
+            liveMonthly = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`
+            liveMonthlyTone = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : undefined
+          } else {
+            liveMonthly = '$0.00'
+          }
+        } else if (perf) {
+          const pnl = parseFloat(perf.total_pnl)
+          liveMonthly = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`
+          liveMonthlyTone = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : undefined
+          livePositions = String(perf.open_positions)
+        }
+
+        return (
+          <div className="kpi-grid">
+            <CardElevated style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {t('分配资金')}
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, marginTop: 8, color: 'var(--text-primary)' }}
+                title="已用 / 账户实际余额 / 策略配置上限">
+                {liveCapital}
+              </div>
+              {strategy.id === 'funding-rate' && (
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, marginTop: 6, color: 'var(--text-tertiary)', letterSpacing: '0.04em' }}>
+                  已用 / 账户 / 配置
+                </div>
+              )}
+            </CardElevated>
+            <CardElevated style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {t('月化收益')}
+              </div>
+              <div
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 24,
+                  marginTop: 8,
+                  color:
+                    liveMonthly === null
+                      ? 'var(--text-tertiary)'
+                      : liveMonthlyTone === 'negative'
+                      ? 'var(--accent-blood)'
+                      : liveMonthlyTone === 'positive'
+                      ? 'var(--accent-emerald)'
+                      : 'var(--text-primary)',
+                }}
+              >
+                {liveMonthly ?? '—'}
+              </div>
+            </CardElevated>
+            <CardElevated style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {t('持仓')}
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, marginTop: 8, color: 'var(--text-primary)' }}>
+                {livePositions}
+              </div>
+            </CardElevated>
           </div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, marginTop: 8, color: 'var(--text-primary)' }}>
-            {strategy.capital}
-          </div>
-        </CardElevated>
-        <CardElevated style={{ padding: 20 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {t('月化收益')}
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 24,
-              marginTop: 8,
-              color:
-                strategy.monthly === null
-                  ? 'var(--text-tertiary)'
-                  : strategy.monthlyTone === 'negative'
-                  ? 'var(--accent-blood)'
-                  : 'var(--accent-emerald)',
-            }}
-          >
-            {strategy.monthly ?? '—'}
-          </div>
-        </CardElevated>
-        <CardElevated style={{ padding: 20 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {t(strategy.posLabel)}
-          </div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, marginTop: 8, color: 'var(--text-primary)' }}>
-            {strategy.positions}
-          </div>
-        </CardElevated>
-      </div>
+        )
+      })()}
 
       <CardElevated style={{ padding: 24 }}>
         <SectionHeader title={t('策略简介')} subtitle="STRATEGY THESIS" />
@@ -185,6 +244,103 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
           <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text-secondary)', marginTop: 12, marginBottom: 0 }}>
             {strategy.thesis}
           </p>
+        )}
+
+        {strategy.rules && (
+          <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 24 }}>
+            {/* 入场条件 */}
+            <div>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                textTransform: 'uppercase', color: 'var(--accent-emerald)',
+                marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-emerald)',
+                  boxShadow: '0 0 6px var(--accent-emerald)',
+                }} />
+                {t('入场条件')} · ENTRY
+              </div>
+              <ol style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
+                {strategy.rules.entry.map((r, i) => (
+                  <li key={i} style={{
+                    fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)',
+                    padding: '8px 0', borderBottom: i < strategy.rules!.entry.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                    display: 'flex', gap: 10,
+                  }}>
+                    <span style={{
+                      flexShrink: 0, width: 20, height: 20, borderRadius: 4,
+                      background: 'rgba(16,185,129,0.1)', color: 'var(--accent-emerald)',
+                      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    }}>{i + 1}</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {/* 出场条件 */}
+            <div>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                textTransform: 'uppercase', color: 'var(--accent-blood)',
+                marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-blood)',
+                  boxShadow: '0 0 6px var(--accent-blood)',
+                }} />
+                {t('出场条件')} · EXIT (任一触发)
+              </div>
+              <ol style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
+                {strategy.rules.exit.map((r, i) => (
+                  <li key={i} style={{
+                    fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)',
+                    padding: '8px 0', borderBottom: i < strategy.rules!.exit.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                    display: 'flex', gap: 10,
+                  }}>
+                    <span style={{
+                      flexShrink: 0, width: 20, height: 20, borderRadius: 4,
+                      background: 'rgba(227,64,88,0.1)', color: 'var(--accent-blood)',
+                      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    }}>{i + 1}</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {/* 参数 */}
+            <div>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                textTransform: 'uppercase', color: 'var(--accent-gold)',
+                marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-gold)',
+                  boxShadow: '0 0 6px var(--accent-gold)',
+                }} />
+                {t('参数')} · PARAMETERS
+              </div>
+              <div style={{ margin: 0 }}>
+                {strategy.rules.params.map((p, i) => (
+                  <div key={i} style={{
+                    padding: '8px 0',
+                    borderBottom: i < strategy.rules!.params.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                    display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12,
+                  }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{p.label}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', textAlign: 'right' }}>
+                      {p.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         )}
       </CardElevated>
 

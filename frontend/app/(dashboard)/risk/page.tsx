@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Lock, CheckCircle2, Pencil, X as XIcon } from 'lucide-react'
 import { getRiskLimits, patchRiskLimits, getRiskEvents, type RiskEvent } from '@/lib/api/risk'
+import { getDashboardSummary } from '@/lib/api/dashboard'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button } from '@/components/ui/Button'
 import { ProgressBar } from '@/components/ui/Stats'
@@ -44,6 +45,7 @@ export default function RiskPage() {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery<RiskLimits>({ queryKey: ['risk'], queryFn: getRiskLimits })
   const { data: eventsData } = useQuery({ queryKey: ['risk-events'], queryFn: () => getRiskEvents(30), refetchInterval: 60_000 })
+  const { data: summary } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<{ min_apr_pct: string; max_positions: string; max_total_notional_usd: string }>({
@@ -291,58 +293,71 @@ export default function RiskPage() {
         <CardElevated style={{ padding: 20 }} className="animate-in">
           <SectionHeader title={t('Tier 2 · 延迟生效')} right={<Badge tone="active">SAFE</Badge>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
+            <div title="集中度统计待后端实现 / pending backend">
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>38.4% / 50%</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 50%</span>
               </div>
-              <ProgressBar pct={77} tone="success" />
+              <ProgressBar pct={0} tone="success" />
             </div>
-            <div>
+            <div title="集中度统计待后端实现 / pending backend">
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>12.1% / 20%</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 20%</span>
               </div>
-              <ProgressBar pct={60} tone="success" />
+              <ProgressBar pct={0} tone="success" />
             </div>
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>止损百分比</span>
+                <span style={{ color: 'var(--text-secondary)' }}>止损百分比 (config)</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>{parseFloat(data.stop_loss_pct || '0').toFixed(2)}%</span>
               </div>
-              <ProgressBar pct={50} tone="success" />
+              <ProgressBar pct={Math.min(100, parseFloat(data.stop_loss_pct || '0') * 10)} tone="success" />
             </div>
           </div>
         </CardElevated>
 
-        {/* Tier 3 — 锁定红线 */}
+        {/* Tier 3 — 锁定红线（红线静态来自 config.yaml；当前值实时来自 dashboard/summary） */}
         <CardElevated style={{ padding: 20, borderColor: 'var(--accent-blood)' }} className="animate-in">
           <SectionHeader title={t('Tier 3 · 锁定红线')} right={<Badge tone="active">SAFE</Badge>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
-              </div>
-              <ProgressBar pct={11} tone="success" />
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 -0.32%</div>
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
-              </div>
-              <ProgressBar pct={13} tone="success" />
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 -1.04%</div>
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>50%</span>
-              </div>
-              <ProgressBar pct={87} tone="success" />
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 87.3%</div>
-            </div>
+            {(() => {
+              const dailyDD = parseFloat(summary?.daily_drawdown_pct ?? '0')
+              const weeklyDD = parseFloat(summary?.weekly_dd_pct ?? '0')
+              const marginPct = parseFloat(summary?.margin_usage_pct ?? '0')
+              const fmt = (v: string | undefined, sign: string) =>
+                summary === undefined ? '—' : `${sign}${parseFloat(v ?? '0').toFixed(2)}%`
+              const fmtPct = (v: string | undefined) =>
+                summary === undefined ? '—' : `${parseFloat(v ?? '0').toFixed(1)}%`
+              return (
+                <>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
+                    </div>
+                    <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / 3.0 * 100)} tone="success" />
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
+                    </div>
+                    <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / 8.0 * 100)} tone="success" />
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>50%</span>
+                    </div>
+                    <ProgressBar pct={Math.min(100, marginPct)} tone="success" />
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
+                  </div>
+                </>
+              )
+            })()}
           </div>
           <div style={{
             marginTop: 16,

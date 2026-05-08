@@ -31,7 +31,7 @@ function sideTone(side: string): 'positive' | 'negative' | 'neutral' {
 export default function PositionsPage() {
   const { t } = useT()
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery({ queryKey: ['positions'], queryFn: () => getPositions(), refetchInterval: 15_000 })
+  const { data, isLoading } = useQuery({ queryKey: ['positions', 'open'], queryFn: () => getPositions({ status: 'open', page_size: 50 }), refetchInterval: 15_000 })
   const { data: ordersData } = useQuery({ queryKey: ['orders'], queryFn: () => getOrders(20), refetchInterval: 30_000 })
   const [pendingClose, setPendingClose] = useState<{ uuid: string; symbol: string } | null>(null)
   const closeMut = useMutation({

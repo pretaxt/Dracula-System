@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import { getOpportunities } from '@/lib/api/funding'
+import { getStrategyStatus } from '@/lib/api/strategies'
 import { getActivity } from '@/lib/api/system'
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import { Wallet, TrendingUp, BarChart3, Shield, CheckCircle2, TrendingUp as TrUp, AlertTriangle, Zap, XCircle } from 'lucide-react'
@@ -34,6 +35,7 @@ export default function DashboardPage() {
   const { data: summary, isLoading, isError, error, refetch } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
   const { data: opps, refetch: refetchOpps } = useQuery({ queryKey: ['opportunities'], queryFn: getOpportunities, refetchInterval: 15_000 })
   const { data: activityData } = useQuery({ queryKey: ['activity'], queryFn: () => getActivity(8), refetchInterval: 30_000 })
+  const { data: stratStatus } = useQuery({ queryKey: ['strategy-status'], queryFn: getStrategyStatus, refetchInterval: 30_000 })
 
   if (isLoading) {
     return (
@@ -167,17 +169,26 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
-            {[
-              { l: t('起始'), v: '$34,215.37' },
-              { l: t('最高'), v: '$34,891.20' },
-              { l: t('最低'), v: '$34,082.51' },
-              { l: 'Sharpe',  v: '1.83', accent: 'positive' },
-            ].map((s, i) => (
-              <div key={i}>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, marginTop: 4, color: s.accent === 'positive' ? 'var(--accent-emerald)' : 'var(--text-primary)' }}>{s.v}</div>
-              </div>
-            ))}
+            {(() => {
+              const series = (summary?.pnl_series_30d ?? []) as { date: string; net_pnl_usd: string }[]
+              const fmt = (n: number) => `$${n.toFixed(2)}`
+              const fmtOrDash = (n: number | null) => (n === null ? '—' : fmt(n))
+              const start = series.length > 0 ? parseFloat(series[0].net_pnl_usd) : null
+              const values = series.map((p) => parseFloat(p.net_pnl_usd))
+              const high = values.length > 0 ? Math.max(...values) : null
+              const low = values.length > 0 ? Math.min(...values) : null
+              return [
+                { l: t('起始'), v: fmtOrDash(start) },
+                { l: t('最高'), v: fmtOrDash(high) },
+                { l: t('最低'), v: fmtOrDash(low) },
+                { l: 'Sharpe', v: '—', title: '待后端计算 / pending backend computation' },
+              ].map((s, i) => (
+                <div key={i} title={s.title}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, marginTop: 4, color: 'var(--text-primary)' }}>{s.v}</div>
+                </div>
+              ))
+            })()}
           </div>
         </CardElevated>
 
@@ -340,8 +351,10 @@ export default function DashboardPage() {
                     <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 500, color: apr > 0 ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
                       {apr > 0 ? `+${apr.toFixed(2)}%` : '—'}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>$500</td>
-                    <td style={{ padding: '10px 12px', fontSize: 10, color: 'var(--accent-emerald)' }}>{t('已建仓')}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                      ${parseFloat(stratStatus?.current_config?.max_position_notional_usd ?? '50').toFixed(0)}
+                    </td>
+                    <td style={{ padding: '10px 12px', fontSize: 10, color: 'var(--text-tertiary)' }}>{t('扫描中')}</td>
                   </tr>
                 )
               })}

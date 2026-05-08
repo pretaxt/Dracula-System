@@ -97,12 +97,20 @@ class PaperTradingSession:
         manager: PositionManager,
         size_per_trade_usd: Decimal,
         scan_interval_seconds: float = 60.0,
+        pre_funding_window_minutes: float = 15.0,
+        min_apr_for_hold_pct: Decimal = Decimal("0"),
+        profit_target_pct: Decimal = Decimal("0"),
+        perp_margin_loss_threshold_pct: Decimal = Decimal("0"),
     ) -> None:
         self._scanner = scanner
         self._executor = executor
         self._manager = manager
         self._size = size_per_trade_usd
         self._interval = scan_interval_seconds
+        self._pre_funding_window_min = pre_funding_window_minutes
+        self._min_apr_for_hold = min_apr_for_hold_pct  # 0 = 不检查
+        self._profit_target_pct = profit_target_pct    # 0 = 不检查
+        self._perp_margin_loss_threshold = perp_margin_loss_threshold_pct  # 0 = 不检查
         self._running = False
         self._last_funding_settled: datetime = datetime.now(UTC)
         self._tick_count: int = 0
@@ -129,6 +137,17 @@ class PaperTradingSession:
         """请求停止（下次循环结束后退出）。"""
         self._running = False
         logger.info("paper_trading_stop_requested")
+
+    async def restore(self) -> int:
+        """从 DB 恢复 OPEN/PENDING 仓位到内存，避免容器重启后状态丢失。
+
+        必须在 ``run_forever()`` 之前调用，否则去重逻辑会失效，
+        导致重启后立即重复开仓。
+        """
+        count = await self._manager.load_open_positions()
+        if count > 0:
+            logger.info("paper_trading_state_restored", positions=count)
+        return count
 
     async def run_once(self) -> list[FundingRateOpportunity]:
         """单次执行 tick，返回本次扫描到的机会列表（供测试/脚本使用）。"""
@@ -172,11 +191,15 @@ class PaperTradingSession:
     # ------------------------------------------------------------------
 
     async def _tick(self) -> list[FundingRateOpportunity]:
-        """单次完整循环：扫描 → 开仓 → 风控 → 资金费 → 日志。"""
+        """单次完整循环：扫描 → 费率翻负检查 → 开仓 → 风控 → 资金费 → 日志。"""
         self._tick_count += 1
         now = datetime.now(UTC)
 
         opportunities = await self._scan()
+
+        # 先检查已开仓位的费率是否翻负，再尝试开新仓
+        # （顺序很重要：先关掉负费率仓，避免新开仓被同 symbol 旧仓阻塞）
+        await self._check_funding_flip()
 
         if opportunities:
             await self._open_positions(opportunities)
@@ -209,8 +232,25 @@ class PaperTradingSession:
     async def _open_positions(
         self, opportunities: Sequence[FundingRateOpportunity]
     ) -> None:
-        """对每个机会尝试开仓；已有同标的持仓则跳过；RiskLimitError 和 ValueError 静默跳过。"""
+        """对每个机会尝试开仓。
+
+        过滤顺序：
+        1. 资金费结算前 N 分钟窗口内才允许开仓（默认 15min）
+        2. 已有同标的持仓则跳过
+        3. RiskLimitError 和 ValueError 静默跳过
+        """
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        window_ms = int(self._pre_funding_window_min * 60 * 1000)
         for opp in opportunities:
+            time_to_funding_ms = opp.funding_rate.next_funding_time - now_ms
+            if time_to_funding_ms <= 0 or time_to_funding_ms > window_ms:
+                logger.debug(
+                    "paper_open_skipped_outside_window",
+                    symbol=str(opp.symbol),
+                    minutes_to_funding=round(time_to_funding_ms / 60_000, 2),
+                    window_minutes=self._pre_funding_window_min,
+                )
+                continue
             if self._manager.get_by_symbol(opp.symbol):
                 continue
             try:
@@ -240,6 +280,142 @@ class PaperTradingSession:
                 logger.exception(
                     "paper_open_unexpected_error", symbol=str(opp.symbol)
                 )
+
+    async def _check_funding_flip(self) -> None:
+        """实时查询每个开仓 symbol 的当前费率/价格，并按多个动态退出条件平仓：
+
+          1. 净收益 ≥ 阈值       → STRATEGY（止盈）
+          2. 费率 ≤ 0           → FUNDING_REVERSAL（继续持仓会倒贴）
+          3. APR < 阈值         → STRATEGY（机会衰减）
+          4. 永续单腿亏损 ≥ 阈值 → PERP_LIQ_RISK（保护两腿不被强平拆开）
+
+        止损 / 最长持仓由 RiskGuard 在 `_monitor_and_close` 中处理。
+        """
+        for pos in list(self._manager.open_positions):
+            # 1. 净收益止盈检查（不依赖外部数据，先做）
+            if self._profit_target_pct > 0 and pos.notional_usd > 0:
+                net_pnl = pos.funding_received - pos.fees_paid + pos.realized_pnl
+                profit_pct = net_pnl / pos.notional_usd * Decimal("100")
+                if profit_pct >= self._profit_target_pct:
+                    await self._close_with_reason(
+                        pos, ExitReason.STRATEGY,
+                        log_event="paper_profit_target_exit",
+                        log_extra={"profit_pct": float(profit_pct)},
+                    )
+                    continue
+
+            # 2. 拉取最新资金费率
+            exchange = pos.legs[0].exchange if pos.legs else ""
+            if not exchange:
+                continue
+            fr = await self._scanner.current_rate(exchange, pos.symbol)
+            if fr is None:
+                continue  # 拉取失败时不动作（保守）
+
+            # 3. 费率翻负
+            if fr.rate <= Decimal("0"):
+                await self._close_with_reason(
+                    pos, ExitReason.FUNDING_REVERSAL,
+                    log_event="paper_funding_flip_exit",
+                    log_extra={"rate": str(fr.rate)},
+                )
+                continue
+
+            # 4. APR 低于持仓阈值（机会衰减）
+            if self._min_apr_for_hold > 0:
+                current_apr = fr.apr * Decimal("100")
+                if current_apr < self._min_apr_for_hold:
+                    await self._close_with_reason(
+                        pos, ExitReason.STRATEGY,
+                        log_event="paper_apr_drop_exit",
+                        log_extra={
+                            "current_apr_pct": float(current_apr),
+                            "min_apr_for_hold": float(self._min_apr_for_hold),
+                        },
+                    )
+                    continue
+
+            # 5. 永续单腿保证金亏损保护（防止 perp 被强平后留下 spot 裸多）
+            if self._perp_margin_loss_threshold > 0:
+                triggered = await self._maybe_close_perp_margin_risk(pos, exchange)
+                if triggered:
+                    continue
+
+    async def _maybe_close_perp_margin_risk(self, pos, exchange: str) -> bool:
+        """如永续 SHORT 腿浮亏达到 perp_margin_loss_threshold_pct% × 初始保证金，
+        关闭整个 Delta 中性仓位（双腿同时平）。返回是否触发关仓。
+
+        SHORT 浮亏：(current_price - entry_price) × size > 0 时为亏损。
+        当前 5x 杠杆 + 80% 阈值 → 价格上涨约 16% 触发，距清算线 +19.5% 还有 3.5% 缓冲。
+        """
+        from app.exchanges.models import Side, InstrumentType  # noqa: PLC0415
+        perp_leg = next(
+            (l for l in pos.legs
+             if l.side == Side.SELL and l.instrument_type == InstrumentType.PERPETUAL),
+            None,
+        )
+        if perp_leg is None or perp_leg.size <= 0 or perp_leg.entry_price <= 0:
+            return False
+
+        # 初始保证金 = leg.notional / leverage（margin_used 已是这个值）
+        initial_margin = perp_leg.margin_used
+        if initial_margin <= 0:
+            return False
+
+        current_price = await self._scanner.current_perp_price(exchange, pos.symbol)
+        if current_price is None:
+            return False  # 拉取失败时保守不动
+
+        # SHORT 浮亏（正数 = 亏损）
+        unrealized_loss = (current_price - perp_leg.entry_price) * perp_leg.size
+        if unrealized_loss <= 0:
+            return False  # 没亏损，不触发
+
+        loss_pct = unrealized_loss / initial_margin * Decimal("100")
+        if loss_pct < self._perp_margin_loss_threshold:
+            return False
+
+        await self._close_with_reason(
+            pos, ExitReason.PERP_LIQ_RISK,
+            log_event="paper_perp_margin_risk_exit",
+            log_extra={
+                "perp_loss_pct": float(loss_pct),
+                "threshold": float(self._perp_margin_loss_threshold),
+                "entry_price": str(perp_leg.entry_price),
+                "current_price": str(current_price),
+                "leverage": str(perp_leg.leverage),
+            },
+        )
+        return True
+
+    async def _close_with_reason(
+        self, pos, reason: ExitReason, log_event: str, log_extra: dict
+    ) -> None:
+        """统一的关仓 + 通知 + 日志包装。"""
+        try:
+            await self._executor.close_position(pos.id, reason=reason)
+            logger.info(
+                log_event,
+                position_id=pos.id[:8],
+                symbol=str(pos.symbol),
+                reason=reason.value,
+                realized_pnl=str(pos.realized_pnl.quantize(Decimal("0.01"))),
+                **log_extra,
+            )
+            notify_position_closed(
+                strategy="资金费率套利",
+                symbol=str(pos.symbol),
+                realized_pnl=pos.realized_pnl,
+                exit_reason=reason.value,
+            )
+        except KeyError:
+            pass  # 已平仓
+        except Exception:
+            logger.exception(
+                "paper_dynamic_exit_failed",
+                position_id=pos.id[:8],
+                reason=reason.value,
+            )
 
     async def _monitor_and_close(self, as_of: datetime) -> None:
         """风控检查；对触发规则的仓位执行平仓。"""

@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     okx_api_secret: str = Field(default="")
     okx_api_passphrase: str = Field(default="")
 
+    # 交易模式：paper（模拟）或 live（实盘）
+    trading_mode: str = Field(default="paper")
+
+    # 初始资本基准 — 用于 dashboard total_equity / drawdown 估算
+    # 实盘下应反映真实账户 USDT 余额；待 P1+ 接 Binance fetch_balance 自动取值
+    initial_capital_usd: str = Field(default="300")
+
+    # 安全防护
+    liquidation_watcher_enabled: bool = Field(default=False)  # paper 默认关；实盘前打开
+
     # 通知
     telegram_bot_token: str = Field(default="")
     telegram_chat_id: str = Field(default="")

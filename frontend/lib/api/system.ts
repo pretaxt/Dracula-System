@@ -31,3 +31,13 @@ export async function getActivity(limit = 10): Promise<ActivityResponse> {
   })
   return data
 }
+
+export type SymbolsResponse = {
+  total: number
+  symbols: string[]  // ["BTC/USDT", "ETH/USDT", ...]
+}
+
+export async function getSymbols(): Promise<SymbolsResponse> {
+  const { data } = await apiClient.get<SymbolsResponse>('/system/symbols')
+  return data
+}

@@ -435,3 +435,78 @@ class TestCheckAllPositions:
 
         flagged = executor.check_all_positions()
         assert len(flagged) == 3
+
+
+# ---------------------------------------------------------------------------
+# perp_leverage 写入 PositionLeg
+# ---------------------------------------------------------------------------
+
+
+def _make_executor_with_leverage(
+    perp_leverage: Decimal,
+) -> tuple[OrderExecutor, PositionManager]:
+    broker = PaperBroker(slippage_bps=Decimal("0"), fee_rate=Decimal("0"))
+    manager = PositionManager()
+    guard = RiskGuard(limits=_default_limits())
+    executor = OrderExecutor(
+        broker=broker, manager=manager, guard=guard,
+        perp_leverage=perp_leverage,
+    )
+    return executor, manager
+
+
+class TestPerpLeverage:
+    @pytest.mark.asyncio
+    async def test_default_perp_leverage_is_1(self):
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+        perp_leg = next(l for l in pos.legs
+                        if l.instrument_type == InstrumentType.PERPETUAL)
+        assert perp_leg.leverage == Decimal("1")
+
+    @pytest.mark.asyncio
+    async def test_5x_leverage_propagates_to_perp_leg(self):
+        executor, manager = _make_executor_with_leverage(Decimal("5"))
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+        perp_leg = next(l for l in pos.legs
+                        if l.instrument_type == InstrumentType.PERPETUAL)
+        assert perp_leg.leverage == Decimal("5")
+
+    @pytest.mark.asyncio
+    async def test_3x_leverage_propagates_to_perp_leg(self):
+        executor, manager = _make_executor_with_leverage(Decimal("3"))
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+        perp_leg = next(l for l in pos.legs
+                        if l.instrument_type == InstrumentType.PERPETUAL)
+        assert perp_leg.leverage == Decimal("3")
+
+    @pytest.mark.asyncio
+    async def test_spot_leg_leverage_unchanged_at_1(self):
+        """spot 没有杠杆概念——应保持默认 1，不受 perp_leverage 参数影响。"""
+        executor, manager = _make_executor_with_leverage(Decimal("5"))
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+        spot_leg = next(l for l in pos.legs
+                        if l.instrument_type == InstrumentType.SPOT)
+        assert spot_leg.leverage == Decimal("1")
+
+    @pytest.mark.asyncio
+    async def test_5x_leverage_makes_perp_margin_used_one_fifth_notional(self):
+        """5x 杠杆：perp_leg.margin_used = notional / 5。"""
+        executor, manager = _make_executor_with_leverage(Decimal("5"))
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("500"))
+        perp_leg = next(l for l in pos.legs
+                        if l.instrument_type == InstrumentType.PERPETUAL)
+        # margin_used = notional / leverage = ~500 / 5 = ~100
+        # （受滑点和成交价影响略有浮动；用 5x 判断 margin < 1/4 notional）
+        assert perp_leg.margin_used < perp_leg.notional_usd / Decimal("4")
+        assert perp_leg.margin_used > perp_leg.notional_usd / Decimal("6")

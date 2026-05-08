@@ -4,8 +4,11 @@ from __future__ import annotations
 from decimal import Decimal
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.exchanges.base import ExchangeAdapter
 from app.exchanges.models import Symbol
+from app.execution.live_broker import LiveBroker
 from app.execution.paper_broker import PaperBroker
 from app.risk.limits import RiskLimits
 from app.strategies.funding_rate.paper_trading import PaperTradingSession
@@ -176,3 +179,112 @@ class TestRiskLimitsWiring:
         assert limits.max_hold_hours == Decimal("720")
         assert limits.min_apr_pct == Decimal("10.0")
         assert limits.max_total_notional_usd == Decimal("10000")
+
+
+# ---------------------------------------------------------------------------
+# 杠杆参数 — leverage.default → executor._perp_leverage
+# ---------------------------------------------------------------------------
+
+
+class TestLeverageWiring:
+    def _executor(self, cfg):
+        return build_paper_session(cfg, _mock_adapters(), _SYMBOLS)._executor
+
+    def test_leverage_default_propagates_to_executor(self):
+        cfg = _cfg(leverage={"default": "5", "max": "5"})
+        assert self._executor(cfg)._perp_leverage == Decimal("5")
+
+    def test_default_leverage_when_section_missing(self):
+        """无 leverage 节 → 默认 1（无杠杆）。"""
+        cfg = _cfg()
+        cfg.pop("leverage", None)
+        assert self._executor(cfg)._perp_leverage == Decimal("1")
+
+    def test_default_leverage_when_section_empty(self):
+        cfg = _cfg(leverage={})
+        assert self._executor(cfg)._perp_leverage == Decimal("1")
+
+    def test_leverage_accepts_numeric_string(self):
+        """YAML 里的 numeric / string 都能解析。"""
+        cfg = _cfg(leverage={"default": 3})
+        assert self._executor(cfg)._perp_leverage == Decimal("3")
+
+
+# ---------------------------------------------------------------------------
+# 退出参数 — exit / risk 节 → session 字段
+# ---------------------------------------------------------------------------
+
+
+class TestExitParamsWiring:
+    def _session(self, cfg):
+        return build_paper_session(cfg, _mock_adapters(), _SYMBOLS)
+
+    def test_pre_funding_window_minutes_applied(self):
+        cfg = _cfg(entry={"pre_funding_window_minutes": 20.0, "min_apr_pct": "12.0"})
+        assert self._session(cfg)._pre_funding_window_min == 20.0
+
+    def test_default_pre_funding_window_is_15(self):
+        cfg = _cfg(entry={"min_apr_pct": "12.0"})
+        assert self._session(cfg)._pre_funding_window_min == 15.0
+
+    def test_min_apr_for_hold_pct_applied(self):
+        cfg = _cfg(exit={"min_apr_for_hold_pct": "8.0"})
+        assert self._session(cfg)._min_apr_for_hold == Decimal("8.0")
+
+    def test_default_min_apr_for_hold_is_zero(self):
+        cfg = _cfg(exit={})
+        assert self._session(cfg)._min_apr_for_hold == Decimal("0")
+
+    def test_profit_target_pct_applied(self):
+        cfg = _cfg(exit={"profit_target_pct": "10"})
+        assert self._session(cfg)._profit_target_pct == Decimal("10")
+
+    def test_default_profit_target_is_zero(self):
+        cfg = _cfg(exit={})
+        assert self._session(cfg)._profit_target_pct == Decimal("0")
+
+    def test_perp_margin_loss_threshold_applied(self):
+        cfg = _cfg(risk={"perp_margin_loss_threshold_pct": "80",
+                         "stop_loss_pct": "1.5",
+                         "max_total_notional_usd": "5000"})
+        assert self._session(cfg)._perp_margin_loss_threshold == Decimal("80")
+
+    def test_default_perp_margin_threshold_is_zero(self):
+        """缺省 → 0 = 不检查（向后兼容老配置）。"""
+        cfg = _cfg(risk={"stop_loss_pct": "1.5", "max_total_notional_usd": "5000"})
+        assert self._session(cfg)._perp_margin_loss_threshold == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Live mode — broker 选择 + 必备依赖
+# ---------------------------------------------------------------------------
+
+
+class TestLiveModeWiring:
+    def test_live_mode_returns_live_broker(self):
+        cfg = _cfg(leverage={"default": "5"})
+        session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
+        assert isinstance(session._executor._broker, LiveBroker)
+
+    def test_paper_mode_default_returns_paper_broker(self):
+        session = build_paper_session(_cfg(), _mock_adapters(), _SYMBOLS)
+        assert isinstance(session._executor._broker, PaperBroker)
+
+    def test_live_mode_without_binance_adapter_raises(self):
+        """live_mode=True 但 adapters 里没有 'binance' → 立即 RuntimeError，避免静默 fallback。"""
+        with pytest.raises(RuntimeError, match="binance"):
+            build_paper_session(_cfg(), {}, _SYMBOLS, live_mode=True)
+
+    def test_live_broker_receives_perp_leverage(self):
+        cfg = _cfg(leverage={"default": "5"})
+        session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
+        broker = session._executor._broker
+        assert isinstance(broker, LiveBroker)
+        assert broker._perp_leverage == Decimal("5")
+
+    def test_live_broker_receives_fee_rate(self):
+        cfg = _cfg(execution={"slippage_bps": 5, "fee_rate": "0.0002"})
+        session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
+        broker = session._executor._broker
+        assert isinstance(broker, LiveBroker)
+        assert broker.fee_rate == Decimal("0.0002")

@@ -18,6 +18,7 @@ from decimal import Decimal
 
 from app.exchanges.base import ExchangeAdapter
 from app.exchanges.models import Symbol
+from app.execution.live_broker import LiveBroker
 from app.execution.order_executor import OrderExecutor
 from app.execution.paper_broker import PaperBroker
 from app.risk.limits import RiskGuard, RiskLimits
@@ -31,6 +32,7 @@ def build_paper_session(
     adapters: dict[str, ExchangeAdapter],
     symbols: list[Symbol],
     scan_interval_seconds: float = 60.0,
+    live_mode: bool = False,
 ) -> PaperTradingSession:
     """从策略配置字典构建 PaperTradingSession。
 
@@ -88,7 +90,20 @@ def build_paper_session(
     # ------------------------------------------------------------------
     # 组件装配
     # ------------------------------------------------------------------
-    broker = PaperBroker(slippage_bps=slippage_bps, fee_rate=fee_rate)
+    leverage_cfg = cfg.get("leverage", {}) or {}
+    perp_leverage = Decimal(str(leverage_cfg.get("default", "1")))
+
+    if live_mode:
+        primary_adapter = adapters.get("binance")
+        if primary_adapter is None:
+            raise RuntimeError("live_mode=True requires 'binance' adapter in adapters dict")
+        broker = LiveBroker(
+            adapter=primary_adapter,
+            fee_rate=fee_rate,
+            perp_leverage=perp_leverage,
+        )
+    else:
+        broker = PaperBroker(slippage_bps=slippage_bps, fee_rate=fee_rate)
     manager = PositionManager()
     guard = RiskGuard(limits=risk_limits)
     executor = OrderExecutor(
@@ -96,6 +111,7 @@ def build_paper_session(
         manager=manager,
         guard=guard,
         strategy_instance=cfg.get("instance_name", "funding_rate_main"),
+        perp_leverage=perp_leverage,
     )
     scanner = FundingRateScanner(
         adapters=adapters,
@@ -103,10 +119,19 @@ def build_paper_session(
         config=ScannerConfig.from_yaml(cfg),
     )
 
+    pre_funding_window_min = float(entry_cfg.get("pre_funding_window_minutes", 15.0))
+    min_apr_for_hold = Decimal(str(exit_cfg.get("min_apr_for_hold_pct", "0")))
+    profit_target = Decimal(str(exit_cfg.get("profit_target_pct", "0")))
+    perp_margin_loss_threshold = Decimal(str(risk_cfg.get("perp_margin_loss_threshold_pct", "0")))
+
     return PaperTradingSession(
         scanner=scanner,
         executor=executor,
         manager=manager,
         size_per_trade_usd=size_usd,
         scan_interval_seconds=scan_interval_seconds,
+        pre_funding_window_minutes=pre_funding_window_min,
+        min_apr_for_hold_pct=min_apr_for_hold,
+        profit_target_pct=profit_target,
+        perp_margin_loss_threshold_pct=perp_margin_loss_threshold,
     )

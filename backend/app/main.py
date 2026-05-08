@@ -31,11 +31,40 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_SYMBOLS = [
+    # Top market cap (5)
     Symbol("BTC", "USDT"),
     Symbol("ETH", "USDT"),
     Symbol("SOL", "USDT"),
     Symbol("BNB", "USDT"),
     Symbol("XRP", "USDT"),
+    # Major L1/L2 (10)
+    Symbol("DOGE", "USDT"),
+    Symbol("ADA", "USDT"),
+    Symbol("AVAX", "USDT"),
+    Symbol("DOT", "USDT"),
+    Symbol("LINK", "USDT"),
+    Symbol("LTC", "USDT"),
+    Symbol("ATOM", "USDT"),
+    Symbol("NEAR", "USDT"),
+    Symbol("APT", "USDT"),
+    Symbol("TRX", "USDT"),
+    # DeFi / mid-cap (10)
+    Symbol("UNI", "USDT"),
+    Symbol("AAVE", "USDT"),
+    Symbol("ARB", "USDT"),
+    Symbol("OP", "USDT"),
+    Symbol("FIL", "USDT"),
+    Symbol("INJ", "USDT"),
+    Symbol("SUI", "USDT"),
+    Symbol("SEI", "USDT"),
+    Symbol("LDO", "USDT"),
+    Symbol("BCH", "USDT"),
+    # Established / liquidity-tested (5)
+    Symbol("ETC", "USDT"),
+    Symbol("FTM", "USDT"),
+    Symbol("MANA", "USDT"),
+    Symbol("SAND", "USDT"),
+    Symbol("RUNE", "USDT"),
 ]
 
 _SCAN_INTERVAL_SECONDS = 60.0
@@ -97,9 +126,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     paper_task: asyncio.Task | None = None  # type: ignore[type-arg]
 
     if adapters:
+        # --- Dynamic symbol universe: union of all USDT perpetuals from active adapters ---
+        # 启动时一次性拉取（每个 adapter ~一次 API call）；不再硬编码白名单。
+        # 失败的 adapter 用 _DEFAULT_SYMBOLS 兜底以避免完全瘫痪。
+        symbol_set: set = set()
+        for ex_name, ad in adapters.items():
+            try:
+                listed = await ad.list_usdt_perpetual_symbols()
+                symbol_set.update((s.base, s.quote) for s in listed)
+                logger.info("symbol_universe_loaded", exchange=ex_name, count=len(listed))
+            except Exception:
+                logger.exception("symbol_universe_load_failed", exchange=ex_name)
+        if symbol_set:
+            scan_symbols = [Symbol(b, q) for b, q in sorted(symbol_set)]
+        else:
+            scan_symbols = _DEFAULT_SYMBOLS  # fallback
+            logger.warning("symbol_universe_fallback_to_default", count=len(scan_symbols))
+        logger.info("symbol_universe_total", total=len(scan_symbols))
+
         runner = FundingRateRunner(
             adapters=adapters,
-            symbols=_DEFAULT_SYMBOLS,
+            symbols=scan_symbols,
             config=scanner_config,
             scan_interval_seconds=_SCAN_INTERVAL_SECONDS,
         )
@@ -107,12 +154,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("funding_rate_runner_task_created")
 
         if strategy_cfg.get("enabled", False):
+            _live_mode = settings.trading_mode.lower() == "live"
             paper_session = build_paper_session(
                 cfg=strategy_cfg,
                 adapters=adapters,
-                symbols=_DEFAULT_SYMBOLS,
+                symbols=scan_symbols,
                 scan_interval_seconds=_SCAN_INTERVAL_SECONDS,
+                live_mode=_live_mode,
             )
+            logger.info("trading_mode", mode=settings.trading_mode, live=_live_mode)
+            # 重启时从 DB 恢复仓位，避免去重失效导致重复开仓
+            await paper_session.restore()
             paper_task = asyncio.create_task(
                 paper_session.run_forever(), name="paper_trading_session"
             )
@@ -124,6 +176,65 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("paper_trading_disabled_in_config")
     else:
         logger.warning("no_adapters_available_runner_not_started")
+
+    # --- Liquidation watcher (实盘双腿同步保护，paper 默认关) ---
+    liquidation_watcher = None
+    if (
+        settings.liquidation_watcher_enabled
+        and settings.binance_api_key
+        and paper_session is not None
+    ):
+        from app.safety import LiquidationWatcher  # noqa: PLC0415
+        from app.notifications import notify_perp_liquidated  # noqa: PLC0415
+        from app.risk.models import ExitReason  # noqa: PLC0415
+
+        _captured_session = paper_session
+
+        async def _on_liquidation(symbol, raw_event: dict) -> None:
+            """永续被强平时的紧急回调：找到对应仓位（可能多笔）→ close → 通知。"""
+            positions = _captured_session._manager.get_by_symbol(symbol) or []
+            if not positions:
+                logger.warning("liquidation_no_matching_position", symbol=str(symbol))
+                notify_perp_liquidated(
+                    str(symbol), raw_event.get("S", "?"),
+                    raw_event.get("q", "?"), raw_event.get("ap", "?"),
+                )
+                return
+            for pos in positions:
+                try:
+                    await _captured_session._executor.close_position(
+                        pos.id, reason=ExitReason.PERP_LIQ_RISK,
+                    )
+                    logger.info(
+                        "perp_liquidation_handled",
+                        symbol=str(symbol), position_id=pos.id[:8],
+                    )
+                except Exception:
+                    logger.exception(
+                        "perp_liquidation_close_failed",
+                        symbol=str(symbol), position_id=pos.id[:8],
+                    )
+            notify_perp_liquidated(
+                str(symbol), raw_event.get("S", "?"),
+                raw_event.get("q", "?"), raw_event.get("ap", "?"),
+            )
+
+        liquidation_watcher = LiquidationWatcher(
+            api_key=settings.binance_api_key,
+            api_secret=settings.binance_api_secret,
+            on_liquidation=_on_liquidation,
+        )
+        await liquidation_watcher.start()
+        logger.info("liquidation_watcher_enabled")
+    else:
+        logger.info(
+            "liquidation_watcher_disabled",
+            reason=(
+                "flag_off" if not settings.liquidation_watcher_enabled
+                else "no_binance_key" if not settings.binance_api_key
+                else "no_paper_session"
+            ),
+        )
 
     # --- Start spot-perp basis scanner (B.1) + paper trading (B.2) ---
     spot_perp_runner = None
@@ -167,16 +278,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.paper_task = paper_task
     app.state.strategy_cfg = strategy_cfg
     app.state.adapters = adapters
-    app.state.symbols = _DEFAULT_SYMBOLS
+    app.state.symbols = scan_symbols if 'scan_symbols' in locals() else _DEFAULT_SYMBOLS
     app.state.startup_time = datetime.now(timezone.utc)
     app.state.spot_perp_runner = spot_perp_runner
     app.state.spot_perp_task = spot_perp_task
     app.state.spot_perp_paper = spot_perp_paper
     app.state.spot_perp_paper_task = spot_perp_paper_task
+    app.state.liquidation_watcher = liquidation_watcher
 
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
+    if liquidation_watcher is not None:
+        await liquidation_watcher.stop()
     if paper_session is not None:
         await paper_session.stop()
     if paper_task is not None:

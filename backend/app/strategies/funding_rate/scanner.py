@@ -40,6 +40,8 @@ _DEFAULT_MIN_DEPTH_USD = Decimal("10000")
 _DEFAULT_MAX_SPREAD_BPS = Decimal("10")
 _DEFAULT_LOOKBACK_PERIODS = 9
 _DEFAULT_MIN_POSITIVE_PERIODS = 7
+_DEFAULT_MAX_OPPORTUNITIES = 20
+_DEFAULT_MIN_VOLUME_24H_USD = Decimal("0")  # 0 = 不过滤；YAML 中可设置如 50000000
 
 
 @dataclass
@@ -51,6 +53,8 @@ class ScannerConfig:
     max_spread_bps: Decimal = _DEFAULT_MAX_SPREAD_BPS
     lookback_periods: int = _DEFAULT_LOOKBACK_PERIODS
     min_positive_periods: int = _DEFAULT_MIN_POSITIVE_PERIODS
+    max_opportunities: int = _DEFAULT_MAX_OPPORTUNITIES  # 按 APR 降序后保留前 N 名
+    min_volume_24h_usd: Decimal = _DEFAULT_MIN_VOLUME_24H_USD  # 24h quote-volume 下限
 
     @classmethod
     def from_yaml(cls, cfg: dict) -> "ScannerConfig":
@@ -82,6 +86,12 @@ class ScannerConfig:
             ),
             min_positive_periods=int(
                 history.get("min_positive_periods", _DEFAULT_MIN_POSITIVE_PERIODS)
+            ),
+            max_opportunities=int(
+                entry.get("max_opportunities", _DEFAULT_MAX_OPPORTUNITIES)
+            ),
+            min_volume_24h_usd=Decimal(
+                str(entry.get("min_volume_24h_usd", _DEFAULT_MIN_VOLUME_24H_USD))
             ),
         )
 
@@ -149,6 +159,41 @@ class FundingRateScanner:
         self._symbols = symbols
         self._config = config or ScannerConfig()
 
+    async def current_rate(
+        self, exchange: str, symbol: Symbol
+    ) -> Optional[FundingRate]:
+        """获取指定交易所/币种的当前资金费率（不做任何过滤）。
+
+        供 funding flip 退出检查使用：scanner.scan() 只返回通过 min_apr_pct
+        过滤的机会，无法用来判断已开仓位的费率是否翻负。
+        """
+        adapter = self._adapters.get(exchange)
+        if adapter is None:
+            return None
+        try:
+            return await adapter.fetch_funding_rate(symbol)
+        except Exception:
+            logger.warning("current_rate_fetch_failed", exchange=exchange, symbol=str(symbol))
+            return None
+
+    async def current_perp_price(
+        self, exchange: str, symbol: Symbol
+    ) -> Optional[Decimal]:
+        """获取指定交易所/币种的永续合约最新价。
+
+        供 perp 单腿保证金亏损监测使用：当价格接近 short 腿清算线时，
+        策略需要主动平仓以避免被交易所强平后丢失对冲。
+        """
+        adapter = self._adapters.get(exchange)
+        if adapter is None:
+            return None
+        try:
+            ticker = await adapter.fetch_ticker(symbol, InstrumentType.PERPETUAL)
+            return ticker.last
+        except Exception:
+            logger.warning("current_perp_price_fetch_failed", exchange=exchange, symbol=str(symbol))
+            return None
+
     async def scan(self) -> List[FundingRateOpportunity]:
         """并发扫描所有交易所 × 所有币种,返回通过过滤的机会列表"""
         tasks = [
@@ -170,10 +215,17 @@ class FundingRateScanner:
 
         opportunities.sort(key=lambda o: o.apr_pct, reverse=True)
 
+        # 取按 APR 降序排列的前 N 名
+        total_passed = len(opportunities)
+        if self._config.max_opportunities and total_passed > self._config.max_opportunities:
+            opportunities = opportunities[: self._config.max_opportunities]
+
         logger.info(
             "scan_complete",
             total_checked=len(tasks),
-            opportunities_found=len(opportunities),
+            opportunities_passed_filters=total_passed,
+            opportunities_returned=len(opportunities),
+            top_n_cap=self._config.max_opportunities,
         )
         return opportunities
 
@@ -202,6 +254,21 @@ class FundingRateScanner:
                     threshold=float(self._config.min_apr_pct),
                 )
                 return None
+
+            # Step 1.5: 24h 交易量过滤（防止流动性陷阱）
+            if self._config.min_volume_24h_usd > 0:
+                try:
+                    ticker = await adapter.fetch_ticker(symbol, InstrumentType.PERPETUAL)
+                    if ticker.volume_24h < self._config.min_volume_24h_usd:
+                        log.debug(
+                            "volume_too_low",
+                            volume_24h_usd=float(ticker.volume_24h),
+                            required=float(self._config.min_volume_24h_usd),
+                        )
+                        return None
+                except Exception:
+                    log.debug("volume_fetch_failed")
+                    return None
 
             # Step 2: 并发拉取现货 + 永续订单簿
             spot_ob, perp_ob = await asyncio.gather(

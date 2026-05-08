@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.exchanges.models import OrderBook, Side, Symbol
+from app.exchanges.models import InstrumentType, OrderBook, Side, Symbol
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +38,7 @@ class OrderRequest:
     exchange: str = "paper"
     reduce_only: bool = False           # 是否为平仓单
     client_order_id: str = ""
+    instrument_type: InstrumentType = InstrumentType.SPOT
 
 
 @dataclass
@@ -52,6 +53,7 @@ class OrderResult:
     slippage_bps: Decimal               # 实际滑点 (bps)
     filled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     error: str = ""
+    leg_already_closed: bool = False    # perp 已被交易所强平，跳过该腿 PnL 计算
 
     @property
     def notional_usd(self) -> Decimal:

@@ -30,6 +30,16 @@ def notify_position_closed(
     _email.notify_position_closed(strategy, symbol, realized_pnl, exit_reason)
 
 
+def notify_perp_liquidated(
+    symbol: str,
+    side: str,
+    quantity: Decimal | str,
+    avg_price: Decimal | str,
+) -> None:
+    """永续单腿被强平 — 仅 Telegram（紧急告警，跳过邮件以加快推送）。"""
+    _tg.notify_perp_liquidated(symbol, side, quantity, avg_price)
+
+
 def notify_risk_violation(rule: str, message: str) -> None:
     _tg.notify_risk_violation(rule, message)
     _email.notify_risk_violation(rule, message)

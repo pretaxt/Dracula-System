@@ -93,11 +93,29 @@ class OKXAdapter(CCXTAdapter):
                 symbol=symbol,
                 exchange="okx",
                 rate=_to_dec(r.get("fundingRate")),
-                next_funding_time=int(r.get("fundingTimestamp") or 0),
+                next_funding_time=int(r.get("timestamp") or r.get("fundingTimestamp") or 0),
                 funding_interval_hours=_OKX_FUNDING_INTERVAL_HOURS,
             )
             for r in (raw_list or [])
         ]
+
+    async def list_usdt_perpetual_symbols(self) -> list[Symbol]:
+        """列出所有 USDT 永续合约 symbol（用于动态扫描所有币对）。"""
+        client = self._clients[InstrumentType.PERPETUAL]
+        markets = await self._call_with_retry(client.load_markets, True)
+        result: list[Symbol] = []
+        for m in (markets or {}).values():
+            if not m.get("active", False):
+                continue
+            if not m.get("swap", False):
+                continue
+            if m.get("quote") != "USDT":
+                continue
+            base = m.get("base")
+            if not base:
+                continue
+            result.append(Symbol(base, "USDT"))
+        return result
 
     async def fetch_positions(self) -> list:
         return []

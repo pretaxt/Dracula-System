@@ -87,6 +87,7 @@ class BacktestEngine:
 
         for period in sorted_periods:
             await self._settle_funding(period)
+            await self._check_funding_flip_exit(period)
             await self._check_and_close_violations(period)
             await self._try_open(period)
             equity = self._compute_equity(period)
@@ -124,6 +125,19 @@ class BacktestEngine:
             funding = perp_leg.size * period.perp_price * period.funding_rate
             self._manager.record_funding(pos.id, funding)
 
+    async def _check_funding_flip_exit(self, period: FundingPeriod) -> None:
+        """资金费率翻负保护：当前周期费率 <= 0 时，平掉该 symbol 的所有开仓。
+
+        理由：策略只在正费率下盈利；持仓期间费率翻负会持续支付资金费给多头，
+        早退出可避免后续负费率累计损失。
+        """
+        if period.funding_rate > _ZERO:
+            return
+        for pos in list(self._manager.open_positions):
+            if pos.symbol != period.symbol:
+                continue
+            await self._close(pos, period, ExitReason.FUNDING_REVERSAL)
+
     async def _check_and_close_violations(self, period: FundingPeriod) -> None:
         """风控检查，对触发规则的仓位执行平仓。
 
@@ -138,9 +152,12 @@ class BacktestEngine:
     async def _try_open(self, period: FundingPeriod) -> None:
         """若当期资金费率满足进场条件，尝试开新仓；风控拦截时静默跳过。
 
+        与生产 paper trading 一致：同一 symbol 已有开仓则跳过（避免并行重复仓位）。
         开仓成功后将 opened_at 修正为模拟时间戳，确保 holding_hours
         以历史时间而非系统时钟计算。
         """
+        if self._manager.get_by_symbol(period.symbol):
+            return
         opportunity = self._make_opportunity(period)
         try:
             pos = await self._executor.open_delta_neutral(

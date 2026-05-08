@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from app.api.deps import CurrentUser
+from app.core.config import get_settings
 from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
     SpotPerpOpportunitiesResponse,
@@ -49,6 +50,7 @@ def _build_status(app_state) -> StrategyStatusResponse:
             if guard:
                 pos_count = len(getattr(guard, "_positions", {}))
 
+    settings = get_settings()
     return StrategyStatusResponse(
         paper_running=paper_running,
         runner_running=runner_running,
@@ -56,10 +58,11 @@ def _build_status(app_state) -> StrategyStatusResponse:
         open_positions=pos_count,
         current_config=StrategyConfig(
             min_apr_pct=str(cfg.get("entry", {}).get("min_apr_pct", "10.0")),
-            max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "500")),
+            max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "50")),
             max_concurrent_positions=cfg.get("position", {}).get("max_positions", 3),
             scan_interval_seconds=cfg.get("scan_interval_seconds", 60.0),
         ),
+        trading_mode=settings.trading_mode.lower(),
     )
 
 
@@ -88,7 +91,7 @@ async def update_config(
     cfg = patch_strategy_config(request.app.state, patch)
     return StrategyConfig(
         min_apr_pct=str(cfg.get("entry", {}).get("min_apr_pct", "10.0")),
-        max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "500")),
+        max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "50")),
         max_concurrent_positions=cfg.get("position", {}).get("max_positions", 3),
         scan_interval_seconds=cfg.get("scan_interval_seconds", 60.0),
     )

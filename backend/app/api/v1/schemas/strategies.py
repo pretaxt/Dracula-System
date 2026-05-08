@@ -19,6 +19,7 @@ class StrategyStatusResponse(BaseModel):
     last_scan_at: datetime | None
     open_positions: int
     current_config: StrategyConfig
+    trading_mode: str = "paper"  # "paper" | "live"，从 settings.trading_mode 透传
 
 
 class StrategyActionResponse(BaseModel):

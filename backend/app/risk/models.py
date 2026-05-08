@@ -34,11 +34,12 @@ class ExitReason(str, Enum):
     """平仓原因。"""
 
     FUNDING_REVERSAL = "funding_reversal"    # 资金费率转负
-    STOP_LOSS = "stop_loss"                  # 止损
+    STOP_LOSS = "stop_loss"                  # 止损（净 PnL 触发）
     RISK_LIMIT = "risk_limit"                # 风控强制
     MAX_HOLD_TIME = "max_hold_time"          # 达到最长持仓时间
     MANUAL = "manual"                        # 手动平仓
     STRATEGY = "strategy"                    # 策略信号
+    PERP_LIQ_RISK = "perp_liq_risk"          # 永续单腿保证金亏损接近清算 → 双腿同平
 
 
 # ---------------------------------------------------------------------------

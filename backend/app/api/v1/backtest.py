@@ -26,7 +26,7 @@ class BacktestRequest(BaseModel):
     days: int = Field(default=30, ge=7, le=90)
     initial_capital_usd: float = Field(default=10_000, ge=1_000)
     size_per_trade_usd: float = Field(default=500, ge=100)
-    min_apr_pct: float = Field(default=10.0, ge=1.0)
+    min_apr_pct: float = Field(default=10.0, ge=0.1)
     max_positions: int = Field(default=5, ge=1, le=20)
     stop_loss_pct: float = Field(default=2.0, ge=0.5)
     max_hold_hours: float = Field(default=168.0, ge=8.0)

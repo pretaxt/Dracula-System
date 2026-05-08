@@ -1,6 +1,7 @@
 'use client'
 import { useQuery } from '@tanstack/react-query'
 import { getOpportunities } from '@/lib/api/funding'
+import { getPositions } from '@/lib/api/positions'
 import { Card, CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, StatusDot } from '@/components/ui/Button'
 import { ProgressBar } from '@/components/ui/Stats'
@@ -23,8 +24,17 @@ export default function FundingRatesPage() {
     queryFn: getOpportunities,
     refetchInterval: 15_000,
   })
+  const { data: posData } = useQuery({
+    queryKey: ['positions-open'],
+    queryFn: () => getPositions({ status: 'open' }),
+    refetchInterval: 15_000,
+  })
 
   const opps: Opportunity[] = data?.data ?? []
+  // 真实"已建仓"匹配：从 open positions 取 symbol 集合
+  const openSymbols = new Set<string>(
+    (posData?.data ?? []).map((p: { symbol?: string }) => p.symbol ?? '').filter(Boolean),
+  )
   const aprList = opps.map((o) => parseFloat(o.apr_pct)).filter((v) => !Number.isNaN(v))
   const avgApr = aprList.length ? aprList.reduce((s, v) => s + v, 0) / aprList.length : 0
   const maxApr = aprList.length ? Math.max(...aprList) : 0
@@ -130,8 +140,8 @@ export default function FundingRatesPage() {
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
                     {o.history_positive !== null ? `${o.history_positive}/10` : '—'}
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 10, color: apr >= 15 ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
-                    {apr >= 15 ? t('已建仓') : '—'}
+                  <td style={{ padding: '10px 12px', fontSize: 10, color: openSymbols.has(o.symbol) ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
+                    {openSymbols.has(o.symbol) ? t('已建仓') : '—'}
                   </td>
                 </tr>
               )

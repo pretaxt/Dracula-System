@@ -1,11 +1,133 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { useT } from '@/components/i18n/I18nProvider'
 import { runBacktest, type BacktestResult, type EquityPoint } from '@/lib/api/backtest'
+import { getSymbols } from '@/lib/api/system'
 
-const SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
+const FALLBACK_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
 const EXCHANGES = ['binance', 'okx']
+
+function SymbolPicker({ value, onChange, options }: {
+  value: string
+  onChange: (s: string) => void
+  options: string[]  // ["BTC", "ETH", ...]
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [])
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options
+    const q = query.trim().toUpperCase()
+    return options.filter(s => s.toUpperCase().includes(q))
+  }, [query, options])
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--border)',
+          borderRadius: 6,
+          color: 'var(--text-primary)',
+          padding: '6px 28px 6px 10px',
+          fontSize: 13,
+          cursor: 'pointer',
+          position: 'relative',
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {value}/USDT
+        <span style={{
+          position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+          fontSize: 10, color: 'var(--text-muted)',
+        }}>▼</span>
+      </div>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 1000,
+          background: '#0a0d12',
+          backgroundImage: 'linear-gradient(180deg, #12161e 0%, #0a0d12 100%)',
+          border: '1px solid var(--accent-blood)',
+          borderRadius: 6,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(0,0,0,0.5), 0 0 24px rgba(227,64,88,0.15)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          maxHeight: 320, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <input
+            type="text"
+            placeholder="搜索 (e.g. BTC, SOL)"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            autoFocus
+            style={{
+              background: '#000',
+              border: 'none',
+              borderBottom: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+              padding: '10px 12px',
+              fontSize: 12,
+              fontFamily: 'var(--font-mono)',
+              outline: 'none',
+            }}
+          />
+          <div style={{ overflow: 'auto', flex: 1 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 12, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+                无匹配
+              </div>
+            ) : (
+              filtered.map(s => (
+                <div
+                  key={s}
+                  onClick={() => { onChange(s); setOpen(false); setQuery('') }}
+                  style={{
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    color: s === value ? 'var(--accent-blood)' : 'var(--text-secondary)',
+                    background: s === value ? 'rgba(227,64,88,0.08)' : 'transparent',
+                    borderLeft: s === value ? '2px solid var(--accent-blood)' : '2px solid transparent',
+                  }}
+                  onMouseEnter={e => { if (s !== value) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                  onMouseLeave={e => { if (s !== value) e.currentTarget.style.background = 'transparent' }}
+                >
+                  {s}/USDT
+                </div>
+              ))
+            )}
+          </div>
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            padding: '6px 12px',
+            fontSize: 10,
+            color: 'var(--text-muted)',
+            fontFamily: 'var(--font-mono)',
+            background: '#000',
+            display: 'flex', justifyContent: 'space-between',
+          }}>
+            <span>{filtered.length} / {options.length}</span>
+            <span>动态扫描宇宙</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function fmt2(n: number) { return n.toFixed(2) }
 function fmtUsd(n: number) {
@@ -80,6 +202,19 @@ export default function BacktestPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // 同步策略扫描宇宙：把 BTC/USDT 等 597 个动态发现的标的注入回测候选
+  const { data: symbolsData } = useQuery({
+    queryKey: ['system-symbols'],
+    queryFn: getSymbols,
+    staleTime: 5 * 60 * 1000,  // 5min cache，符号变化很慢
+  })
+  const symbolBases = useMemo(() => {
+    if (!symbolsData?.symbols?.length) return FALLBACK_SYMBOLS
+    return symbolsData.symbols
+      .filter(s => s.endsWith('/USDT'))
+      .map(s => s.split('/')[0])
+  }, [symbolsData])
+
   async function handleRun() {
     setLoading(true)
     setError(null)
@@ -131,9 +266,7 @@ export default function BacktestPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginTop: 16 }}>
           <div>
             <label style={labelStyle}>{t('标的')}</label>
-            <select value={symbol} onChange={e => setSymbol(e.target.value)} style={inputStyle}>
-              {SYMBOLS.map(s => <option key={s} value={s}>{s}/USDT</option>)}
-            </select>
+            <SymbolPicker value={symbol} onChange={setSymbol} options={symbolBases} />
           </div>
           <div>
             <label style={labelStyle}>{t('交易所')}</label>
@@ -160,7 +293,7 @@ export default function BacktestPage() {
           <div>
             <label style={labelStyle}>{t('最低 APR %')}</label>
             <input type="number" value={minApr} onChange={e => setMinApr(Number(e.target.value))}
-              min={1} step={1} style={inputStyle} />
+              min={0.1} step={0.5} style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>{t('最大持仓数')}</label>
@@ -178,20 +311,97 @@ export default function BacktestPage() {
               min={8} step={8} style={inputStyle} />
           </div>
         </div>
-        <button onClick={handleRun} disabled={loading} style={{
-          marginTop: 16, padding: '8px 24px',
-          background: loading ? 'var(--surface-3)' : 'var(--accent-blood)',
-          color: '#fff', border: 'none', borderRadius: 6,
-          cursor: loading ? 'not-allowed' : 'pointer',
-          fontWeight: 600, fontSize: 13, letterSpacing: '0.04em',
+        <div style={{
+          marginTop: 20,
+          padding: '16px 20px',
+          background: 'linear-gradient(135deg, rgba(227,64,88,0.06) 0%, rgba(227,64,88,0.02) 100%)',
+          border: '1px solid rgba(227,64,88,0.2)',
+          borderRadius: 8,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+          flexWrap: 'wrap',
         }}>
-          {loading ? t('运行中...') : t('运行回测')}
-        </button>
-        {error && <p style={{ marginTop: 10, color: '#ef4444', fontSize: 13 }}>{error}</p>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+              textTransform: 'uppercase', color: 'var(--accent-blood)',
+              padding: '3px 8px', border: '1px solid rgba(227,64,88,0.3)',
+              borderRadius: 3, background: 'rgba(227,64,88,0.05)',
+            }}>
+              {t('READY')}
+            </span>
+            <div style={{ display: 'flex', gap: 18, fontSize: 12, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+              <span><span style={{ color: 'var(--text-muted)' }}>{t('标的')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{symbol}/USDT</span></span>
+              <span><span style={{ color: 'var(--text-muted)' }}>{t('周期')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{days}d</span></span>
+              <span><span style={{ color: 'var(--text-muted)' }}>{t('资金')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{fmtUsd(capital)}</span></span>
+              <span><span style={{ color: 'var(--text-muted)' }}>APR≥:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-gold)', fontWeight: 600 }}>{minApr}%</span></span>
+            </div>
+          </div>
+          <button onClick={handleRun} disabled={loading} style={{
+            padding: '12px 32px',
+            background: loading
+              ? 'var(--surface-3)'
+              : 'linear-gradient(135deg, var(--accent-blood) 0%, #c12944 100%)',
+            color: '#fff', border: 'none', borderRadius: 6,
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontWeight: 700, fontSize: 13, letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            boxShadow: loading ? 'none' : '0 4px 14px rgba(227,64,88,0.35), 0 0 0 1px rgba(227,64,88,0.2) inset',
+            transition: 'all var(--duration-fast) var(--ease-in-out)',
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            minWidth: 160, justifyContent: 'center',
+          }}
+          onMouseEnter={(e) => {
+            if (!loading) {
+              e.currentTarget.style.transform = 'translateY(-1px)'
+              e.currentTarget.style.boxShadow = '0 6px 20px rgba(227,64,88,0.5), 0 0 0 1px rgba(227,64,88,0.3) inset'
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!loading) {
+              e.currentTarget.style.transform = 'translateY(0)'
+              e.currentTarget.style.boxShadow = '0 4px 14px rgba(227,64,88,0.35), 0 0 0 1px rgba(227,64,88,0.2) inset'
+            }
+          }}>
+            {loading ? (
+              <>
+                <span style={{
+                  width: 12, height: 12, border: '2px solid rgba(255,255,255,0.3)',
+                  borderTopColor: '#fff', borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite', display: 'inline-block',
+                }} />
+                {t('运行中')}
+              </>
+            ) : (
+              <>▶ {t('运行回测')}</>
+            )}
+          </button>
+        </div>
+        {error && (
+          <div style={{
+            marginTop: 12, padding: '10px 14px',
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.3)',
+            borderRadius: 6, color: '#ef4444', fontSize: 13,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ fontWeight: 700 }}>!</span> {error}
+          </div>
+        )}
+        <style jsx>{`
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `}</style>
       </CardElevated>
 
       {result && (
         <>
+          {result.total_trades === 0 && (
+            <div style={{ padding: '12px 16px', background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 6, fontSize: 13, color: 'var(--accent-gold)' }}>
+              {t('当前参数下无满足条件的套利机会，尝试降低最低 APR 或更换标的')}
+            </div>
+          )}
           <CardElevated style={{ padding: 20 }}>
             <SectionHeader title={t('绩效指标')}
               subtitle={`${result.total_trades} 笔 · ${fmt2(result.periods_days)} 天`} />

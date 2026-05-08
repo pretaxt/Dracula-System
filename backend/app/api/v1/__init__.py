@@ -34,7 +34,11 @@ _protected.include_router(risk_router)
 _protected.include_router(orders_router)
 _protected.include_router(account_router)
 _protected.include_router(system_router)
-_protected.include_router(market_router)
 _protected.include_router(backtest_router)
 
 router.include_router(_protected)
+
+# market_router 独立挂载 — 避免 router-level OAuth2PasswordBearer
+# 在 WebSocket 路由上抛 TypeError(missing 'request' arg)。
+# HTTP endpoints 自身已用 `_: CurrentUser` 做鉴权；WS 路由用 ?token= query 参数自验。
+router.include_router(market_router)

@@ -85,6 +85,24 @@ def notify_position_closed(
     _fire(text)
 
 
+def notify_perp_liquidated(
+    symbol: str,
+    side: str,
+    quantity: Decimal | str,
+    avg_price: Decimal | str,
+) -> None:
+    """永续单腿被交易所强平 — 紧急告警（系统已自动平 spot 解除裸多）。"""
+    text = (
+        f"🚨 <b>永续强平</b>\n"
+        f"标的: {symbol}\n"
+        f"方向: {side}\n"
+        f"数量: {quantity}\n"
+        f"成交均价: {avg_price}\n"
+        f"⚠️ 现货裸多敞口已自动平仓"
+    )
+    _fire(text)
+
+
 def notify_risk_violation(rule: str, message: str) -> None:
     text = (
         f"⚠️ <b>风控触发</b>\n"

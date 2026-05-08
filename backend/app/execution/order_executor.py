@@ -41,15 +41,17 @@ class OrderExecutor:
 
     def __init__(
         self,
-        broker: PaperBroker,
+        broker,                           # PaperBroker 或 LiveBroker（鸭子类型）
         manager: PositionManager,
         guard: RiskGuard,
         strategy_instance: str = "funding_rate_main",
+        perp_leverage: Decimal = Decimal("1"),
     ) -> None:
         self._broker = broker
         self._manager = manager
         self._guard = guard
         self._strategy_instance = strategy_instance
+        self._perp_leverage = perp_leverage
 
     # ------------------------------------------------------------------
     # 开仓
@@ -101,6 +103,7 @@ class OrderExecutor:
             size=quantity,
             reference_price=spot_ask,
             exchange=exchange,
+            instrument_type=InstrumentType.SPOT,
         )
         perp_req = OrderRequest(
             symbol=symbol,
@@ -109,6 +112,7 @@ class OrderExecutor:
             reference_price=perp_bid,
             exchange=exchange,
             reduce_only=False,
+            instrument_type=InstrumentType.PERPETUAL,
         )
         spot_result, perp_result = await self._broker.execute_pair(spot_req, perp_req)
 
@@ -128,6 +132,7 @@ class OrderExecutor:
             side=Side.SELL,
             size=perp_result.filled_size,
             entry_price=perp_result.avg_price,
+            leverage=self._perp_leverage,
         ))
 
         # 6. 记录手续费并标记开仓
@@ -178,11 +183,23 @@ class OrderExecutor:
                 symbol=leg.symbol,
                 side=close_side,
                 size=leg.size,
-                reference_price=leg.entry_price,  # 纸交易以建仓价为参考
+                reference_price=leg.entry_price,
                 exchange=leg.exchange,
                 reduce_only=True,
+                instrument_type=leg.instrument_type,
             )
             result: OrderResult = await self._broker.execute(req)
+
+            if result.leg_already_closed:
+                # 永续已被交易所强平，跳过该腿 PnL（LiquidationWatcher 已处理）
+                logger.warning(
+                    "leg_already_closed_skipped",
+                    position_id=pos.id[:8],
+                    instrument=leg.instrument_type.value,
+                    symbol=str(leg.symbol),
+                )
+                continue
+
             close_fees += result.fees
 
             # 计算该腿已实现盈亏

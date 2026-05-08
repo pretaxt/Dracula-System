@@ -7,12 +7,13 @@ import { useT } from '../i18n/I18nProvider'
 import { StatusDot } from '../ui/Button'
 import { useAuthStore } from '@/lib/auth/token-store'
 import { getHealth, formatUptime } from '@/lib/api/health'
+import { getStrategyStatus } from '@/lib/api/strategies'
 
 const NAV = [
   { href: '/',           labelZh: '总览',       Icon: LayoutGrid },
   { href: '/market',     labelZh: '行情中心',   Icon: TrendingUp },
   { href: '/strategies', labelZh: '策略中心',   Icon: Target,      badge: '12' },
-  { href: '/positions',  labelZh: '持仓与订单', Icon: Layers,      badge: '8',  badgeColor: 'var(--accent-emerald)' },
+  { href: '/positions',  labelZh: '持仓与订单', Icon: Layers },
   { href: '/risk',       labelZh: '风控中心',   Icon: ShieldAlert },
   { href: '/backtest',   labelZh: '历史回测',   Icon: FlaskConical },
   { href: '/settings',   labelZh: '设置',       Icon: Settings },
@@ -29,6 +30,8 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
   const router = useRouter()
   const clearToken = useAuthStore((s) => s.clearToken)
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth, refetchInterval: 60_000 })
+  const { data: stratStatus } = useQuery({ queryKey: ['strategy-status'], queryFn: getStrategyStatus, refetchInterval: 30_000 })
+  const positionsCount = stratStatus?.open_positions ?? 0
   const handleLogout = () => {
     clearToken()
     router.replace('/login')
@@ -127,11 +130,11 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
               color: 'var(--text-tertiary)',
             }}
           >
-            {t('SYSTEM STATUS')}
+            {t('系统状态')}
           </span>
           <StatusDot tone="active" />
         </div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>{t('RUNNING')}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>{t('运行中')}</div>
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>
           ↑ {formatUptime(health?.uptime_seconds ?? 0)}
         </div>
@@ -141,8 +144,16 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
       <nav style={{ flex: 1, padding: '8px 0', overflowY: 'auto' }}>
         {NAV.map(({ href, labelZh, Icon, ...rest }) => {
           const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
-          const badge = 'badge' in rest ? rest.badge : undefined
-          const badgeColor = 'badgeColor' in rest ? rest.badgeColor : undefined
+          const staticBadge: string | undefined = 'badge' in rest ? (rest as { badge?: string }).badge : undefined
+          const staticBadgeColor: string | undefined =
+            'badgeColor' in rest ? (rest as { badgeColor?: string }).badgeColor : undefined
+          // /positions 徽章动态来自 API（开仓数）；其他保留静态值
+          const badge: string | undefined = href === '/positions'
+            ? (positionsCount > 0 ? String(positionsCount) : undefined)
+            : staticBadge
+          const badgeColor: string | undefined = href === '/positions'
+            ? 'var(--accent-emerald)'
+            : staticBadgeColor
           return (
             <Link
               key={href}

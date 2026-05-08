@@ -1,7 +1,23 @@
 import { apiClient } from './client'
 
-export async function getStrategyStatus() {
-  const { data } = await apiClient.get('/strategies/status')
+export type StrategyConfig = {
+  min_apr_pct: string | null
+  max_position_notional_usd: string | null
+  max_concurrent_positions: number | null
+  scan_interval_seconds: number | null
+}
+
+export type StrategyStatus = {
+  paper_running: boolean
+  runner_running: boolean
+  last_scan_at: string | null
+  open_positions: number
+  current_config: StrategyConfig
+  trading_mode: 'paper' | 'live'
+}
+
+export async function getStrategyStatus(): Promise<StrategyStatus> {
+  const { data } = await apiClient.get<StrategyStatus>('/strategies/status')
   return data
 }
 

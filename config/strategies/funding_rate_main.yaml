@@ -1,6 +1,10 @@
 # 策略 #1 — 资金费率套利 (Phase 0 主力)
 # 对应文档: docs/02_strategy_funding_rate.md
 #
+# 交易模式切换（通过服务器 .env 控制，不改此文件）:
+#   TRADING_MODE=paper  → PaperBroker 模拟成交（默认）
+#   TRADING_MODE=live   → LiveBroker 真实 Binance 下单
+#
 # 回测优化记录（2026-05-06）:
 #   原始配置 max_hold_hours=72  → 年化 -6.4%（手续费侵蚀资金费收入）
 #   优化配置 max_hold_hours=720 → 年化 +5.3%（夏普 23.9，最大回撤 0.06%）
@@ -10,31 +14,38 @@ instance_name: funding_rate_main
 strategy_type: funding_rate
 enabled: true
 
-capital_usd: 2000.0
+capital_usd: 5000.0               # 扩到 30 候选币 × 双交易所，提高资本以容纳 8 笔并发
 
 entry:
-  min_apr_pct: 8.0                # 原 10.0；8% 门槛多 ~15% 机会，收益更高
+  min_apr_pct: 50.0               # 高门槛：只吃极端正资金费率机会（≥50% APR）
   min_orderbook_depth_usd: 10000
   max_basis_pct: 0.5
+  max_opportunities: 50           # 候选池扩到全市场后，TOP-N 提到 50
+  pre_funding_window_minutes: 15  # 仅在资金费结算前 15 分钟内开仓
+  min_volume_24h_usd: 10000000    # 24h 成交额 ≥ $1000 万 USDT（CCXT quoteVolume，防止流动性陷阱）
 
 exit:
   funding_rate_reversal: true
   min_hold_hours: 24.0            # 至少持仓 24h，过滤短期噪音
-  max_hold_hours: 720.0           # 原 168.0；回测最优 30 天（手续费充分摊薄）
+  max_hold_hours: 240.0           # 持仓满 240h（10 天）强制平仓 — 让单笔吃满高 APR 周期
+  min_apr_for_hold_pct: 10.0      # APR 跌破 10% 立即平仓（机会衰减）
+  profit_target_pct: 10.0         # 净收益达 10% 止盈（原 20% 几乎不可达，10% 在 365%+ APR 极端行情可触发）
 
 position:
-  max_positions: 3
-  size_usd: 500.0
-  exchanges: ["binance"]
+  max_positions: 5                # 同时持仓上限 5 笔
+  size_usd: 50.0                  # 实盘第一阶段：单笔 $50（spot $50 + perp $10 保证金 = $60/笔）
+  exchanges: ["binance", "okx"]   # 双交易所并行扫描
 
 execution:
   slippage_bps: 2                 # 保守滑点估计
   fee_rate: 0.0002                # Maker 挂单费率（Post-Only 模式）
 
 risk:
-  stop_loss_pct: 2.0
-  max_total_notional_usd: 8000
+  stop_loss_pct: 5.0              # 净 PnL 止损 -5%
+  max_total_notional_usd: 3000    # 5 笔 × $500 + 缓冲
+  perp_margin_loss_threshold_pct: 80.0   # 永续单腿浮亏 ≥ 初始保证金 80% 即双腿同时平仓
+                                         # （5x 杠杆下约对应价格 +16%，距清算线 +19.5% 还有 3.5% 安全垫）
 
 leverage:
-  default: 1.0
-  max: 2.0
+  default: 5.0                    # 永续 SHORT 杠杆 5x — 单笔保证金 = notional/5（$100/$500）
+  max: 5.0

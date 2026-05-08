@@ -7,7 +7,7 @@ import { useT } from '../i18n/I18nProvider'
 import { StatusDot, type StatusTone } from '../ui/Button'
 import ThemeToggle from '../theme/ThemeToggle'
 import LangToggle from '../i18n/LangToggle'
-import { stopStrategy } from '@/lib/api/strategies'
+import { getStrategyStatus, stopStrategy } from '@/lib/api/strategies'
 import { getExchangeHealth, type ExchangeHealth } from '@/lib/api/system'
 
 const TITLE_MAP: Record<string, string> = {
@@ -58,6 +58,41 @@ function UtcClock() {
   }, [])
   return (
     <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>{time}</span>
+  )
+}
+
+/**
+ * 显著 LIVE/PAPER 徽章 — 实盘红，模拟灰。
+ * 数据来源：GET /api/v1/strategies/status.trading_mode
+ */
+function TradingModeBadge() {
+  const { data } = useQuery({
+    queryKey: ['strategy-status'],
+    queryFn: getStrategyStatus,
+    refetchInterval: 30_000,
+  })
+  const mode = (data?.trading_mode ?? 'paper').toLowerCase()
+  const isLive = mode === 'live'
+  return (
+    <span
+      title={isLive ? '实盘 — 真实下单 / Live trading' : '模拟 — 不下真单 / Paper trading'}
+      style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.08em',
+        padding: '3px 8px',
+        borderRadius: 'var(--radius-sm)',
+        textTransform: 'uppercase',
+        background: isLive ? 'var(--accent-blood)' : 'var(--bg-elevated)',
+        color: isLive ? '#fff' : 'var(--text-tertiary)',
+        border: isLive ? '1px solid var(--accent-blood)' : '1px solid var(--border-strong)',
+        boxShadow: isLive ? '0 0 12px var(--accent-blood-glow)' : 'none',
+        flexShrink: 0,
+      }}
+    >
+      {isLive ? '● LIVE' : '○ PAPER'}
+    </span>
   )
 }
 
@@ -155,6 +190,7 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
           >
             {t(titleZh)}
           </h2>
+          <TradingModeBadge />
           <div
             className="topbar-exchanges"
             style={{
