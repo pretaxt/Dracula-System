@@ -264,5 +264,105 @@ Step 6: 用户确认后,开始写第一个文件
 ## 文档版本
 
 - v1.0 · 2026-05-06 · 设计阶段交接版
+- v2.0 · 2026-05-08 · Phase 0/1/2/M/B 实施版
 
 **当下次有重大变更时,更新这份文档 + CHANGELOG.md**。
+
+---
+
+## 十一、🔄 续会状态(v2.0 · 2026-05-08)
+
+### 当前 git HEAD
+
+```
+6176dc6 revert: restore over-deleted reference assets
+ce56658 chore: cleanup obsolete files + persist nginx no-cache fix
+0f0c607 fix: dashboard strategy_performance type cast (no-explicit-any)
+c4680f4 feat: B.2 spot-perp paper trading + B.3 dashboard 策略表现 real data
+a0b7365 feat: K-line v3 — VOL MA20 + MACD(12,26,9) + side-by-side orderbook
+```
+
+### 已完成(生产生效)
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| P0 | v1.0_5 血色哥特前端,12 策略卡片,响应式 | ✅ 生产 |
+| P1 | 后端 6 接口扩展 + 前端接入(account / orders / health / risk events / 12-strategy controls) | ✅ 生产 |
+| P2 | 5 项前端打磨(响应式 / 浅色 / 通知抽屉 / 策略详情页 / Playwright e2e) | ✅ 生产 |
+| **A** | dashboard 全部 mock 替换为真值(交易所健康 ping / 系统活动 / 风控指标 / 风控事件) | ✅ 生产 |
+| **B.1** | spot-perp basis scanner 监控扫描器(60s 轮询) | ✅ 生产,running=true |
+| **B.2** | spot-perp paper trading session(60s tick,基差 ≥0.10% 开仓,≤0.03% 收敛平仓,12h 强平) | ✅ 生产,持仓 0(等基差机会) |
+| **B.3** | dashboard 策略表现卡按 strategy_instance 真聚合 PnL | ✅ 生产 |
+| **行情中心 v1** | 12 币 5s 轮询 ticker + funding rate + 倒计时 | ✅ 生产 |
+| **行情中心 v2** | 24H 高/低 + 涨幅榜/跌幅榜 chips | ✅ 生产 |
+| **K 线 v1** | SVG candlestick + 4 间隔 + 成交量 | ✅ 生产 |
+| **K 线 v3** | + MA20/60 + VOL MA20 + RSI14 + **MACD(12,26,9)** + 盘口左右并排 | ✅ 生产 |
+| **根因修复** | nginx `proxy_cache off;` 永久写入 dracula.bot.conf,`scripts/ensure-nginx-no-cache.sh` 幂等持久化 | ✅ 生产 + 仓库 |
+| **仓库清理** | 删 6 个真过期文件(prototypes/dashboard_v0.3 / dgl_icon_square 重复 / REVIEW_CHECKLIST 早期版 / dex_lp_hedged 等),17.51GB docker prune,git gc 3.7→1.3M | ✅ |
+
+### 📌 待办(下次窗口对齐时第一件事)
+
+1. **策略中心 12 个策略按数字编号顺序排列**
+   - 当前 `frontend/lib/strategies/catalog.ts` 是按 P0/P1 priority 分组(1→4→13→2→3→16→5→6→7→9→10→14)
+   - 期望:01 → 02 → 03 → 04 → 05 → 06 → 07 → 09 → 10 → 13 → 14 → 16
+   - 改动只需重排 STRATEGIES 数组,无业务逻辑改动
+
+2. **Paper trading 阈值是否调整**
+   - 当前 spot-perp 入场阈值 |basis| ≥ 0.10%,几小时 0 仓位(基差太小)
+   - 选项:降到 0.05% / 0.03% 看实际开仓效果
+
+3. **B.4 报警通知** — Telegram / Discord webhook 接 risk events
+4. **B.5 历史回测** — backtester for funding-rate / spot-perp
+5. **行情中心继续深化** — Bollinger Bands / KDJ / 多交易所对比 / WebSocket 推送
+
+### 生产环境
+
+- 服务器: `43.160.207.185`,宝塔面板 `https://43.160.207.185:34461/cd69d8b7`
+- 终端: 宝塔面板侧栏"终端"(免 SSH 密码)
+- 仓库: `/opt/dracula`(git 同步 main 分支)
+- 4 容器: api / frontend / postgres(timescaledb) / redis,后两个 healthy 多日,前两个每次 deploy recreate
+
+### 一键 redeploy(在生产 root 用户下)
+
+```bash
+bash /opt/dracula/scripts/redeploy.sh           # api + frontend 全量
+bash /opt/dracula/scripts/redeploy.sh frontend  # 仅 frontend
+bash /opt/dracula/scripts/redeploy.sh api       # 仅 api
+```
+
+脚本 6 步:`git pull → docker compose build → up -d → ensure nginx no-cache(幂等)→ flush proxy_cache → reload → ps`。
+
+### nginx 缓存根因(避免再踩)
+
+宝塔默认 `/www/server/nginx/conf/proxy.conf:12` 全局 `proxy_cache cache_one;` + 模板 `proxy_cache_valid 200 1h` ⇒ 所有 vhost 默认缓存 HTML 1 小时,Next.js deploy 后浏览器还在拿老 chunk hash → "K 线消失 / 界面变老版"。修复已在 `dracula.bot.conf:63` 加 `proxy_cache off;`,并由 `scripts/ensure-nginx-no-cache.sh` 幂等持久化。
+
+### 仓库结构(精简后)
+
+```
+Dracula-System/
+├── backend/              FastAPI + SQLAlchemy async + Alembic + ccxt
+│   ├── app/
+│   │   ├── strategies/{funding_rate,spot_perp_basis}/
+│   │   ├── api/v1/       11 路由组(market / strategies / risk / system / ...)
+│   │   ├── services/     dashboard / market / system / strategy_control
+│   │   ├── exchanges/    BinanceAdapter (CCXT)
+│   │   └── models/       PositionRecord (positions 表)
+│   └── scripts/health_check.py + schema.sql
+├── frontend/             Next.js 14 App Router + TanStack Query + Zustand
+│   ├── app/(dashboard)/{page,market,strategies/[id],positions,risk,settings,funding-rates}/
+│   ├── components/{shell,ui,i18n,theme,market}/
+│   ├── lib/{api,auth,strategies}/
+│   └── e2e/smoke.spec.ts (Playwright 4 测试)
+├── docs/                 17 章设计文档(剔除已砍 #17 dex_lp_hedged)+ 决策依据
+├── prototypes/           v1.0_5 + brand_identity 设计稿
+├── scripts/              ⭐ redeploy.sh + ensure-nginx-no-cache.sh
+└── docker-compose.yml + .env.example
+```
+
+### 下次开窗口的最快上手路径
+
+```
+1. 读这一份 § 十一(2 分钟)
+2. git log --oneline -10 看最近改动
+3. 直接告诉我下一步要做什么
+```
