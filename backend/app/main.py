@@ -113,15 +113,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.warning("no_adapters_available_runner_not_started")
 
-    # --- Start spot-perp basis scanner (B.1: monitor only) ---
+    # --- Start spot-perp basis scanner (B.1) + paper trading (B.2) ---
     spot_perp_runner = None
     spot_perp_task: asyncio.Task | None = None  # type: ignore[type-arg]
+    spot_perp_paper = None
+    spot_perp_paper_task: asyncio.Task | None = None  # type: ignore[type-arg]
     if adapters:
         try:
             from app.strategies.spot_perp_basis.runner import SpotPerpRunner  # noqa: PLC0415
             from app.strategies.spot_perp_basis.scanner import (  # noqa: PLC0415
                 SpotPerpBasisScanner,
                 SpotPerpConfig,
+            )
+            from app.strategies.spot_perp_basis.paper_trading import (  # noqa: PLC0415
+                SpotPerpPaperSession,
             )
             sp_scanner = SpotPerpBasisScanner(
                 adapters=adapters,
@@ -134,8 +139,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 spot_perp_runner.run_forever(), name="spot_perp_runner"
             )
             logger.info("spot_perp_runner_task_created")
+
+            spot_perp_paper = SpotPerpPaperSession(
+                runner=spot_perp_runner, tick_interval_seconds=60.0
+            )
+            spot_perp_paper_task = asyncio.create_task(
+                spot_perp_paper.run_forever(), name="spot_perp_paper_session"
+            )
+            logger.info("spot_perp_paper_session_task_created")
         except Exception:
-            logger.exception("spot_perp_runner_init_failed")
+            logger.exception("spot_perp_init_failed")
 
     app.state.runner = runner
     app.state.paper_session = paper_session
@@ -146,6 +159,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.startup_time = datetime.now(timezone.utc)
     app.state.spot_perp_runner = spot_perp_runner
     app.state.spot_perp_task = spot_perp_task
+    app.state.spot_perp_paper = spot_perp_paper
+    app.state.spot_perp_paper_task = spot_perp_paper_task
 
     yield  # ← application handles requests here
 
@@ -165,6 +180,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         runner_task.cancel()
         try:
             await runner_task
+        except asyncio.CancelledError:
+            pass
+
+    if spot_perp_paper is not None:
+        spot_perp_paper.stop()
+    if spot_perp_paper_task is not None:
+        spot_perp_paper_task.cancel()
+        try:
+            await spot_perp_paper_task
         except asyncio.CancelledError:
             pass
 

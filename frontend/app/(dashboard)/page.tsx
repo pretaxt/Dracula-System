@@ -13,15 +13,6 @@ import { SkeletonKpiCard, Skeleton } from '@/components/ui/Skeleton'
 import { ErrorBanner } from '@/components/ui/ErrorBanner'
 import { useT } from '@/components/i18n/I18nProvider'
 
-const STRATEGY_PERF: { name: string; pnl: number; pct: number; tone: 'active' | 'warn' | 'paused' }[] = [
-  { name: '资金费率套利', pnl: 348, pct: 78, tone: 'active' },
-  { name: '期现套利',     pnl: 142, pct: 32, tone: 'active' },
-  { name: '三角套利',     pnl:  89, pct: 20, tone: 'active' },
-  { name: '跨所基差套利', pnl:  67, pct: 15, tone: 'active' },
-  { name: '配对交易',     pnl: -32, pct:  7, tone: 'warn' },
-  { name: 'CEX-DEX 监控', pnl:   0, pct:  0, tone: 'paused' },
-]
-
 const ACTIVITY_ICON = {
   up:    <TrUp size={14} style={{ color: 'var(--accent-emerald)' }} />,
   check: <CheckCircle2 size={14} style={{ color: 'var(--accent-emerald)' }} />,
@@ -197,23 +188,57 @@ export default function DashboardPage() {
             right={<Badge tone="info">MTD</Badge>}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {STRATEGY_PERF.map((s) => (
-              <div key={s.name}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <StatusDot tone={s.tone} />
-                    <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{t(s.name)}</span>
+            {(() => {
+              const perfData: Array<{ instance: string; label: string; total_pnl: string; open_positions: number; closed_positions: number }> =
+                (summary?.strategy_performance as any[]) ?? []
+              if (perfData.length === 0) {
+                return (
+                  <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                    {t('暂无策略数据')}
                   </div>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)', fontSize: 12,
-                    color: s.pnl > 0 ? 'var(--accent-emerald)' : s.pnl < 0 ? 'var(--accent-blood)' : 'var(--text-tertiary)',
-                  }}>
-                    {s.pnl === 0 ? t('监控中') : `${s.pnl > 0 ? '+' : ''}$${s.pnl}`}
-                  </span>
-                </div>
-                <ProgressBar pct={s.pct} tone={s.tone === 'warn' ? 'warn' : s.tone === 'paused' ? 'default' : 'success'} />
-              </div>
-            ))}
+                )
+              }
+              const maxAbs = Math.max(
+                1,
+                ...perfData.map((p) => Math.abs(parseFloat(p.total_pnl))),
+              )
+              return perfData.map((p) => {
+                const total = parseFloat(p.total_pnl)
+                const pct = Math.min(100, (Math.abs(total) / maxAbs) * 100)
+                const tone: 'active' | 'warn' | 'paused' =
+                  total > 0 ? 'active' : total < 0 ? 'warn' : 'paused'
+                const pnlColor =
+                  total > 0
+                    ? 'var(--accent-emerald)'
+                    : total < 0
+                    ? 'var(--accent-blood)'
+                    : 'var(--text-tertiary)'
+                return (
+                  <div key={p.instance}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <StatusDot tone={tone} />
+                        <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                          {t(p.label)}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+                          {p.open_positions}/{p.open_positions + p.closed_positions}
+                        </span>
+                      </div>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: pnlColor }}>
+                        {total === 0
+                          ? t('持平')
+                          : `${total > 0 ? '+' : '-'}$${Math.abs(total).toFixed(2)}`}
+                      </span>
+                    </div>
+                    <ProgressBar
+                      pct={pct}
+                      tone={tone === 'warn' ? 'warn' : tone === 'paused' ? 'default' : 'success'}
+                    />
+                  </div>
+                )
+              })
+            })()}
           </div>
         </CardElevated>
       </div>

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, DbSession
-from app.api.v1.schemas.dashboard import DashboardSummary, PnlPoint
+from app.api.v1.schemas.dashboard import DashboardSummary, PnlPoint, StrategyPerf
 from app.services.dashboard_service import get_summary
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -28,4 +28,7 @@ async def summary(_: CurrentUser, db: DbSession) -> DashboardSummary:
         open_positions=data["open_positions"],
         avg_apr_pct=data["avg_apr_pct"],
         pnl_series_30d=[PnlPoint(**p) for p in data["pnl_series_30d"]],
+        strategy_performance=[
+            StrategyPerf(**s) for s in data.get("strategy_performance", [])
+        ],
     )

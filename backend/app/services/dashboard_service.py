@@ -131,6 +131,8 @@ async def get_summary(session: AsyncSession) -> dict:
     api_error_rate_5m_pct = Decimal("0")
     ws_stability_pct = Decimal("100")
 
+    strategy_perf = await _get_strategy_performance(session)
+
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),
         "realized_pnl_usd": str(round(Decimal(str(r_pnl)), 8)),
@@ -146,7 +148,50 @@ async def get_summary(session: AsyncSession) -> dict:
         "open_positions": open_count,
         "avg_apr_pct": str(round(avg_apr, 4)),
         "pnl_series_30d": series,
+        "strategy_performance": strategy_perf,
     }
+
+
+# ---------------------------------------------------------------------------
+# 按策略实例聚合 PnL (B.3)
+# ---------------------------------------------------------------------------
+
+_STRATEGY_LABEL_MAP: dict[str, str] = {
+    "funding_rate_main": "资金费率套利",
+    "spot_perp_main": "期现套利",
+}
+
+
+async def _get_strategy_performance(session: AsyncSession) -> list[dict]:
+    """按 strategy_instance 聚合 realized + unrealized PnL + 持仓数。"""
+    stmt = text(
+        """
+        SELECT strategy_instance,
+               COALESCE(SUM(realized_pnl), 0)   AS realized,
+               COALESCE(SUM(unrealized_pnl), 0) AS unrealized,
+               COUNT(CASE WHEN status = 'open'   THEN 1 END) AS open_cnt,
+               COUNT(CASE WHEN status = 'closed' THEN 1 END) AS closed_cnt
+        FROM positions
+        WHERE strategy_instance IS NOT NULL
+        GROUP BY strategy_instance
+        ORDER BY (COALESCE(SUM(realized_pnl),0) + COALESCE(SUM(unrealized_pnl),0)) DESC
+        """
+    )
+    rows = (await session.execute(stmt)).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        realized = Decimal(str(r.realized))
+        unrealized = Decimal(str(r.unrealized))
+        out.append({
+            "instance": r.strategy_instance,
+            "label": _STRATEGY_LABEL_MAP.get(r.strategy_instance, r.strategy_instance),
+            "realized_pnl": str(round(realized, 8)),
+            "unrealized_pnl": str(round(unrealized, 8)),
+            "total_pnl": str(round(realized + unrealized, 8)),
+            "open_positions": int(r.open_cnt),
+            "closed_positions": int(r.closed_cnt),
+        })
+    return out
 
 
 async def _pnl_series_30d(session: AsyncSession) -> list[dict]:

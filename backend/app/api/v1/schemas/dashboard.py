@@ -11,6 +11,16 @@ class PnlPoint(BaseModel):
     net_pnl_usd: str
 
 
+class StrategyPerf(BaseModel):
+    instance: str
+    label: str
+    realized_pnl: str
+    unrealized_pnl: str
+    total_pnl: str
+    open_positions: int
+    closed_positions: int
+
+
 class DashboardSummary(BaseModel):
     net_pnl_usd: str
     realized_pnl_usd: str
@@ -26,3 +36,4 @@ class DashboardSummary(BaseModel):
     open_positions: int
     avg_apr_pct: str
     pnl_series_30d: list[PnlPoint]
+    strategy_performance: list[StrategyPerf] = []
