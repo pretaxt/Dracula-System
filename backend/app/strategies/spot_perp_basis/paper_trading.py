@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 
 # 默认参数 — 后续可移到 config/strategies/spot_perp_basis.yaml
-ENTRY_PCT = Decimal("0.10")       # |basis_pct| >= 0.10% 入场
+ENTRY_PCT = Decimal("0.05")       # |basis_pct| >= 0.05% 入场(paper 验证阶段)
 EXIT_PCT = Decimal("0.03")        # |basis_pct| <= 0.03% 收敛平仓
 MAX_HOLD_HOURS = Decimal("12")    # 12 小时强制平仓
 MAX_CONCURRENT = 3
