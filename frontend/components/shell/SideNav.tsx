@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut, TrendingUp } from 'lucide-react'
+import { LayoutGrid, Target, Layers, ShieldAlert, Settings, LogOut, TrendingUp, FlaskConical } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useT } from '../i18n/I18nProvider'
 import { StatusDot } from '../ui/Button'
@@ -14,6 +14,7 @@ const NAV = [
   { href: '/strategies', labelZh: '策略中心',   Icon: Target,      badge: '12' },
   { href: '/positions',  labelZh: '持仓与订单', Icon: Layers,      badge: '8',  badgeColor: 'var(--accent-emerald)' },
   { href: '/risk',       labelZh: '风控中心',   Icon: ShieldAlert },
+  { href: '/backtest',   labelZh: '历史回测',   Icon: FlaskConical },
   { href: '/settings',   labelZh: '设置',       Icon: Settings },
 ] as const
 
