@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.logging import get_logger
 from app.models.position import PositionRecord
-from app.notifications.telegram import notify_position_closed, notify_position_opened
+from app.notifications import notify_position_closed, notify_position_opened
 from app.strategies.spot_perp_basis.runner import SpotPerpRunner
 
 logger = get_logger(__name__)

@@ -38,7 +38,7 @@ from typing import Sequence
 from app.core.logging import get_logger
 from app.execution.order_executor import OrderExecutor
 from app.exchanges.models import Side
-from app.notifications.telegram import notify_position_closed, notify_position_opened
+from app.notifications import notify_position_closed, notify_position_opened
 from app.risk.limits import RiskLimitError
 from app.risk.models import ExitReason
 from app.risk.position_manager import PositionManager
