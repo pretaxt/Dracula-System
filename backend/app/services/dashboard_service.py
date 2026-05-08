@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.position import PositionRecord
-from app.services.balance_service import get_total_equity_usd
+from app.services.balance_service import get_per_exchange_equity, get_total_equity_usd
 
 
 def _initial_capital() -> Decimal:
@@ -118,10 +118,15 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
 
     # ---- 估算字段 ----
     net_pnl = Decimal(str(r_pnl)) + Decimal(str(u_pnl))
-    # 优先取 Binance 真实账户聚合（spot+USDM），拉不到 fallback 到 env
+    # 优先取真实账户聚合（spot+USDM），拉不到 fallback 到 env
     real_balance: Decimal | None = None
+    per_exchange_equity: dict[str, str] = {}
     if adapters:
         real_balance = await get_total_equity_usd(adapters)
+        per_ex = await get_per_exchange_equity(adapters)
+        per_exchange_equity = {
+            ex: str(round(v, 2)) for ex, v in per_ex.items()
+        }
     total_equity = real_balance if real_balance is not None else _initial_capital() + net_pnl
 
     today_pnl = Decimal(str(today_pnl_raw))
@@ -168,6 +173,7 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         "avg_apr_pct": str(round(avg_apr, 4)),
         "pnl_series_30d": series,
         "strategy_performance": strategy_perf,
+        "equity_by_exchange": per_exchange_equity,
     }
 
 

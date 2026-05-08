@@ -166,26 +166,29 @@ class LiveBroker:
     # ------------------------------------------------------------------
 
     async def _ensure_perp_margin(self, request: OrderRequest) -> None:
-        """开 perp 仓前确保 USDM 钱包 USDT 充足；不足则从 spot 自动划转。
+        """开 perp 仓前确保有足够保证金；不足时调 adapter.top_up_perp_margin 补足。
 
-        计算逻辑：
+        各交易所行为不同（adapter 自封装）：
+          - Binance: spot/USDM 钱包隔离 → 真划转
+          - OKX:    trading account 共享 spot+swap 余额 → no-op
+
+        计算：
           required_margin = notional / leverage
-          target = required_margin × buffer  (buffer=1.2 含手续费/滑点缓冲)
+          target = required_margin × 1.2 (20% buffer)
           shortfall = target − current_perp_usdt
-          划转金额 = max(shortfall + 1 USDT 余裕, 0)
+          transfer = shortfall + 1 USDT (数值精度兜底)
 
-        失败时仅 warning 不抛——后续 place_order 自己尝试，
-        若真不够交易所会返回明确错误，被 LiveBroker.execute_pair 捕获 → unwind spot。
+        失败时仅 warning，让 place_order 自行尝试；若真不够交易所明确报错 →
+        execute_pair 捕获 → unwind spot。
         """
         try:
             usdm_client = self._adapter._clients.get(InstrumentType.PERPETUAL)
-            spot_client = self._adapter._clients.get(InstrumentType.SPOT)
-            if usdm_client is None or spot_client is None:
+            if usdm_client is None:
                 return
 
             notional = request.size * request.reference_price
             required_margin = notional / self._perp_leverage
-            target = required_margin * Decimal("1.2")  # 20% 缓冲
+            target = required_margin * Decimal("1.2")
 
             raw = await usdm_client.fetch_balance()
             current = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
@@ -200,16 +203,17 @@ class LiveBroker:
                 return
 
             shortfall = target - current
-            transfer_amount = shortfall + Decimal("1")  # +$1 兜底数值精度
+            transfer_amount = shortfall + Decimal("1")
 
-            await spot_client.transfer(
-                "USDT", float(transfer_amount), "spot", "future"
-            )
+            # adapter 自己处理交易所差异（Binance 真划，OKX no-op）
+            top_up = getattr(self._adapter, "top_up_perp_margin", None)
+            if top_up is None:
+                logger.warning("adapter_no_top_up_method", symbol=str(request.symbol))
+                return
+            await top_up(transfer_amount)
             logger.info(
                 "perp_margin_topped_up",
                 symbol=str(request.symbol),
-                from_account="spot",
-                to_account="future",
                 amount=str(round(transfer_amount, 2)),
                 required=str(round(required_margin, 2)),
                 before=str(round(current, 2)),

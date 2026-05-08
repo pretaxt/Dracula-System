@@ -118,7 +118,7 @@ export function ConfirmDialog({
             style={{
               margin: 0,
               fontFamily: 'var(--font-display)',
-              fontSize: 18,
+              fontSize: 20,
               fontWeight: 600,
               letterSpacing: '0.04em',
               color: 'var(--text-primary)',
@@ -132,7 +132,7 @@ export function ConfirmDialog({
 
         <div
           style={{
-            fontSize: 13,
+            fontSize: 15,
             lineHeight: 1.6,
             color: 'var(--text-secondary)',
             marginBottom: 20,

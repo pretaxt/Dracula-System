@@ -37,3 +37,6 @@ class DashboardSummary(BaseModel):
     avg_apr_pct: str
     pnl_series_30d: list[PnlPoint]
     strategy_performance: list[StrategyPerf] = []
+    # 每个交易所的 USD 等值（来自 balance_service.get_per_exchange_equity）
+    # 形如 {"binance": "102.39", "okx": "0.00"}；缺数据时为空 dict
+    equity_by_exchange: dict[str, str] = {}

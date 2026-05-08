@@ -53,7 +53,7 @@ function CountdownToFunding({ nextMs }: { nextMs: number }) {
   const m = Math.floor((remaining % 3_600_000) / 60_000)
   const s = Math.floor((remaining % 60_000) / 1000)
   return (
-    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>
       {h.toString().padStart(2, '0')}:{m.toString().padStart(2, '0')}:{s.toString().padStart(2, '0')}
     </span>
   )
@@ -167,7 +167,7 @@ export default function MarketPage() {
                 alignItems: 'center',
                 gap: 12,
                 fontFamily: 'var(--font-mono)',
-                fontSize: 11,
+                fontSize: 13,
                 color: 'var(--text-tertiary)',
               }}
             >
@@ -196,7 +196,7 @@ export default function MarketPage() {
               onClick={() => setFilter(k)}
               style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 11,
+                fontSize: 13,
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-sm)',
                 cursor: 'pointer',
@@ -242,7 +242,7 @@ export default function MarketPage() {
               width: '100%',
               padding: '8px 12px 8px 36px',
               fontFamily: 'var(--font-mono)',
-              fontSize: 13,
+              fontSize: 15,
               background: 'var(--bg-card)',
               border: '1px solid var(--border-default)',
               borderRadius: 'var(--radius-sm)',
@@ -266,7 +266,7 @@ export default function MarketPage() {
               borderCollapse: 'separate',
               borderSpacing: 0,
               fontFamily: 'var(--font-mono)',
-              fontSize: 12,
+              fontSize: 14,
             }}
           >
             <thead>
@@ -290,7 +290,7 @@ export default function MarketPage() {
                       padding: '10px 12px',
                       color: 'var(--text-tertiary)',
                       fontWeight: 500,
-                      fontSize: 10,
+                      fontSize: 12,
                       letterSpacing: '0.08em',
                       textTransform: 'uppercase',
                       borderBottom: '1px solid var(--border-default)',
@@ -420,7 +420,7 @@ export default function MarketPage() {
           style={{
             marginTop: 12,
             fontFamily: 'var(--font-mono)',
-            fontSize: 10,
+            fontSize: 12,
             color: 'var(--text-muted)',
           }}
         >
@@ -434,7 +434,7 @@ export default function MarketPage() {
           title={t('多交易所资金费对比')}
           subtitle="BINANCE vs OKX · USDM PERPETUAL · TOP 15 BY SPREAD"
           right={
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
               {t('按价差降序')}
             </div>
           }
@@ -442,7 +442,7 @@ export default function MarketPage() {
         <div className="table-scroll-x">
           <table
             className="data-table"
-            style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}
           >
             <thead>
               <tr>
@@ -460,7 +460,7 @@ export default function MarketPage() {
                       padding: '10px 12px',
                       color: 'var(--text-tertiary)',
                       fontWeight: 500,
-                      fontSize: 10,
+                      fontSize: 12,
                       letterSpacing: '0.08em',
                       textTransform: 'uppercase',
                       borderBottom: '1px solid var(--border-default)',
@@ -512,7 +512,7 @@ export default function MarketPage() {
                     <td style={{ padding: '10px 12px', textAlign: 'right', color: spreadColor, fontWeight: 600 }}>
                       {row.spread > 0 ? `Δ ${row.spread.toFixed(4)}%` : '—'}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 10 }}>
+                    <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
                       {direction}
                     </td>
                   </tr>
@@ -521,7 +521,7 @@ export default function MarketPage() {
             </tbody>
           </table>
         </div>
-        <div style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
+        <div style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
           {t('Binance 5 秒刷新 · OKX 10 秒刷新 · 价差 ≥ 0.02% 绿色 / ≥ 0.005% 金色 · 点击行查看 K 线')}
         </div>
       </CardElevated>

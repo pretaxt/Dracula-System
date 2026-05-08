@@ -57,7 +57,7 @@ function UtcClock() {
     return () => clearInterval(id)
   }, [])
   return (
-    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>{time}</span>
+    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>{time}</span>
   )
 }
 
@@ -78,7 +78,7 @@ function TradingModeBadge() {
       title={isLive ? '实盘 — 真实下单 / Live trading' : '模拟 — 不下真单 / Paper trading'}
       style={{
         fontFamily: 'var(--font-mono)',
-        fontSize: 10,
+        fontSize: 12,
         fontWeight: 700,
         letterSpacing: '0.08em',
         padding: '3px 8px',
@@ -198,7 +198,7 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
               alignItems: 'center',
               gap: 16,
               fontFamily: 'var(--font-mono)',
-              fontSize: 12,
+              fontSize: 14,
               color: 'var(--text-tertiary)',
               flexWrap: 'wrap',
             }}
@@ -239,7 +239,7 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
               color: 'var(--accent-blood)',
               padding: '6px 12px',
               borderRadius: 'var(--radius-sm)',
-              fontSize: 11,
+              fontSize: 13,
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
               letterSpacing: '0.06em',
@@ -278,7 +278,7 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
               color: 'var(--text-secondary)',
               padding: '6px 10px',
               borderRadius: 'var(--radius-sm)',
-              fontSize: 12,
+              fontSize: 14,
               border: '1px solid var(--border-strong)',
               cursor: 'pointer',
               display: 'inline-flex',
@@ -288,7 +288,7 @@ export default function TopBar({ onMenuClick, onNotifClick }: TopBarProps = {}) 
             }}
           >
             <Bell size={14} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>3</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>3</span>
           </button>
         </div>
       </header>

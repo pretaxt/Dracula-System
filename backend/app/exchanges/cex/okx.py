@@ -60,13 +60,27 @@ class OKXAdapter(CCXTAdapter):
             "options": {"defaultType": "swap"},
         })
 
+        spot_client = ccxt.okx({
+            **config,
+            "options": {"defaultType": "spot"},
+        })
+
         if testnet:
             perp_client.set_sandbox_mode(True)
+            spot_client.set_sandbox_mode(True)
             logger.info("okx_testnet_mode", exchange="okx")
 
         self._clients = {
             InstrumentType.PERPETUAL: perp_client,
+            InstrumentType.SPOT: spot_client,
         }
+
+    async def top_up_perp_margin(self, amount: "Decimal") -> None:
+        """OKX 统一交易账户：spot 和 swap 共享余额池，无需 inter-wallet 划转。
+
+        策略只需保证 trading account 整体 USDT >= 单笔现货 + 永续保证金。
+        """
+        logger.debug("okx_top_up_noop", reason="unified_trading_account", amount=str(amount))
 
     async def fetch_funding_rate(self, symbol: Symbol) -> FundingRate:
         client = self._clients[InstrumentType.PERPETUAL]

@@ -116,7 +116,7 @@ export default function RiskPage() {
     borderRadius: 'var(--radius-sm)',
     color: 'var(--text-primary)',
     fontFamily: 'var(--font-mono)',
-    fontSize: 12,
+    fontSize: 14,
     outline: 'none',
     boxSizing: 'border-box',
     textAlign: 'right',
@@ -154,7 +154,7 @@ export default function RiskPage() {
                   title="编辑参数"
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 10,
+                    fontSize: 12,
                     color: 'var(--accent-blood)',
                     background: 'transparent',
                     border: '1px solid rgba(227,64,88,0.3)',
@@ -179,21 +179,21 @@ export default function RiskPage() {
           {!editing ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                   <span style={{ color: 'var(--text-secondary)' }}>{t('扫描最低 APR')}</span>
                   <span style={{ fontFamily: 'var(--font-mono)' }}>{minApr.toFixed(0)}%</span>
                 </div>
                 <ProgressBar pct={Math.min(100, (minApr / 25) * 100)} tone="success" />
               </div>
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                   <span style={{ color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</span>
                   <span style={{ fontFamily: 'var(--font-mono)' }}>{maxPos}</span>
                 </div>
                 <ProgressBar pct={Math.min(100, (maxPos / 10) * 100)} tone="success" />
               </div>
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                   <span style={{ color: 'var(--text-secondary)' }}>最高名义敞口</span>
                   <span style={{ fontFamily: 'var(--font-mono)' }}>${maxNot.toFixed(0)}</span>
                 </div>
@@ -203,7 +203,7 @@ export default function RiskPage() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
-                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('扫描最低 APR')} (%)</div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('扫描最低 APR')} (%)</div>
                 <input
                   type="number"
                   step="0.1"
@@ -213,7 +213,7 @@ export default function RiskPage() {
                 />
               </div>
               <div>
-                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</div>
                 <input
                   type="number"
                   step="1"
@@ -224,7 +224,7 @@ export default function RiskPage() {
                 />
               </div>
               <div>
-                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-secondary)' }}>最高名义敞口 ($)</div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }}>最高名义敞口 ($)</div>
                 <input
                   type="number"
                   step="100"
@@ -239,7 +239,7 @@ export default function RiskPage() {
                   display: 'flex',
                   alignItems: 'flex-start',
                   gap: 8,
-                  fontSize: 11,
+                  fontSize: 13,
                   color: 'var(--accent-gold)',
                   background: 'rgba(240,184,80,0.08)',
                   border: '1px solid rgba(240,184,80,0.25)',
@@ -260,7 +260,7 @@ export default function RiskPage() {
 
               {errorMsg && (
                 <div style={{
-                  fontSize: 11,
+                  fontSize: 13,
                   color: 'var(--accent-blood)',
                   background: 'rgba(227,64,88,0.08)',
                   border: '1px solid rgba(227,64,88,0.25)',
@@ -277,11 +277,11 @@ export default function RiskPage() {
                   variant="primary"
                   onClick={saveEdit}
                   disabled={patchMut.isPending || (isWidening && !confirmWiden)}
-                  style={{ flex: 1, fontSize: 12 }}
+                  style={{ flex: 1, fontSize: 14 }}
                 >
                   {patchMut.isPending ? '保存中…' : t('保存')}
                 </Button>
-                <Button variant="secondary" onClick={cancelEdit} style={{ flex: 1, fontSize: 12 }}>
+                <Button variant="secondary" onClick={cancelEdit} style={{ flex: 1, fontSize: 14 }}>
                   {t('取消')}
                 </Button>
               </div>
@@ -294,21 +294,21 @@ export default function RiskPage() {
           <SectionHeader title={t('Tier 2 · 延迟生效')} right={<Badge tone="active">SAFE</Badge>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div title="集中度统计待后端实现 / pending backend">
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
                 <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 50%</span>
               </div>
               <ProgressBar pct={0} tone="success" />
             </div>
             <div title="集中度统计待后端实现 / pending backend">
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
                 <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 20%</span>
               </div>
               <ProgressBar pct={0} tone="success" />
             </div>
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>止损百分比 (config)</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>{parseFloat(data.stop_loss_pct || '0').toFixed(2)}%</span>
               </div>
@@ -332,28 +332,28 @@ export default function RiskPage() {
               return (
                 <>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                       <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
                       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
                     </div>
                     <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / 3.0 * 100)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
                   </div>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                       <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
                       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
                     </div>
                     <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / 8.0 * 100)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
                   </div>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                       <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>50%</span>
                     </div>
                     <ProgressBar pct={Math.min(100, marginPct)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
                   </div>
                 </>
               )
@@ -366,11 +366,11 @@ export default function RiskPage() {
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            fontSize: 12,
+            fontSize: 14,
             color: 'var(--text-tertiary)',
           }}>
             <Lock size={12} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>需修改 config.yaml 重启系统才能调整</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>需修改 config.yaml 重启系统才能调整</span>
           </div>
         </CardElevated>
       </div>
@@ -381,13 +381,13 @@ export default function RiskPage() {
           title="风控事件日志"
           subtitle="RISK EVENT LOG · LAST 30 DAYS"
           right={
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
               <CheckCircle2 size={12} style={{ color: 'var(--accent-emerald)' }} />
               <span>{t('三层风控全部正常')}</span>
             </span>
           }
         />
-        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           <thead>
             <tr>
               {[t('时间'), '层级', '事件', '触发指标', '数值', '处理'].map((h, i) => (
@@ -395,7 +395,7 @@ export default function RiskPage() {
                   textAlign: i === 4 ? 'right' : 'left',
                   padding: '8px 12px',
                   color: 'var(--text-tertiary)',
-                  fontSize: 10,
+                  fontSize: 12,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
                   borderBottom: '1px solid var(--border-default)',
@@ -415,7 +415,7 @@ export default function RiskPage() {
                   <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{e.event}</td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{e.trigger}</td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: isNegativeValue ? 'var(--accent-blood)' : 'var(--text-primary)' }}>{e.value}</td>
-                  <td style={{ padding: '10px 12px', fontSize: 10, color: ACTION_COLOR[e.action] || 'var(--text-tertiary)' }}>
+                  <td style={{ padding: '10px 12px', fontSize: 12, color: ACTION_COLOR[e.action] || 'var(--text-tertiary)' }}>
                     {ACTION_LABEL[e.action] || e.action}
                   </td>
                 </tr>

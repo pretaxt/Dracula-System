@@ -14,7 +14,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 const buttonBase: CSSProperties = {
   padding: '8px 16px',
   borderRadius: 'var(--radius-sm)',
-  fontSize: 13,
+  fontSize: 15,
   fontWeight: 500,
   cursor: 'pointer',
   transition: 'all var(--duration-fast) var(--ease-in-out)',
@@ -105,7 +105,7 @@ export function Badge({ tone = 'info', children, style }: { tone?: BadgeTone; ch
         alignItems: 'center',
         padding: '2px 8px',
         borderRadius: 'var(--radius-sm)',
-        fontSize: 10,
+        fontSize: 12,
         fontWeight: 500,
         letterSpacing: '0.05em',
         textTransform: 'uppercase',

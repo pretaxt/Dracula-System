@@ -41,7 +41,7 @@ class OrderExecutor:
 
     def __init__(
         self,
-        broker,                           # PaperBroker 或 LiveBroker（鸭子类型）
+        broker,                           # 单 broker (PaperBroker / LiveBroker) 或 dict{exchange: broker}（多交易所实盘）
         manager: PositionManager,
         guard: RiskGuard,
         strategy_instance: str = "funding_rate_main",
@@ -52,6 +52,18 @@ class OrderExecutor:
         self._guard = guard
         self._strategy_instance = strategy_instance
         self._perp_leverage = perp_leverage
+
+    def _get_broker(self, exchange: str):
+        """单 broker 直接返回；dict 按交易所路由。"""
+        if isinstance(self._broker, dict):
+            broker = self._broker.get(exchange)
+            if broker is None:
+                raise RuntimeError(
+                    f"No broker configured for exchange={exchange}. "
+                    f"Available: {list(self._broker.keys())}"
+                )
+            return broker
+        return self._broker
 
     # ------------------------------------------------------------------
     # 开仓
@@ -114,7 +126,7 @@ class OrderExecutor:
             reduce_only=False,
             instrument_type=InstrumentType.PERPETUAL,
         )
-        spot_result, perp_result = await self._broker.execute_pair(spot_req, perp_req)
+        spot_result, perp_result = await self._get_broker(exchange).execute_pair(spot_req, perp_req)
 
         # 5. 将成交价写入腿
         pos.add_leg(PositionLeg(
@@ -188,7 +200,7 @@ class OrderExecutor:
                 reduce_only=True,
                 instrument_type=leg.instrument_type,
             )
-            result: OrderResult = await self._broker.execute(req)
+            result: OrderResult = await self._get_broker(leg.exchange).execute(req)
 
             if result.leg_already_closed:
                 # 永续已被交易所强平，跳过该腿 PnL（LiquidationWatcher 已处理）

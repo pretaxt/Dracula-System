@@ -41,3 +41,41 @@ export async function getSymbols(): Promise<SymbolsResponse> {
   const { data } = await apiClient.get<SymbolsResponse>('/system/symbols')
   return data
 }
+
+// ---------------------------------------------------------------------------
+// 交易所 API 凭据管理 — 设置页用
+// ---------------------------------------------------------------------------
+
+export type ExchangeCredential = {
+  exchange: 'binance' | 'okx' | string
+  configured: boolean
+  api_key_preview: string  // 'abc123...wxyz' or ''
+  has_passphrase: boolean
+  updated_at: string | null
+}
+
+export type ExchangeCredentialsResponse = {
+  data: ExchangeCredential[]
+}
+
+export type ExchangeCredentialPatch = {
+  api_key?: string
+  api_secret?: string
+  passphrase?: string
+}
+
+export async function getExchangeCredentials(): Promise<ExchangeCredentialsResponse> {
+  const { data } = await apiClient.get<ExchangeCredentialsResponse>('/system/exchange-credentials')
+  return data
+}
+
+export async function updateExchangeCredentials(
+  exchange: string,
+  patch: ExchangeCredentialPatch,
+): Promise<ExchangeCredential> {
+  const { data } = await apiClient.post<ExchangeCredential>(
+    `/system/exchange-credentials/${exchange}`,
+    patch,
+  )
+  return data
+}

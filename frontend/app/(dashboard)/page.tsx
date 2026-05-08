@@ -79,7 +79,29 @@ export default function DashboardPage() {
         <KPICard
           label={t('总资本')}
           value={`$${totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          meta={t('USDT 等值')}
+          meta={(() => {
+            const byEx = (summary?.equity_by_exchange ?? {}) as Record<string, string>
+            const entries = Object.entries(byEx)
+            if (entries.length === 0) return t('USDT 等值')
+            // Binance 金色 / OKX 蓝色 — 视觉区分，dot + label 同色
+            const COLOR: Record<string, string> = {
+              binance: 'var(--accent-gold)',
+              okx:     'var(--accent-azure)',
+            }
+            return (
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span>{t('USDT 等值')}</span>
+                <span style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                  {entries.map(([ex, v]) => (
+                    <span key={ex} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: COLOR[ex] || 'var(--text-tertiary)' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0 }} />
+                      <span>{ex.toUpperCase()} ${parseFloat(v).toFixed(2)}</span>
+                    </span>
+                  ))}
+                </span>
+              </span>
+            )
+          })()}
           icon={<Wallet size={14} />}
           animationDelay="0s"
         />
@@ -111,7 +133,7 @@ export default function DashboardPage() {
           footer={
             <>
               <ProgressBar pct={Math.min(100, Math.abs(dailyDDPct) / 3 * 100)} tone={Math.abs(dailyDDPct) < 2 ? 'success' : 'warn'} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 6, color: 'var(--text-tertiary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 6, color: 'var(--text-tertiary)' }}>
                 <span>{t('距 Tier 3 红线')}</span>
                 <span style={{ color: 'var(--accent-emerald)' }}>{(3 - Math.abs(dailyDDPct)).toFixed(2)}%</span>
               </div>
@@ -131,7 +153,7 @@ export default function DashboardPage() {
               <div style={{ display: 'flex', gap: 4 }}>
                 {['1D', '7D', '30D', 'ALL'].map((p) => (
                   <span key={p} style={{
-                    fontFamily: 'var(--font-mono)', fontSize: 10,
+                    fontFamily: 'var(--font-mono)', fontSize: 12,
                     padding: '4px 10px',
                     borderRadius: 'var(--radius-sm)',
                     background: p === '30D' ? 'var(--accent-blood)' : 'var(--bg-card)',
@@ -151,8 +173,8 @@ export default function DashboardPage() {
                     <stop offset="100%" stopColor="var(--accent-blood)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="date" tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} width={48} />
+                <XAxis dataKey="date" tick={{ fill: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} width={48} />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--bg-elevated)',
@@ -160,7 +182,7 @@ export default function DashboardPage() {
                     borderRadius: 'var(--radius-sm)',
                     color: 'var(--text-primary)',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
+                    fontSize: 14,
                   }}
                   formatter={(v) => [`$${Number(v ?? 0).toFixed(4)}`, 'PnL']}
                 />
@@ -184,8 +206,8 @@ export default function DashboardPage() {
                 { l: 'Sharpe', v: '—', title: '待后端计算 / pending backend computation' },
               ].map((s, i) => (
                 <div key={i} title={s.title}>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, marginTop: 4, color: 'var(--text-primary)' }}>{s.v}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, marginTop: 4, color: 'var(--text-primary)' }}>{s.v}</div>
                 </div>
               ))
             })()}
@@ -205,7 +227,7 @@ export default function DashboardPage() {
                 (summary?.strategy_performance as PerfRow[] | undefined) ?? []
               if (perfData.length === 0) {
                 return (
-                  <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
                     {t('暂无策略数据')}
                   </div>
                 )
@@ -230,14 +252,14 @@ export default function DashboardPage() {
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <StatusDot tone={tone} />
-                        <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                        <span style={{ fontSize: 14, color: 'var(--text-primary)' }}>
                           {t(p.label)}
                         </span>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
                           {p.open_positions}/{p.open_positions + p.closed_positions}
                         </span>
                       </div>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: pnlColor }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: pnlColor }}>
                         {total === 0
                           ? t('持平')
                           : `${total > 0 ? '+' : '-'}$${Math.abs(total).toFixed(2)}`}
@@ -274,7 +296,7 @@ export default function DashboardPage() {
                 { l: t('WS 连接稳定性'),  v: `${wsStab.toFixed(0)}%`,                                 cap: '',          accent: 'positive' as const },
               ]
             })().map((row, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 14 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{row.l}</span>
                 <div style={{ display: 'flex', gap: 6, fontFamily: 'var(--font-mono)' }}>
                   <span style={{ color: row.accent === 'positive' ? 'var(--accent-emerald)' : 'var(--text-primary)' }}>{row.v}</span>
@@ -283,7 +305,7 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', fontSize: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', fontSize: 14 }}>
             <CheckCircle2 size={14} style={{ color: 'var(--accent-emerald)' }} />
             <span style={{ color: 'var(--text-secondary)' }}>{t('三层风控全部正常')}</span>
           </div>
@@ -295,7 +317,7 @@ export default function DashboardPage() {
             subtitle="LIVE OPPORTUNITIES · UPDATING"
             right={
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
                   <StatusDot tone="active" />
                   <span>{t('实时')}</span>
                 </span>
@@ -303,7 +325,7 @@ export default function DashboardPage() {
                   href="/funding-rates"
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
+                    fontSize: 13,
                     color: 'var(--accent-blood)',
                     textDecoration: 'none',
                     transition: 'color var(--duration-fast)',
@@ -316,7 +338,7 @@ export default function DashboardPage() {
               </div>
             }
           />
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+          <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
             <thead>
               <tr>
                 {[t('策略'), t('币对'), t('交易所'), t('指标'), 'APR', t('规模'), ''].map((h, i) => (
@@ -325,7 +347,7 @@ export default function DashboardPage() {
                     padding: '8px 12px',
                     color: 'var(--text-tertiary)',
                     fontWeight: 500,
-                    fontSize: 10,
+                    fontSize: 12,
                     letterSpacing: '0.08em',
                     textTransform: 'uppercase',
                     borderBottom: '1px solid var(--border-default)',
@@ -354,7 +376,7 @@ export default function DashboardPage() {
                     <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>
                       ${parseFloat(stratStatus?.current_config?.max_position_notional_usd ?? '50').toFixed(0)}
                     </td>
-                    <td style={{ padding: '10px 12px', fontSize: 10, color: 'var(--text-tertiary)' }}>{t('扫描中')}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-tertiary)' }}>{t('扫描中')}</td>
                   </tr>
                 )
               })}
@@ -364,7 +386,7 @@ export default function DashboardPage() {
             </tbody>
           </table>
           {openPos > 0 && (
-            <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
               ↳ {openPos} 个活跃仓位 · 累计净盈亏 ${netPnl.toFixed(2)}
             </div>
           )}
@@ -375,11 +397,11 @@ export default function DashboardPage() {
       <CardElevated style={{ padding: 20 }} className="animate-in">
         <SectionHeader
           title={t('系统活动')}
-          right={<span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>LAST 1H</span>}
+          right={<span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>LAST 1H</span>}
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {(activityData?.data ?? []).length === 0 && (
-            <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+            <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
               {t('暂无活动记录')}
             </div>
           )}
@@ -387,8 +409,8 @@ export default function DashboardPage() {
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)' }}>
               <div style={{ marginTop: 2 }}>{ACTIVITY_ICON[a.icon as keyof typeof ACTIVITY_ICON] ?? ACTIVITY_ICON.up}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{a.text}</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 2, color: 'var(--text-tertiary)' }}>{a.time}</div>
+                <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>{a.text}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 2, color: 'var(--text-tertiary)' }}>{a.time}</div>
               </div>
             </div>
           ))}
@@ -396,7 +418,7 @@ export default function DashboardPage() {
       </CardElevated>
 
       {opps?.snapshot_at && (
-        <div style={{ marginTop: 8, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
+        <div style={{ marginTop: 8, fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
           LAST UPDATE · {new Date(opps.snapshot_at).toLocaleTimeString()}
         </div>
       )}

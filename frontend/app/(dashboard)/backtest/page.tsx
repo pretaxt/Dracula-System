@@ -42,7 +42,7 @@ function SymbolPicker({ value, onChange, options }: {
           borderRadius: 6,
           color: 'var(--text-primary)',
           padding: '6px 28px 6px 10px',
-          fontSize: 13,
+          fontSize: 15,
           cursor: 'pointer',
           position: 'relative',
           fontFamily: 'var(--font-mono)',
@@ -51,7 +51,7 @@ function SymbolPicker({ value, onChange, options }: {
         {value}/USDT
         <span style={{
           position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-          fontSize: 10, color: 'var(--text-muted)',
+          fontSize: 12, color: 'var(--text-muted)',
         }}>▼</span>
       </div>
       {open && (
@@ -79,14 +79,14 @@ function SymbolPicker({ value, onChange, options }: {
               borderBottom: '1px solid var(--border)',
               color: 'var(--text-primary)',
               padding: '10px 12px',
-              fontSize: 12,
+              fontSize: 14,
               fontFamily: 'var(--font-mono)',
               outline: 'none',
             }}
           />
           <div style={{ overflow: 'auto', flex: 1 }}>
             {filtered.length === 0 ? (
-              <div style={{ padding: 12, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+              <div style={{ padding: 12, color: 'var(--text-muted)', fontSize: 14, textAlign: 'center' }}>
                 无匹配
               </div>
             ) : (
@@ -96,7 +96,7 @@ function SymbolPicker({ value, onChange, options }: {
                   onClick={() => { onChange(s); setOpen(false); setQuery('') }}
                   style={{
                     padding: '6px 10px',
-                    fontSize: 12,
+                    fontSize: 14,
                     fontFamily: 'var(--font-mono)',
                     cursor: 'pointer',
                     color: s === value ? 'var(--accent-blood)' : 'var(--text-secondary)',
@@ -114,7 +114,7 @@ function SymbolPicker({ value, onChange, options }: {
           <div style={{
             borderTop: '1px solid var(--border)',
             padding: '6px 12px',
-            fontSize: 10,
+            fontSize: 12,
             color: 'var(--text-muted)',
             fontFamily: 'var(--font-mono)',
             background: '#000',
@@ -159,13 +159,13 @@ function EquityChart({ curve, initialCapital }: { curve: EquityPoint[]; initialC
       <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} />
       {yTicks.map((v, i) => (
         <text key={i} x={PAD.l - 6} y={cy(v) + 4} textAnchor="end"
-          style={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          style={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
           {fmtUsd(v)}
         </text>
       ))}
       {[0, Math.floor(curve.length / 2), curve.length - 1].map(i => (
         <text key={i} x={cx(curve[i].ts)} y={H - 4} textAnchor="middle"
-          style={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          style={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
           {new Date(curve[i].ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
         </text>
       ))}
@@ -176,13 +176,13 @@ function EquityChart({ curve, initialCapital }: { curve: EquityPoint[]; initialC
 function Metric({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+      <span style={{ fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
         {label}
       </span>
-      <span style={{ fontSize: 22, fontWeight: 700, color: color ?? 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+      <span style={{ fontSize: 24, fontWeight: 700, color: color ?? 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
         {value}
       </span>
-      {sub && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{sub}</span>}
+      {sub && <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{sub}</span>}
     </div>
   )
 }
@@ -247,11 +247,11 @@ export default function BacktestPage() {
     borderRadius: 6,
     color: 'var(--text-primary)',
     padding: '6px 10px',
-    fontSize: 13,
+    fontSize: 15,
     width: '100%',
   }
   const labelStyle: React.CSSProperties = {
-    fontSize: 11,
+    fontSize: 13,
     color: 'var(--text-muted)',
     marginBottom: 4,
     display: 'block',
@@ -325,14 +325,14 @@ export default function BacktestPage() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
             <span style={{
-              fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+              fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.12em',
               textTransform: 'uppercase', color: 'var(--accent-blood)',
               padding: '3px 8px', border: '1px solid rgba(227,64,88,0.3)',
               borderRadius: 3, background: 'rgba(227,64,88,0.05)',
             }}>
               {t('READY')}
             </span>
-            <div style={{ display: 'flex', gap: 18, fontSize: 12, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 18, fontSize: 14, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
               <span><span style={{ color: 'var(--text-muted)' }}>{t('标的')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{symbol}/USDT</span></span>
               <span><span style={{ color: 'var(--text-muted)' }}>{t('周期')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{days}d</span></span>
               <span><span style={{ color: 'var(--text-muted)' }}>{t('资金')}:</span> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>{fmtUsd(capital)}</span></span>
@@ -346,7 +346,7 @@ export default function BacktestPage() {
               : 'linear-gradient(135deg, var(--accent-blood) 0%, #c12944 100%)',
             color: '#fff', border: 'none', borderRadius: 6,
             cursor: loading ? 'not-allowed' : 'pointer',
-            fontWeight: 700, fontSize: 13, letterSpacing: '0.08em',
+            fontWeight: 700, fontSize: 15, letterSpacing: '0.08em',
             textTransform: 'uppercase',
             boxShadow: loading ? 'none' : '0 4px 14px rgba(227,64,88,0.35), 0 0 0 1px rgba(227,64,88,0.2) inset',
             transition: 'all var(--duration-fast) var(--ease-in-out)',
@@ -384,7 +384,7 @@ export default function BacktestPage() {
             marginTop: 12, padding: '10px 14px',
             background: 'rgba(239,68,68,0.08)',
             border: '1px solid rgba(239,68,68,0.3)',
-            borderRadius: 6, color: '#ef4444', fontSize: 13,
+            borderRadius: 6, color: '#ef4444', fontSize: 15,
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
             <span style={{ fontWeight: 700 }}>!</span> {error}
@@ -398,7 +398,7 @@ export default function BacktestPage() {
       {result && (
         <>
           {result.total_trades === 0 && (
-            <div style={{ padding: '12px 16px', background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 6, fontSize: 13, color: 'var(--accent-gold)' }}>
+            <div style={{ padding: '12px 16px', background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 6, fontSize: 15, color: 'var(--accent-gold)' }}>
               {t('当前参数下无满足条件的套利机会，尝试降低最低 APR 或更换标的')}
             </div>
           )}
@@ -430,7 +430,7 @@ export default function BacktestPage() {
             <CardElevated style={{ padding: 20 }}>
               <SectionHeader title={t('交易明细')} subtitle={`共 ${result.trades.length} 笔`} />
               <div style={{ overflowX: 'auto', marginTop: 12 }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
                       {['标的', '开仓时间', '平仓时间', '资金费', '手续费', '净盈亏'].map(h => (

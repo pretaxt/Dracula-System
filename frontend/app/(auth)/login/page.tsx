@@ -76,7 +76,7 @@ export default function LoginPage() {
               style={{
                 margin: 0,
                 fontFamily: 'var(--font-display)',
-                fontSize: 22,
+                fontSize: 24,
                 fontWeight: 600,
                 letterSpacing: '0.08em',
                 color: 'var(--text-primary)',
@@ -89,7 +89,7 @@ export default function LoginPage() {
               style={{
                 margin: '6px 0 0',
                 fontFamily: 'var(--font-mono)',
-                fontSize: 9,
+                fontSize: 11,
                 letterSpacing: '0.35em',
                 color: 'var(--accent-blood)',
               }}
@@ -105,7 +105,7 @@ export default function LoginPage() {
             style={{
               display: 'block',
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 12,
               letterSpacing: '0.15em',
               textTransform: 'uppercase',
               color: 'var(--text-tertiary)',
@@ -127,7 +127,7 @@ export default function LoginPage() {
               border: '1px solid var(--border-default)',
               borderRadius: 'var(--radius-sm)',
               color: 'var(--text-primary)',
-              fontSize: 14,
+              fontSize: 16,
               fontFamily: 'var(--font-mono)',
               outline: 'none',
               boxSizing: 'border-box',
@@ -146,7 +146,7 @@ export default function LoginPage() {
           <div
             style={{
               color: 'var(--accent-blood)',
-              fontSize: 12,
+              fontSize: 14,
               fontFamily: 'var(--font-mono)',
               marginBottom: 16,
               padding: '8px 12px',

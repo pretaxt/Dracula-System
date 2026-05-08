@@ -89,30 +89,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("funding_rate_config_not_found", path=_STRATEGY_CONFIG_PATH)
         strategy_cfg = {}
 
+    # 应用运行时 overrides（UI 通过 /risk/limits PATCH 持久化的值）
+    from app.services.runtime_overrides import (  # noqa: PLC0415
+        apply_to_strategy_cfg,
+        load_overrides,
+    )
+    _overrides = load_overrides()
+    if _overrides:
+        strategy_cfg = apply_to_strategy_cfg(strategy_cfg, _overrides)
+        logger.info("runtime_overrides_applied", keys=list(_overrides.keys()))
+
     scanner_config = ScannerConfig.from_yaml(strategy_cfg)
 
     # --- Build exchange adapters (lazy: no network call at init) ---
+    # 凭据优先级：UI 写入的 /app/state/exchange_credentials.json > .env
+    from app.services.exchange_credentials import get_exchange_credentials  # noqa: PLC0415
+
     adapters: dict = {}
     try:
         from app.exchanges.cex.binance import BinanceAdapter  # noqa: PLC0415
 
+        _bn = get_exchange_credentials("binance")
         adapters["binance"] = BinanceAdapter(
-            api_key=settings.binance_api_key,
-            api_secret=settings.binance_api_secret,
+            api_key=_bn.get("api_key") or settings.binance_api_key,
+            api_secret=_bn.get("api_secret") or settings.binance_api_secret,
         )
-        logger.info("exchange_adapter_ready", exchange="binance")
+        logger.info(
+            "exchange_adapter_ready",
+            exchange="binance",
+            source="file" if _bn.get("api_key") else "env",
+        )
     except Exception:
         logger.exception("exchange_adapter_init_failed", exchange="binance")
 
     try:
         from app.exchanges.cex.okx import OKXAdapter  # noqa: PLC0415
 
+        _okx = get_exchange_credentials("okx")
         adapters["okx"] = OKXAdapter(
-            api_key=settings.okx_api_key,
-            api_secret=settings.okx_api_secret,
-            passphrase=settings.okx_api_passphrase,
+            api_key=_okx.get("api_key") or settings.okx_api_key,
+            api_secret=_okx.get("api_secret") or settings.okx_api_secret,
+            passphrase=_okx.get("passphrase") or settings.okx_api_passphrase,
         )
-        logger.info("exchange_adapter_ready", exchange="okx")
+        logger.info(
+            "exchange_adapter_ready",
+            exchange="okx",
+            source="file" if _okx.get("api_key") else "env",
+        )
     except Exception:
         logger.exception("exchange_adapter_init_failed", exchange="okx")
 
@@ -236,6 +259,69 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ),
         )
 
+    # --- OKX polling-based liquidation watcher (no native WS user data stream) ---
+    okx_polling_watcher = None
+    okx_adapter = adapters.get("okx") if adapters else None
+    if (
+        settings.liquidation_watcher_enabled
+        and okx_adapter is not None
+        and getattr(okx_adapter, "_api_key", "")
+        and paper_session is not None
+    ):
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        from app.notifications import notify_perp_liquidated  # noqa: PLC0415
+        from app.risk.models import ExitReason  # noqa: PLC0415
+        from app.safety import PollingLiquidationWatcher  # noqa: PLC0415
+
+        _captured = paper_session
+
+        def _okx_expected_positions() -> set[tuple[str, str]]:
+            """从 PositionManager 拿当前 OKX perp 腿期望集。"""
+            out: set[tuple[str, str]] = set()
+            for pos in _captured._manager.open_positions:
+                for leg in pos.legs:
+                    if (leg.instrument_type == InstrumentType.PERPETUAL
+                            and leg.exchange == "okx"
+                            and leg.size > 0):
+                        out.add((str(leg.symbol), leg.side.value))
+            return out
+
+        async def _okx_on_liquidation(symbol, raw_event: dict) -> None:
+            positions = _captured._manager.get_by_symbol(symbol) or []
+            relevant = [
+                p for p in positions
+                if any(l.exchange == "okx" for l in p.legs)
+            ]
+            if not relevant:
+                logger.warning("okx_polling_no_matching_position", symbol=str(symbol))
+                notify_perp_liquidated(
+                    str(symbol), raw_event.get("side", "?"), "?", "?",
+                )
+                return
+            for pos in relevant:
+                try:
+                    await _captured._executor.close_position(
+                        pos.id, reason=ExitReason.PERP_LIQ_RISK,
+                    )
+                    logger.info("okx_polling_liquidation_handled",
+                                symbol=str(symbol), position_id=pos.id[:8])
+                except Exception:
+                    logger.exception("okx_polling_close_failed",
+                                     symbol=str(symbol), position_id=pos.id[:8])
+            notify_perp_liquidated(str(symbol), raw_event.get("side", "?"), "?", "?")
+
+        okx_polling_watcher = PollingLiquidationWatcher(
+            adapter=okx_adapter,
+            exchange_name="okx",
+            on_liquidation=_okx_on_liquidation,
+            get_expected_positions=_okx_expected_positions,
+            interval_seconds=30.0,
+        )
+        await okx_polling_watcher.start()
+        logger.info("okx_polling_liquidation_watcher_enabled")
+    else:
+        logger.info("okx_polling_liquidation_watcher_disabled")
+
     # --- Start spot-perp basis scanner (B.1) + paper trading (B.2) ---
     spot_perp_runner = None
     spot_perp_task: asyncio.Task | None = None  # type: ignore[type-arg]
@@ -285,12 +371,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.spot_perp_paper = spot_perp_paper
     app.state.spot_perp_paper_task = spot_perp_paper_task
     app.state.liquidation_watcher = liquidation_watcher
+    app.state.okx_polling_watcher = okx_polling_watcher
 
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
     if liquidation_watcher is not None:
         await liquidation_watcher.stop()
+    if okx_polling_watcher is not None:
+        await okx_polling_watcher.stop()
     if paper_session is not None:
         await paper_session.stop()
     if paper_task is not None:

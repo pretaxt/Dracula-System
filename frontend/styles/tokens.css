@@ -128,13 +128,13 @@
 
   /* ---- 字号 scale ---- */
   --text-2xs:  0.625rem;   /* 10px — 标签 / 表头 */
-  --text-xs:   0.75rem;    /* 12px — 数据表格 */
-  --text-sm:   0.875rem;   /* 14px — 正文 */
-  --text-base: 1rem;
-  --text-lg:   1.125rem;   /* 18px — 区块标题 */
-  --text-xl:   1.25rem;
-  --text-2xl:  1.5rem;     /* 24px — 视图标题 */
-  --text-3xl:  1.875rem;   /* 30px — KPI 数值 */
+  --text-xs:   0.875rem;    /* 12px — 数据表格 */
+  --text-sm:   1rem;   /* 14px — 正文 */
+  --text-base: 1.125rem;
+  --text-lg:   1.25rem;   /* 18px — 区块标题 */
+  --text-xl:   1.5rem;
+  --text-2xl:  1.875rem;     /* 24px — 视图标题 */
+  --text-3xl:  2.25rem;   /* 30px — KPI 数值 */
 
   /* ---- 间距 ---- */
   --space-1:  0.25rem;
@@ -162,5 +162,5 @@
 
   /* ---- 布局 ---- */
   --sidenav-width: 256px;
-  --topbar-height: 56px;
+  --topbar-height: 84px;
 }

@@ -84,7 +84,7 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
               style={{
                 margin: 0,
                 fontFamily: 'var(--font-display)',
-                fontSize: 16,
+                fontSize: 18,
                 fontWeight: 600,
                 letterSpacing: '0.08em',
                 color: 'var(--text-primary)',
@@ -124,7 +124,7 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
           <span
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 12,
               textTransform: 'uppercase',
               letterSpacing: '0.08em',
               color: 'var(--text-tertiary)',
@@ -134,8 +134,8 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
           </span>
           <StatusDot tone="active" />
         </div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>{t('运行中')}</div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, color: 'var(--text-primary)' }}>{t('运行中')}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
           ↑ {formatUptime(health?.uptime_seconds ?? 0)}
         </div>
       </div>
@@ -165,7 +165,7 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
                 alignItems: 'center',
                 gap: 12,
                 padding: '10px 24px',
-                fontSize: 14,
+                fontSize: 16,
                 color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                 background: active ? 'var(--bg-card)' : 'transparent',
                 borderLeft: `2px solid ${active ? 'var(--accent-blood)' : 'transparent'}`,
@@ -180,7 +180,7 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
                   style={{
                     marginLeft: 'auto',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 10,
+                    fontSize: 12,
                     color: badgeColor || 'var(--text-tertiary)',
                   }}
                 >
@@ -206,7 +206,7 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
               alignItems: 'center',
               justifyContent: 'center',
               fontFamily: 'var(--font-mono)',
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: 700,
               flexShrink: 0,
             }}
@@ -214,8 +214,8 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
             {t('老')}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>{t('老虎')}</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--accent-blood)' }}>SUPER ADMIN</div>
+            <div style={{ fontSize: 16, color: 'var(--text-primary)' }}>{t('老虎')}</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)' }}>SUPER ADMIN</div>
           </div>
           <button
             type="button"

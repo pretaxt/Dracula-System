@@ -119,7 +119,7 @@ export default function StrategiesPage() {
 
   return (
     <div>
-      <p style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 24 }}>
+      <p style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)', marginBottom: 24 }}>
         {merged.length} 个策略 · {runningCount} 个运行中 · {monitorCount} 个监控
       </p>
 
@@ -137,7 +137,7 @@ export default function StrategiesPage() {
             onClick={() => setFilter(k)}
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 12,
+              fontSize: 14,
               padding: '6px 12px',
               borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
@@ -167,7 +167,7 @@ export default function StrategiesPage() {
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <div style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 24,
+                  fontSize: 28,
                   color: s.status === 'DISABLED' ? 'var(--text-muted)' : 'var(--accent-blood)',
                   width: 28,
                   fontWeight: 500,
@@ -178,7 +178,7 @@ export default function StrategiesPage() {
                   <h4 style={{
                     margin: 0,
                     fontFamily: 'var(--font-display)',
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: 600,
                     letterSpacing: '0.04em',
                     lineHeight: 1.2,
@@ -189,7 +189,7 @@ export default function StrategiesPage() {
                   <p style={{
                     margin: '4px 0 0',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 10,
+                    fontSize: 12,
                     color: 'var(--text-tertiary)',
                     letterSpacing: '0.04em',
                   }}>
@@ -211,14 +211,14 @@ export default function StrategiesPage() {
               borderBottom: '1px solid var(--border-subtle)',
             }}>
               <div title={s.id === 'funding-rate' ? '已用 / 账户实际余额 / 策略配置上限' : ''}>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>分配资金</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, marginTop: 4, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{s.capital}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>分配资金</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 15, marginTop: 4, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{s.capital}</div>
               </div>
               <div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>月化收益</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>月化收益</div>
                 <div style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 14,
+                  fontSize: 16,
                   marginTop: 4,
                   color: s.monthly === null ? 'var(--text-tertiary)'
                        : s.monthlyTone === 'negative' ? 'var(--accent-blood)'
@@ -229,12 +229,12 @@ export default function StrategiesPage() {
                 </div>
               </div>
               <div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.posLabel}</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, marginTop: 4, color: 'var(--text-primary)' }}>{s.positions}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.posLabel}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, marginTop: 4, color: 'var(--text-primary)' }}>{s.positions}</div>
               </div>
             </div>
 
-            <p style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)', margin: 0, minHeight: 36 }}>
+            <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text-secondary)', margin: 0, minHeight: 36 }}>
               {s.desc}
             </p>
 
@@ -247,7 +247,7 @@ export default function StrategiesPage() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontFamily: 'var(--font-sans)',
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: 500,
                   padding: '8px 12px',
                   background: 'var(--bg-card)',
@@ -270,9 +270,9 @@ export default function StrategiesPage() {
                 {t('查看详情')}
               </Link>
               {s.status === 'DISABLED' ? (
-                <Button variant="primary" style={{ flex: 1, fontSize: 12 }}>启用监控</Button>
+                <Button variant="primary" style={{ flex: 1, fontSize: 14 }}>启用监控</Button>
               ) : s.status === 'MONITOR' ? (
-                <Button variant="secondary" style={{ flex: 1, fontSize: 12 }}>推送配置</Button>
+                <Button variant="secondary" style={{ flex: 1, fontSize: 14 }}>推送配置</Button>
               ) : s.status === 'RUNNING' || s.status === 'UNDERWATER' ? (
                 <Button
                   variant="secondary"
@@ -282,7 +282,7 @@ export default function StrategiesPage() {
                     stopMut.mutate(s.id, { onSettled: () => setActionId(null) })
                   }}
                   disabled={stopMut.isPending && actionId === s.id}
-                  style={{ flex: 1, fontSize: 12, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
+                  style={{ flex: 1, fontSize: 14, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
                 >
                   {stopMut.isPending && actionId === s.id ? '停止中…' : '停止'}
                 </Button>
@@ -294,7 +294,7 @@ export default function StrategiesPage() {
                     startMut.mutate(s.id, { onSettled: () => setActionId(null) })
                   }}
                   disabled={startMut.isPending && actionId === s.id}
-                  style={{ flex: 1, fontSize: 12 }}
+                  style={{ flex: 1, fontSize: 14 }}
                 >
                   {startMut.isPending && actionId === s.id ? '启动中…' : '启动'}
                 </Button>

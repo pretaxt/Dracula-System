@@ -9,6 +9,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.api.v1.schemas.risk import RiskEventOut, RiskEventsResponse, RiskLimitsOut, RiskLimitsPatch
 from app.risk.limits import RiskLimits
 from app.services.dashboard_service import get_summary
+from app.services.runtime_overrides import save_overrides
 from app.services.system_service import get_recent_risk_events
 
 router = APIRouter(prefix="/risk", tags=["risk"])
@@ -65,7 +66,52 @@ async def patch_limits(
     for field, value in patch.items():
         setattr(limits, field, Decimal(str(value)) if isinstance(value, str) else value)
 
+    # 同步到 scanner config 和 strategy_cfg —— 否则 scanner 用 YAML 老值预过滤，
+    # UI 改 min_apr_pct / max_positions / max_total_notional_usd 显示成功但实际无效。
+    _propagate_limits_to_runtime(request.app.state, patch)
+
+    # 持久化到 /app/state/overrides.json —— 重启容器后 lifespan 自动加载
+    save_overrides(patch)
+
     return _limits_to_out(limits)
+
+
+def _propagate_limits_to_runtime(app_state, patch: dict) -> None:
+    """把 risk_limits PATCH 同步到所有读到它的运行时组件。
+
+    - paper_session._scanner._config.min_apr_pct
+    - runner._scanner._config.min_apr_pct
+    - app_state.strategy_cfg（让 /strategies/status 显示一致）
+    """
+    new_apr = patch.get("min_apr_pct")
+    new_max_pos = patch.get("max_positions")
+    new_max_notional = patch.get("max_total_notional_usd")
+
+    # 更新 scanner config —— scanner 在 scan() 里读 self._config.min_apr_pct
+    if new_apr is not None:
+        for owner_name in ("paper_session", "runner"):
+            owner = getattr(app_state, owner_name, None)
+            if owner is None:
+                continue
+            scanner = getattr(owner, "_scanner", None)
+            if scanner is None:
+                continue
+            scfg = getattr(scanner, "_config", None)
+            if scfg is not None and hasattr(scfg, "min_apr_pct"):
+                try:
+                    scfg.min_apr_pct = Decimal(str(new_apr))
+                except Exception:
+                    pass
+
+    # 更新 strategy_cfg —— /strategies/status 从这里读 current_config 显示给前端
+    cfg = getattr(app_state, "strategy_cfg", None)
+    if cfg is not None:
+        if new_apr is not None:
+            cfg.setdefault("entry", {})["min_apr_pct"] = str(new_apr)
+        if new_max_pos is not None:
+            cfg.setdefault("position", {})["max_positions"] = int(new_max_pos)
+        if new_max_notional is not None:
+            cfg.setdefault("risk", {})["max_total_notional_usd"] = str(new_max_notional)
 
 
 # ---------------------------------------------------------------------------

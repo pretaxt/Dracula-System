@@ -115,7 +115,7 @@ export function SectionHeader({ title, subtitle, right, accentLine = false }: Se
             style={{
               margin: '2px 0 0',
               fontFamily: 'var(--font-mono)',
-              fontSize: 11,
+              fontSize: 13,
               letterSpacing: '0.06em',
               color: 'var(--text-tertiary)',
               textTransform: 'uppercase',

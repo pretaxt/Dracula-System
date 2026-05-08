@@ -77,6 +77,8 @@ def _make_adapter(place_order_return: Order | Exception | None = None) -> MagicM
         InstrumentType.PERPETUAL: usdm_client,
         InstrumentType.SPOT: spot_client,
     }
+    # 模拟 BinanceAdapter.top_up_perp_margin（默认成功）
+    adapter.top_up_perp_margin = AsyncMock(return_value=None)
     return adapter
 
 
@@ -395,13 +397,9 @@ class TestEnsurePerpMargin:
         # size=0.001 × price=50000 = $50 notional, margin = $10, target = $12, transfer = $13
         await broker.execute(_req(Side.SELL, InstrumentType.PERPETUAL,
                                   size="0.001", price="50000"))
-        spot = adapter._clients[InstrumentType.SPOT]
-        spot.transfer.assert_called_once()
-        call = spot.transfer.await_args
-        assert call.args[0] == "USDT"
-        assert call.args[2] == "spot"
-        assert call.args[3] == "future"
-        assert abs(call.args[1] - 13.0) < 0.01  # required×1.2 + 1 buffer
+        adapter.top_up_perp_margin.assert_awaited_once()
+        amount = adapter.top_up_perp_margin.await_args.args[0]
+        assert abs(float(amount) - 13.0) < 0.01  # required×1.2 + 1 buffer
 
     @pytest.mark.asyncio
     async def test_partial_balance_transfers_only_shortfall(self):
@@ -413,9 +411,8 @@ class TestEnsurePerpMargin:
         broker = LiveBroker(adapter=adapter, perp_leverage=Decimal("5"))
         await broker.execute(_req(Side.SELL, InstrumentType.PERPETUAL,
                                   size="0.001", price="50000"))
-        spot = adapter._clients[InstrumentType.SPOT]
-        call = spot.transfer.await_args
-        assert abs(call.args[1] - 8.0) < 0.01
+        amount = adapter.top_up_perp_margin.await_args.args[0]
+        assert abs(float(amount) - 8.0) < 0.01
 
     @pytest.mark.asyncio
     async def test_reduce_only_does_not_transfer(self):
@@ -445,9 +442,7 @@ class TestEnsurePerpMargin:
         adapter._clients[InstrumentType.PERPETUAL].fetch_balance = AsyncMock(
             return_value={"total": {"USDT": "0"}, "free": {"USDT": "0"}}
         )
-        adapter._clients[InstrumentType.SPOT].transfer = AsyncMock(
-            side_effect=RuntimeError("rate limit")
-        )
+        adapter.top_up_perp_margin = AsyncMock(side_effect=RuntimeError("rate limit"))
         broker = LiveBroker(adapter=adapter)
         # 即便 transfer 失败，order 照下（让交易所自己反馈是否真不够）
         result = await broker.execute(_req(Side.SELL, InstrumentType.PERPETUAL,

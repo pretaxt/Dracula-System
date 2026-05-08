@@ -94,14 +94,22 @@ def build_paper_session(
     perp_leverage = Decimal(str(leverage_cfg.get("default", "1")))
 
     if live_mode:
-        primary_adapter = adapters.get("binance")
-        if primary_adapter is None:
-            raise RuntimeError("live_mode=True requires 'binance' adapter in adapters dict")
-        broker = LiveBroker(
-            adapter=primary_adapter,
-            fee_rate=fee_rate,
-            perp_leverage=perp_leverage,
-        )
+        # 多交易所路由：仅给已鉴权的 adapter 建 LiveBroker
+        # OrderExecutor 按 opportunity.exchange 选 broker；公开行情 only 的 adapter 不会用于实盘下单
+        broker = {
+            ex_name: LiveBroker(
+                adapter=ad,
+                fee_rate=fee_rate,
+                perp_leverage=perp_leverage,
+            )
+            for ex_name, ad in adapters.items()
+            if getattr(ad, "_api_key", "")  # 跳过无 API key 的适配器
+        }
+        if not broker:
+            raise RuntimeError(
+                "live_mode=True but no authenticated adapter available "
+                "(check BINANCE_API_KEY / OKX_API_KEY in .env)"
+            )
     else:
         broker = PaperBroker(slippage_bps=slippage_bps, fee_rate=fee_rate)
     manager = PositionManager()

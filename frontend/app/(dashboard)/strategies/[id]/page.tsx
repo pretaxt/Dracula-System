@@ -27,7 +27,7 @@ const BACK_LINK_STYLE = {
   alignItems: 'center',
   gap: 6,
   fontFamily: 'var(--font-mono)',
-  fontSize: 12,
+  fontSize: 14,
   color: 'var(--accent-blood)',
   textDecoration: 'none',
   letterSpacing: '0.04em',
@@ -71,7 +71,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <h2 style={{ fontFamily: 'var(--font-display)', color: 'var(--text-primary)', margin: 0 }}>
           {t('策略不存在')}
         </h2>
-        <p style={{ marginTop: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <p style={{ marginTop: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           {t('未找到 id 为')}{' '}
           <code style={{ color: 'var(--accent-blood)' }}>{params.id}</code>{' '}
           {t('的策略')}
@@ -112,7 +112,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             <span
               style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 28,
+                fontSize: 32,
                 color: 'var(--accent-blood)',
                 fontWeight: 500,
               }}
@@ -123,7 +123,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               style={{
                 margin: 0,
                 fontFamily: 'var(--font-display)',
-                fontSize: 32,
+                fontSize: 36,
                 fontWeight: 600,
                 letterSpacing: '0.04em',
                 color: 'var(--text-primary)',
@@ -138,7 +138,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             style={{
               margin: '8px 0 0',
               fontFamily: 'var(--font-mono)',
-              fontSize: 11,
+              fontSize: 13,
               color: 'var(--text-tertiary)',
               letterSpacing: '0.04em',
             }}
@@ -188,27 +188,27 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         return (
           <div className="kpi-grid">
             <CardElevated style={{ padding: 20 }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {t('分配资金')}
               </div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, marginTop: 8, color: 'var(--text-primary)' }}
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, marginTop: 8, color: 'var(--text-primary)' }}
                 title="已用 / 账户实际余额 / 策略配置上限">
                 {liveCapital}
               </div>
               {strategy.id === 'funding-rate' && (
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, marginTop: 6, color: 'var(--text-tertiary)', letterSpacing: '0.04em' }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, marginTop: 6, color: 'var(--text-tertiary)', letterSpacing: '0.04em' }}>
                   已用 / 账户 / 配置
                 </div>
               )}
             </CardElevated>
             <CardElevated style={{ padding: 20 }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {t('月化收益')}
               </div>
               <div
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 24,
+                  fontSize: 28,
                   marginTop: 8,
                   color:
                     liveMonthly === null
@@ -224,10 +224,10 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               </div>
             </CardElevated>
             <CardElevated style={{ padding: 20 }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {t('持仓')}
               </div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, marginTop: 8, color: 'var(--text-primary)' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 28, marginTop: 8, color: 'var(--text-primary)' }}>
                 {livePositions}
               </div>
             </CardElevated>
@@ -237,11 +237,11 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
 
       <CardElevated style={{ padding: 24 }}>
         <SectionHeader title={t('策略简介')} subtitle="STRATEGY THESIS" />
-        <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text-secondary)', margin: 0 }}>
+        <p style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text-secondary)', margin: 0 }}>
           {strategy.desc}
         </p>
         {strategy.thesis && (
-          <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text-secondary)', marginTop: 12, marginBottom: 0 }}>
+          <p style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text-secondary)', marginTop: 12, marginBottom: 0 }}>
             {strategy.thesis}
           </p>
         )}
@@ -251,7 +251,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             {/* 入场条件 */}
             <div>
               <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.12em',
                 textTransform: 'uppercase', color: 'var(--accent-emerald)',
                 marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
               }}>
@@ -264,14 +264,14 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               <ol style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
                 {strategy.rules.entry.map((r, i) => (
                   <li key={i} style={{
-                    fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)',
+                    fontSize: 15, lineHeight: 1.5, color: 'var(--text-secondary)',
                     padding: '8px 0', borderBottom: i < strategy.rules!.entry.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                     display: 'flex', gap: 10,
                   }}>
                     <span style={{
                       flexShrink: 0, width: 20, height: 20, borderRadius: 4,
                       background: 'rgba(16,185,129,0.1)', color: 'var(--accent-emerald)',
-                      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
+                      fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     }}>{i + 1}</span>
                     <span>{r}</span>
@@ -283,7 +283,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             {/* 出场条件 */}
             <div>
               <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.12em',
                 textTransform: 'uppercase', color: 'var(--accent-blood)',
                 marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
               }}>
@@ -296,14 +296,14 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               <ol style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
                 {strategy.rules.exit.map((r, i) => (
                   <li key={i} style={{
-                    fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)',
+                    fontSize: 15, lineHeight: 1.5, color: 'var(--text-secondary)',
                     padding: '8px 0', borderBottom: i < strategy.rules!.exit.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                     display: 'flex', gap: 10,
                   }}>
                     <span style={{
                       flexShrink: 0, width: 20, height: 20, borderRadius: 4,
                       background: 'rgba(227,64,88,0.1)', color: 'var(--accent-blood)',
-                      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
+                      fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     }}>{i + 1}</span>
                     <span>{r}</span>
@@ -315,7 +315,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             {/* 参数 */}
             <div>
               <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.12em',
                 textTransform: 'uppercase', color: 'var(--accent-gold)',
                 marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8,
               }}>
@@ -330,7 +330,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                   <div key={i} style={{
                     padding: '8px 0',
                     borderBottom: i < strategy.rules!.params.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                    display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12,
+                    display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 14,
                   }}>
                     <span style={{ color: 'var(--text-muted)' }}>{p.label}</span>
                     <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', textAlign: 'right' }}>
@@ -361,7 +361,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                   padding: '10px 0',
                   borderBottom:
                     i < strategy.risks!.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                  fontSize: 13,
+                  fontSize: 15,
                   color: 'var(--text-secondary)',
                   lineHeight: 1.5,
                 }}
@@ -387,7 +387,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
+                  fontSize: 13,
                   color: spotPerpOpps?.running
                     ? 'var(--accent-emerald)'
                     : 'var(--text-tertiary)',
@@ -414,7 +414,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 padding: 24,
                 textAlign: 'center',
                 fontFamily: 'var(--font-mono)',
-                fontSize: 12,
+                fontSize: 14,
                 color: 'var(--text-tertiary)',
               }}
             >
@@ -431,7 +431,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                   borderCollapse: 'separate',
                   borderSpacing: 0,
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
+                  fontSize: 14,
                 }}
               >
                 <thead>
@@ -444,7 +444,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                           padding: '10px 12px',
                           color: 'var(--text-tertiary)',
                           fontWeight: 500,
-                          fontSize: 10,
+                          fontSize: 12,
                           letterSpacing: '0.08em',
                           textTransform: 'uppercase',
                           borderBottom: '1px solid var(--border-default)',
@@ -497,7 +497,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             style={{
               marginTop: 12,
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 12,
               color: 'var(--text-muted)',
             }}
           >
@@ -523,7 +523,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
+                  fontSize: 13,
                   color: 'var(--text-tertiary)',
                 }}
               >
@@ -566,7 +566,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             <span
               style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 11,
+                fontSize: 13,
                 color: 'var(--text-muted)',
               }}
             >

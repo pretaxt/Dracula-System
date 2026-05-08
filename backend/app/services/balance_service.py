@@ -29,6 +29,11 @@ _cache_value: Decimal | None = None
 _cache_expires_at: float = 0.0
 _cache_lock = asyncio.Lock()
 
+# 每交易所缓存
+_per_exchange_cache: dict[str, Decimal] | None = None
+_per_exchange_expires_at: float = 0.0
+_per_exchange_lock = asyncio.Lock()
+
 
 async def _ticker_usd(adapter: Any, asset: str) -> Decimal | None:
     """单个非稳定币 → USDT 报价，拉取失败返回 None。"""
@@ -78,6 +83,60 @@ async def _perp_usdt_total(adapter: Any) -> Decimal:
     except Exception as exc:
         logger.debug("perp_balance_skipped", error=str(exc)[:120])
         return Decimal("0")
+
+
+_PER_EXCHANGE_TIMEOUT_S = 8.0  # 单交易所余额拉取硬超时（避免 OKX 慢导致 dashboard 整体卡）
+
+
+async def get_per_exchange_equity(adapters: dict[str, Any]) -> dict[str, Decimal]:
+    """每个交易所的 USD 等值汇总（spot + USDM perp），60s 缓存 + 8s 单交易所超时。
+
+    任意交易所拉取超时/失败时，该交易所返回 0（或上次成功的缓存值）。
+    """
+    global _per_exchange_cache, _per_exchange_expires_at
+
+    now = time.monotonic()
+    if _per_exchange_cache is not None and now < _per_exchange_expires_at:
+        return _per_exchange_cache
+
+    async with _per_exchange_lock:
+        if _per_exchange_cache is not None and time.monotonic() < _per_exchange_expires_at:
+            return _per_exchange_cache
+
+        out: dict[str, Decimal] = {}
+        items = list((adapters or {}).items())
+
+        async def _fetch_one(ex_name: str, adapter: Any) -> Decimal:
+            if not getattr(adapter, "_api_key", ""):
+                return Decimal("0")
+            try:
+                # 8s 硬超时 — 单交易所卡住不影响整体响应
+                async def _both():
+                    s, p = await asyncio.gather(
+                        _spot_usd_total(adapter), _perp_usdt_total(adapter),
+                    )
+                    return s + p
+                return await asyncio.wait_for(_both(), timeout=_PER_EXCHANGE_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning("per_exchange_equity_timeout", exchange=ex_name,
+                               timeout_s=_PER_EXCHANGE_TIMEOUT_S)
+                # 用上次成功值兜底；没有则 0
+                return (_per_exchange_cache or {}).get(ex_name, Decimal("0"))
+            except Exception as exc:
+                logger.warning("per_exchange_equity_failed",
+                               exchange=ex_name, error=str(exc)[:200])
+                return (_per_exchange_cache or {}).get(ex_name, Decimal("0"))
+
+        results = await asyncio.gather(
+            *[_fetch_one(n, a) for n, a in items],
+            return_exceptions=False,
+        )
+        for (n, _), r in zip(items, results):
+            out[n] = r
+
+        _per_exchange_cache = out
+        _per_exchange_expires_at = time.monotonic() + _CACHE_TTL_SECONDS
+        return out
 
 
 async def get_total_equity_usd(adapters: dict[str, Any]) -> Decimal | None:

@@ -53,21 +53,21 @@ export default function PositionsPage() {
       {/* 4 KPI */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('持仓总数')}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('持仓总数')}</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--text-primary)' }}>{totalCount}</div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>名义价值</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>名义价值</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--text-primary)' }}>${totalNotional.toFixed(0)}</div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('浮动盈亏')}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('浮动盈亏')}</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: totalUnrealized >= 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)' }}>
             {totalUnrealized >= 0 ? '+' : ''}${totalUnrealized.toFixed(2)}
           </div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>已实现盈亏</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>已实现盈亏</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: totalRealized >= 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)' }}>
             {totalRealized >= 0 ? '+' : ''}${totalRealized.toFixed(2)}
           </div>
@@ -80,12 +80,12 @@ export default function PositionsPage() {
           title={t('当前持仓')}
           right={
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" style={{ fontSize: 12 }}>导出 CSV</Button>
-              <Button variant="secondary" style={{ fontSize: 12, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}>紧急平仓所有</Button>
+              <Button variant="secondary" style={{ fontSize: 14 }}>导出 CSV</Button>
+              <Button variant="secondary" style={{ fontSize: 14, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}>紧急平仓所有</Button>
             </div>
           }
         />
-        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           <thead>
             <tr>
               {[t('策略'), t('币对'), t('状态'), t('规模'), 'APR', t('资金费'), 'PnL', t('持仓'), t('操作')].map((h, i) => (
@@ -93,7 +93,7 @@ export default function PositionsPage() {
                   textAlign: i >= 3 && i <= 7 ? 'right' : 'left',
                   padding: '8px 12px',
                   color: 'var(--text-tertiary)',
-                  fontSize: 10,
+                  fontSize: 12,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
                   borderBottom: '1px solid var(--border-default)',
@@ -134,7 +134,7 @@ export default function PositionsPage() {
                         onClick={() => setPendingClose({ uuid: p.uuid, symbol: p.symbol })}
                         style={{
                           fontFamily: 'var(--font-mono)',
-                          fontSize: 10,
+                          fontSize: 12,
                           color: 'var(--accent-blood)',
                           background: 'transparent',
                           border: '1px solid rgba(227,64,88,0.4)',
@@ -156,7 +156,7 @@ export default function PositionsPage() {
           </tbody>
         </table>
         {data?.meta && (
-          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+          <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
             {data.meta.total} 条记录 · 第 {data.meta.page} 页
           </div>
         )}
@@ -165,7 +165,7 @@ export default function PositionsPage() {
       {/* 最近订单 */}
       <CardElevated style={{ padding: 20 }}>
         <SectionHeader title={t('最近订单')} subtitle="RECENT ORDERS · LAST 20" />
-        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           <thead>
             <tr>
               {[t('时间'), t('交易所'), t('币对'), t('类型'), t('方向'), t('数量'), t('成交均价'), t('状态')].map((h, i) => (
@@ -173,7 +173,7 @@ export default function PositionsPage() {
                   textAlign: i >= 5 && i <= 6 ? 'right' : 'left',
                   padding: '8px 12px',
                   color: 'var(--text-tertiary)',
-                  fontSize: 10,
+                  fontSize: 12,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
                   borderBottom: '1px solid var(--border-default)',

@@ -26,7 +26,9 @@ _SYMBOLS = [BTC, ETH]
 
 
 def _mock_adapters() -> dict:
-    return {"binance": MagicMock(spec=ExchangeAdapter)}
+    a = MagicMock(spec=ExchangeAdapter)
+    a._api_key = "fake-key"  # live_mode 下 session_factory 跳过无 api_key 的 adapter
+    return {"binance": a}
 
 
 def _cfg(**overrides) -> dict:
@@ -261,30 +263,48 @@ class TestExitParamsWiring:
 
 
 class TestLiveModeWiring:
-    def test_live_mode_returns_live_broker(self):
+    def test_live_mode_returns_dict_of_live_brokers(self):
+        """live_mode=True 时 broker 是 dict{exchange: LiveBroker}（多交易所路由）。"""
         cfg = _cfg(leverage={"default": "5"})
         session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
-        assert isinstance(session._executor._broker, LiveBroker)
+        broker = session._executor._broker
+        assert isinstance(broker, dict)
+        assert "binance" in broker
+        assert isinstance(broker["binance"], LiveBroker)
 
     def test_paper_mode_default_returns_paper_broker(self):
         session = build_paper_session(_cfg(), _mock_adapters(), _SYMBOLS)
         assert isinstance(session._executor._broker, PaperBroker)
 
-    def test_live_mode_without_binance_adapter_raises(self):
-        """live_mode=True 但 adapters 里没有 'binance' → 立即 RuntimeError，避免静默 fallback。"""
-        with pytest.raises(RuntimeError, match="binance"):
+    def test_live_mode_without_any_adapter_raises(self):
+        """live_mode=True 但 adapters 为空 → RuntimeError，避免静默无 broker。"""
+        with pytest.raises(RuntimeError, match="adapter"):
             build_paper_session(_cfg(), {}, _SYMBOLS, live_mode=True)
 
-    def test_live_broker_receives_perp_leverage(self):
+    def test_live_brokers_receive_perp_leverage(self):
         cfg = _cfg(leverage={"default": "5"})
         session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
-        broker = session._executor._broker
-        assert isinstance(broker, LiveBroker)
-        assert broker._perp_leverage == Decimal("5")
+        for broker in session._executor._broker.values():
+            assert isinstance(broker, LiveBroker)
+            assert broker._perp_leverage == Decimal("5")
 
-    def test_live_broker_receives_fee_rate(self):
+    def test_live_brokers_receive_fee_rate(self):
         cfg = _cfg(execution={"slippage_bps": 5, "fee_rate": "0.0002"})
         session = build_paper_session(cfg, _mock_adapters(), _SYMBOLS, live_mode=True)
+        for broker in session._executor._broker.values():
+            assert isinstance(broker, LiveBroker)
+            assert broker.fee_rate == Decimal("0.0002")
+
+    def test_live_mode_multi_exchange_creates_one_broker_each(self):
+        """两个 adapter (binance + okx) → broker dict 长度 2，按 exchange name 索引。"""
+        bn = MagicMock(spec=ExchangeAdapter)
+        bn._api_key = "bn-key"
+        okx = MagicMock(spec=ExchangeAdapter)
+        okx._api_key = "okx-key"
+        adapters = {"binance": bn, "okx": okx}
+        session = build_paper_session(_cfg(), adapters, _SYMBOLS, live_mode=True)
         broker = session._executor._broker
-        assert isinstance(broker, LiveBroker)
-        assert broker.fee_rate == Decimal("0.0002")
+        assert isinstance(broker, dict)
+        assert set(broker.keys()) == {"binance", "okx"}
+        for b in broker.values():
+            assert isinstance(b, LiveBroker)

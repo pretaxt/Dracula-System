@@ -49,7 +49,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
               style={{
                 margin: 0,
                 fontFamily: 'var(--font-display)',
-                fontSize: 16,
+                fontSize: 18,
                 letterSpacing: '0.04em',
                 color: 'var(--text-primary)',
               }}
@@ -60,7 +60,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 10,
+                  fontSize: 12,
                   padding: '2px 6px',
                   borderRadius: 'var(--radius-xs)',
                   background: 'rgba(227,64,88,0.15)',
@@ -95,7 +95,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                 padding: 24,
                 textAlign: 'center',
                 fontFamily: 'var(--font-mono)',
-                fontSize: 12,
+                fontSize: 14,
                 color: 'var(--text-tertiary)',
               }}
             >
@@ -108,7 +108,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                 padding: 24,
                 textAlign: 'center',
                 fontFamily: 'var(--font-mono)',
-                fontSize: 12,
+                fontSize: 14,
                 color: 'var(--accent-blood)',
               }}
             >
@@ -121,7 +121,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
               <div
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
+                  fontSize: 14,
                   color: 'var(--text-tertiary)',
                 }}
               >
@@ -160,7 +160,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                   <span
                     style={{
                       fontFamily: 'var(--font-mono)',
-                      fontSize: 10,
+                      fontSize: 12,
                       color: TIER_TONE[ev.tier] || 'var(--text-tertiary)',
                       textTransform: 'uppercase',
                       letterSpacing: '0.08em',
@@ -171,7 +171,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                   <span
                     style={{
                       fontFamily: 'var(--font-mono)',
-                      fontSize: 10,
+                      fontSize: 12,
                       color: 'var(--text-muted)',
                     }}
                   >
@@ -180,7 +180,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                 </div>
                 <div
                   style={{
-                    fontSize: 13,
+                    fontSize: 15,
                     color: 'var(--text-primary)',
                     marginBottom: 4,
                     fontWeight: 500,
@@ -191,7 +191,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                 <div
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
+                    fontSize: 13,
                     color: 'var(--text-tertiary)',
                     lineHeight: 1.5,
                   }}
@@ -202,7 +202,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
                   style={{
                     marginTop: 6,
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 10,
+                    fontSize: 12,
                     color: ev.auto_recovered ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
                   }}
                 >
@@ -226,7 +226,7 @@ export default function NotificationDrawer({ onClose }: { onClose: () => void })
             onClick={onClose}
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 11,
+              fontSize: 13,
               color: 'var(--accent-blood)',
               textDecoration: 'none',
               letterSpacing: '0.04em',

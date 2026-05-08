@@ -377,13 +377,13 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
             </h3>
             {stats && (
               <>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: 'var(--text-primary)' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, color: 'var(--text-primary)' }}>
                   ${formatPrice(stats.last)}
                 </span>
                 <span
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
+                    fontSize: 14,
                     color:
                       stats.change > 0
                         ? 'var(--accent-emerald)'
@@ -433,7 +433,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
               onClick={() => setTab(it.k)}
               style={{
                 fontFamily: 'var(--font-display)',
-                fontSize: 12,
+                fontSize: 14,
                 letterSpacing: '0.06em',
                 padding: '10px 20px',
                 cursor: 'pointer',
@@ -469,7 +469,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   onClick={() => setIntervalState(it.k)}
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
+                    fontSize: 13,
                     padding: '4px 10px',
                     borderRadius: 'var(--radius-sm)',
                     cursor: 'pointer',
@@ -490,7 +490,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                   display: 'flex',
                   gap: 12,
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 10,
+                  fontSize: 12,
                   alignItems: 'center',
                   color: 'var(--text-tertiary)',
                   flexWrap: 'wrap',
@@ -543,7 +543,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     <div
                       style={{
                         fontFamily: 'var(--font-mono)',
-                        fontSize: 9,
+                        fontSize: 11,
                         color: 'var(--text-tertiary)',
                         textTransform: 'uppercase',
                         letterSpacing: '0.08em',
@@ -554,7 +554,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     <div
                       style={{
                         fontFamily: 'var(--font-mono)',
-                        fontSize: 13,
+                        fontSize: 15,
                         marginTop: 4,
                         color: s.c || 'var(--text-primary)',
                       }}
@@ -575,7 +575,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
+                    fontSize: 14,
                     color: 'var(--text-tertiary)',
                   }}
                 >
@@ -590,7 +590,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
+                    fontSize: 14,
                     color: 'var(--accent-blood)',
                   }}
                 >
@@ -914,7 +914,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
                     border: '1px solid var(--border-default)',
                     borderRadius: 'var(--radius-sm)',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
+                    fontSize: 13,
                     color: 'var(--text-secondary)',
                     display: 'grid',
                     gridTemplateColumns: 'repeat(4, 1fr)',
@@ -969,7 +969,7 @@ export default function KlineDrawer({ symbol, onClose }: KlineDrawerProps) {
             padding: '12px 20px',
             borderTop: '1px solid var(--border-subtle)',
             fontFamily: 'var(--font-mono)',
-            fontSize: 10,
+            fontSize: 12,
             color: 'var(--text-muted)',
             textAlign: 'center',
             marginTop: 'auto',
@@ -1012,14 +1012,14 @@ function OrderbookView({
 
   if (isLoading && bids.length === 0) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
         {t('加载中…')}
       </div>
     )
   }
   if (isError) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)' }}>
+      <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--accent-blood)' }}>
         {t('加载失败')}
       </div>
     )
@@ -1042,7 +1042,7 @@ function OrderbookView({
           border: '1px solid var(--border-default)',
           borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--font-mono)',
-          fontSize: 12,
+          fontSize: 14,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -1067,7 +1067,7 @@ function OrderbookView({
           <div
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 12,
               color: 'var(--accent-emerald)',
               textTransform: 'uppercase',
               letterSpacing: '0.08em',
@@ -1092,7 +1092,7 @@ function OrderbookView({
                   justifyContent: 'space-between',
                   padding: '4px 12px',
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
+                  fontSize: 14,
                 }}
               >
                 <span
@@ -1116,7 +1116,7 @@ function OrderbookView({
             )
           })}
           {bids.length === 0 && (
-            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>—</div>
+            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>—</div>
           )}
         </div>
 
@@ -1125,7 +1125,7 @@ function OrderbookView({
           <div
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 12,
               color: 'var(--accent-blood)',
               textTransform: 'uppercase',
               letterSpacing: '0.08em',
@@ -1150,7 +1150,7 @@ function OrderbookView({
                   justifyContent: 'space-between',
                   padding: '4px 12px',
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
+                  fontSize: 14,
                 }}
               >
                 <span
@@ -1174,7 +1174,7 @@ function OrderbookView({
             )
           })}
           {asks.length === 0 && (
-            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>—</div>
+            <div style={{ padding: 12, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>—</div>
           )}
         </div>
       </div>

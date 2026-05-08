@@ -45,26 +45,26 @@ export default function FundingRatesPage() {
       {/* 4 KPI */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>机会总数</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>机会总数</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--text-primary)' }}>{totalCount}</div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>平均 APR</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>平均 APR</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--accent-emerald)' }}>
             {avgApr.toFixed(2)}%
           </div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>最高 APR</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>最高 APR</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--accent-emerald)' }}>
             {maxApr.toFixed(2)}%
           </div>
         </Card>
         <Card style={{ padding: 16 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('实时')}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('实时')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <StatusDot tone="active" />
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-primary)' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, color: 'var(--text-primary)' }}>
               {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : '—'}
             </div>
           </div>
@@ -77,13 +77,13 @@ export default function FundingRatesPage() {
           title="资金费率机会扫描器"
           subtitle="FUNDING RATE OPPORTUNITIES · UPDATING"
           right={
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-tertiary)' }}>
               <StatusDot tone="active" />
               <span>{t('实时')} · 15s</span>
             </span>
           }
         />
-        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           <thead>
             <tr>
               {[t('币对'), t('交易所'), t('类型'), '资金费率', 'APR', '历史正费率', ''].map((h, i) => (
@@ -91,7 +91,7 @@ export default function FundingRatesPage() {
                   textAlign: i >= 3 && i <= 5 ? 'right' : 'left',
                   padding: '8px 12px',
                   color: 'var(--text-tertiary)',
-                  fontSize: 10,
+                  fontSize: 12,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
                   borderBottom: '1px solid var(--border-default)',
@@ -140,7 +140,7 @@ export default function FundingRatesPage() {
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
                     {o.history_positive !== null ? `${o.history_positive}/10` : '—'}
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 10, color: openSymbols.has(o.symbol) ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
+                  <td style={{ padding: '10px 12px', fontSize: 12, color: openSymbols.has(o.symbol) ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
                     {openSymbols.has(o.symbol) ? t('已建仓') : '—'}
                   </td>
                 </tr>
@@ -152,7 +152,7 @@ export default function FundingRatesPage() {
           </tbody>
         </table>
         {data?.snapshot_at && (
-          <div style={{ marginTop: 12, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
+          <div style={{ marginTop: 12, fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textAlign: 'right' }}>
             SNAPSHOT · {new Date(data.snapshot_at).toLocaleString()}
           </div>
         )}

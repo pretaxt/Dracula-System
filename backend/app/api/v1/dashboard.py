@@ -32,4 +32,5 @@ async def summary(_: CurrentUser, db: DbSession, request: Request) -> DashboardS
         strategy_performance=[
             StrategyPerf(**s) for s in data.get("strategy_performance", [])
         ],
+        equity_by_exchange=data.get("equity_by_exchange", {}),
     )

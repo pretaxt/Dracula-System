@@ -33,13 +33,13 @@ export function ErrorBanner({ message, onRetry, compact = false }: ErrorBannerPr
         border: '1px solid rgba(227, 64, 88, 0.3)',
         borderRadius: 'var(--radius-sm)',
         color: 'var(--accent-blood)',
-        fontSize: 13,
+        fontSize: 15,
       }}
     >
       <AlertOctagon size={compact ? 14 : 16} style={{ marginTop: 2, flexShrink: 0 }} />
       <div style={{ flex: 1 }}>
         <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 2 }}>API 请求失败</div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-blood)' }}>{text}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-blood)' }}>{text}</div>
       </div>
       {onRetry && (
         <button
@@ -56,7 +56,7 @@ export function ErrorBanner({ message, onRetry, compact = false }: ErrorBannerPr
             border: '1px solid rgba(227,64,88,0.4)',
             borderRadius: 'var(--radius-sm)',
             fontFamily: 'var(--font-mono)',
-            fontSize: 11,
+            fontSize: 13,
             cursor: 'pointer',
             transition: 'all var(--duration-fast)',
           }}

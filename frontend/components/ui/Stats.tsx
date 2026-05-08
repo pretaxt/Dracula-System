@@ -106,7 +106,7 @@ export function KPICard({
         <span
           style={{
             fontFamily: 'var(--font-mono)',
-            fontSize: 10,
+            fontSize: 12,
             textTransform: 'uppercase',
             letterSpacing: '0.08em',
             color: 'var(--text-tertiary)',

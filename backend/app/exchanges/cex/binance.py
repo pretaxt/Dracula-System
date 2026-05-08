@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from decimal import Decimal
+
 import ccxt.async_support as ccxt
 
 from app.exchanges.cex.ccxt_base import CCXTAdapter, _map_side, _to_decimal
@@ -81,6 +83,23 @@ class BinanceAdapter(CCXTAdapter):
     # ------------------------------------------------------------------
     # Funding rate (USDM only)
     # ------------------------------------------------------------------
+
+    async def top_up_perp_margin(self, amount: Decimal) -> None:
+        """从 spot 钱包划转 USDT 到 USDM 合约钱包（Universal Transfer API）。
+
+        两个钱包是隔离的：spot wallet 和 USDM futures wallet 余额各自独立。
+        永续开仓需要 USDM wallet 有足够保证金，靠 CCXT transfer 实时补足。
+        """
+        if amount <= 0:
+            return
+        spot_client = self._clients[InstrumentType.SPOT]
+        await spot_client.transfer("USDT", float(amount), "spot", "future")
+        logger.info(
+            "binance_perp_margin_topped_up",
+            from_account="spot",
+            to_account="future",
+            amount=str(amount),
+        )
 
     async def fetch_funding_rate(self, symbol: Symbol) -> FundingRate:
         """拉取 USDM 永续当期资金费率
