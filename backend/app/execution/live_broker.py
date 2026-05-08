@@ -93,6 +93,8 @@ class LiveBroker:
                 size=self._round_qty(request.symbol, instrument, request.size),
                 reduce_only=request.reduce_only,
                 client_order_id=request.client_order_id or None,
+                margin_mode=getattr(request, "margin_mode", None),
+                side_effect=getattr(request, "side_effect", None),
             )
             avg_price = order.avg_fill_price or request.reference_price
             fees = avg_price * order.filled * self.fee_rate

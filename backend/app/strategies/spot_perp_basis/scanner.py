@@ -23,9 +23,13 @@ from app.exchanges.models import InstrumentType
 logger = get_logger(__name__)
 
 DEFAULT_SYMBOLS: list[str] = [
+    # 市值 / 流动性 top 30（USDT 永续覆盖率高）
     "BTC", "ETH", "SOL", "BNB", "XRP",
-    "DOGE", "AVAX", "LINK", "ARB", "OP",
-    "SUI", "HYPE",
+    "DOGE", "TRX", "ADA", "AVAX", "LINK",
+    "DOT", "NEAR", "BCH", "LTC", "UNI",
+    "APT", "ARB", "OP", "SUI", "ATOM",
+    "FIL", "ETC", "AAVE", "INJ", "ICP",
+    "XLM", "RUNE", "SEI", "LDO", "TIA",
 ]
 
 _DEFAULT_MIN_BASIS_PCT = Decimal("0.10")  # |basis| >= 0.10% 算机会
@@ -71,25 +75,63 @@ def _to_dec(v: Any) -> Decimal:
 
 
 class SpotPerpBasisScanner:
-    """单交易所 spot-perp 基差扫描器(默认 Binance)。"""
+    """多交易所 spot-perp 基差扫描器。
+
+    Parameters
+    ----------
+    adapters:
+        ``{exchange_name: ExchangeAdapter}`` 已初始化的适配器字典。
+    config:
+        ``SpotPerpConfig`` 配置（默认 30 标的、0.10% 阈值）。
+    exchanges:
+        要扫描的交易所列表。``None`` = 所有 adapters 中的交易所；
+        否则只扫该列表内交集。
+    exchange:
+        历史兼容参数（单交易所），等价于 ``exchanges=[exchange]``。
+    """
 
     def __init__(
         self,
         adapters: dict[str, Any],
         config: SpotPerpConfig | None = None,
-        exchange: str = "binance",
+        exchanges: list[str] | None = None,
+        exchange: str | None = None,  # 旧参数；保留兼容
     ) -> None:
         self._adapters = adapters or {}
         self._config = config or SpotPerpConfig()
-        self._exchange = exchange
+        if exchanges is not None:
+            self._exchanges = [e for e in exchanges if e in self._adapters]
+        elif exchange is not None:
+            self._exchanges = [exchange] if exchange in self._adapters else []
+        else:
+            self._exchanges = list(self._adapters.keys())
 
     async def scan_once(self) -> list[SpotPerpOpportunity]:
-        """单次扫描,返回 |basis_pct| 降序的机会列表。"""
-        adapter = self._adapters.get(self._exchange)
-        if adapter is None:
-            logger.warning("spot_perp_adapter_missing", exchange=self._exchange)
+        """对所有目标交易所并发扫描，返回按 |basis_pct| 降序的机会列表。"""
+        if not self._exchanges:
+            logger.warning("spot_perp_no_exchanges")
             return []
 
+        results = await asyncio.gather(
+            *(self._scan_one_exchange(ex) for ex in self._exchanges),
+            return_exceptions=True,
+        )
+        flat: list[SpotPerpOpportunity] = []
+        for ex, r in zip(self._exchanges, results):
+            if isinstance(r, Exception):
+                logger.warning("spot_perp_scan_exchange_failed",
+                               exchange=ex, error=str(r)[:200])
+                continue
+            flat.extend(r)
+        flat.sort(key=lambda o: abs(o.basis_pct), reverse=True)
+        return flat
+
+    async def _scan_one_exchange(
+        self, exchange: str,
+    ) -> list[SpotPerpOpportunity]:
+        adapter = self._adapters.get(exchange)
+        if adapter is None:
+            return []
         clients = getattr(adapter, "_clients", {}) or {}
         spot_client = clients.get(InstrumentType.SPOT)
         perp_client = clients.get(InstrumentType.PERPETUAL)
@@ -126,7 +168,7 @@ class SpotPerpBasisScanner:
             opportunities.append(
                 SpotPerpOpportunity(
                     symbol=spot_sym,
-                    exchange=self._exchange,
+                    exchange=exchange,
                     spot_price=spot_px,
                     perp_price=perp_px,
                     basis_abs=basis_abs,
@@ -135,20 +177,39 @@ class SpotPerpBasisScanner:
                     timestamp_ms=now_ms,
                 )
             )
-
-        opportunities.sort(key=lambda o: abs(o.basis_pct), reverse=True)
         return opportunities
 
     async def _safe_fetch(
         self, adapter: Any, client: Any, symbols: list[str]
     ) -> dict[str, Any]:
-        retry = getattr(adapter, "_call_with_retry", None)
+        """批量优先；批量失败/超时降级为 per-symbol 直调。
+
+        **绕过 _call_with_retry / rate_limiter**：避免与 funding_rate scanner
+        共争同一交易所的 token bucket 导致饥饿。ticker 是公开行情接口，对单条
+        请求不走限流可接受；超时 15s（批量）/ 5s（单条）兜底。
+        """
+        # 批量直调（不走 retry / rate_limiter）
         try:
-            if retry is not None:
-                raw = await retry(client.fetch_tickers, symbols)
-            else:
-                raw = await client.fetch_tickers(symbols)
-            return raw or {}
+            raw = await asyncio.wait_for(
+                client.fetch_tickers(symbols), timeout=15.0,
+            )
+            if raw:
+                return raw
         except Exception as e:  # noqa: BLE001
-            logger.warning("spot_perp_fetch_tickers_failed", error=str(e))
-            return {}
+            logger.debug(
+                "spot_perp_fetch_batch_failed_falling_back_per_symbol",
+                error=str(e)[:200],
+            )
+
+        # 降级：per-symbol，单标的失败静默
+        out: dict[str, Any] = {}
+        async def _one(sym: str) -> None:
+            try:
+                t = await asyncio.wait_for(client.fetch_ticker(sym), timeout=5.0)
+                if t:
+                    out[sym] = t
+            except Exception:
+                pass
+
+        await asyncio.gather(*(_one(s) for s in symbols))
+        return out

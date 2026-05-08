@@ -336,7 +336,22 @@ class CCXTAdapter(ExchangeAdapter):
         reduce_only: bool = False,
         post_only: bool = False,
         client_order_id: Optional[str] = None,
+        margin_mode: Optional[str] = None,
+        side_effect: Optional[str] = None,
+        extra_params: Optional[Dict[str, Any]] = None,
     ) -> Order:
+        """下单。
+
+        Parameters
+        ----------
+        margin_mode:
+            'cross' / 'isolated' — 现货保证金模式（仅 instrument=SPOT 时有效，
+            用于做空：先借币再卖出）。
+        side_effect:
+            Binance 现货保证金特有：'MARGIN_BUY' 借币并交易；'AUTO_REPAY' 交易并还币。
+        extra_params:
+            其他直传 ccxt 的 params（高级用法，调用方自己保证 key 正确）。
+        """
         client = self._client(instrument)
         params: Dict[str, Any] = {
             "timeInForce": time_in_force.value,
@@ -347,6 +362,12 @@ class CCXTAdapter(ExchangeAdapter):
             params["postOnly"] = True
         if client_order_id:
             params["clientOrderId"] = client_order_id
+        if margin_mode:
+            params["marginMode"] = margin_mode
+        if side_effect:
+            params["sideEffectType"] = side_effect
+        if extra_params:
+            params.update(extra_params)
 
         raw = await self._call_with_retry(
             client.create_order,

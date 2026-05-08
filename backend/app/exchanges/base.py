@@ -125,11 +125,17 @@ class ExchangeAdapter(ABC):
         reduce_only: bool = False,
         post_only: bool = False,
         client_order_id: Optional[str] = None,
+        margin_mode: Optional[str] = None,
+        side_effect: Optional[str] = None,
+        extra_params: Optional[dict] = None,
     ) -> Order:
         """下单
 
         返回订单对象(含 order_id 和初始状态)。
         只抛 errors.py 中定义的异常,不暴露 ccxt/SDK 原生异常。
+
+        margin_mode/side_effect (D.2.c): Binance spot 保证金做空支持，
+        其他交易所不支持时静默忽略或抛 NotImplementedError。
         """
 
     @abstractmethod

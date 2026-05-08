@@ -71,9 +71,17 @@ class Settings(BaseSettings):
     # 安全防护
     liquidation_watcher_enabled: bool = Field(default=False)  # paper 默认关；实盘前打开
 
+    # spot-perp 套利单仓 notional（USD）。D.1 默认 $10 安全启动；UI 后续可调
+    spot_perp_notional_usd: str = Field(default="10")
+
     # 通知
     telegram_bot_token: str = Field(default="")
     telegram_chat_id: str = Field(default="")
+    # 双向命令 bot 的授权聊天 ID 白名单（逗号分隔）。
+    # 留空时退回到 telegram_chat_id（即仅自己能下指令）。
+    telegram_allowed_chat_ids: str = Field(default="")
+    # 是否启用双向命令 bot（默认开；token+allowlist 缺一即自动跳过）。
+    telegram_command_bot_enabled: bool = Field(default=True)
     discord_webhook_url: str = Field(default="")
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)

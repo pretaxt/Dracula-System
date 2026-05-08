@@ -2,7 +2,12 @@
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { getStrategyStatus, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
+import {
+  getStrategyStatus,
+  getSpotPerpConfig,
+  startStrategyById,
+  stopStrategyById,
+} from '@/lib/api/strategies'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import { CardElevated } from '@/components/ui/Card'
 import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
@@ -40,8 +45,13 @@ export default function StrategiesPage() {
   const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['strategy'], queryFn: getStrategyStatus, refetchInterval: 10_000 })
   const { data: summary } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
-  const startMut = useMutation({ mutationFn: (id: string) => startStrategyById(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
-  const stopMut  = useMutation({ mutationFn: (id: string) => stopStrategyById(id),  onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }) })
+  const { data: spCfg } = useQuery({ queryKey: ['spot-perp-config'], queryFn: getSpotPerpConfig, refetchInterval: 10_000, retry: false })
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ['strategy'] })
+    qc.invalidateQueries({ queryKey: ['spot-perp-config'] })
+  }
+  const startMut = useMutation({ mutationFn: (id: string) => startStrategyById(id), onSuccess: invalidateAll })
+  const stopMut  = useMutation({ mutationFn: (id: string) => stopStrategyById(id),  onSuccess: invalidateAll })
   const [actionId, setActionId] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
 
@@ -71,6 +81,35 @@ export default function StrategiesPage() {
         monthlyTone: (totalPnl > 0 ? 'positive' : totalPnl < 0 ? 'negative' : undefined) as
           'positive' | 'negative' | undefined,
         positions: `${openCnt} / ${maxPos}`,
+        posLabel: '持仓',
+        status,
+      }
+    }
+
+    // #04 spot-perp：从 spot-perp/config session_running 读真实运行状态
+    if (s.id === 'spot-perp') {
+      const open = perf?.open_positions ?? 0
+      const totalPnl = perf ? parseFloat(perf.total_pnl) : 0
+      const max = spCfg?.max_concurrent ?? 0
+      const notional = spCfg?.notional_per_position ? parseFloat(spCfg.notional_per_position) : 0
+      const deployed = open * notional
+      const configMax = max * notional
+      const account = parseFloat(summary?.total_equity_usd ?? '0')
+      // 状态优先级：session_running 真值 > catalog 静态
+      const status: StrategyStatus =
+        spCfg?.session_running ? 'RUNNING'
+        : spCfg ? 'PLANNED'
+        : s.status
+      return {
+        capital: notional > 0
+          ? `$${deployed.toFixed(0)} / $${account.toFixed(0)} / $${configMax.toFixed(0)}`
+          : '—',
+        monthly: perf
+          ? (totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`)
+          : null,
+        monthlyTone: (totalPnl > 0 ? 'positive' : totalPnl < 0 ? 'negative' : undefined) as
+          'positive' | 'negative' | undefined,
+        positions: max > 0 ? `${open} / ${max}` : `${open}`,
         posLabel: '持仓',
         status,
       }

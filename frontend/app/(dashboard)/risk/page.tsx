@@ -4,6 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Lock, CheckCircle2, Pencil, X as XIcon } from 'lucide-react'
 import { getRiskLimits, patchRiskLimits, getRiskEvents, type RiskEvent } from '@/lib/api/risk'
 import { getDashboardSummary } from '@/lib/api/dashboard'
+import {
+  getSpotPerpConfig,
+  patchSpotPerpConfig,
+  type SpotPerpConfig,
+  type SpotPerpConfigPatch,
+} from '@/lib/api/strategies'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button } from '@/components/ui/Button'
 import { ProgressBar } from '@/components/ui/Stats'
@@ -48,10 +54,18 @@ export default function RiskPage() {
   const { data: summary } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
 
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<{ min_apr_pct: string; max_positions: string; max_total_notional_usd: string }>({
+  const [draft, setDraft] = useState<{
+    min_apr_pct: string
+    max_positions: string
+    max_total_notional_usd: string
+    stop_loss_pct: string
+    max_hold_hours: string
+  }>({
     min_apr_pct: '',
     max_positions: '',
     max_total_notional_usd: '',
+    stop_loss_pct: '',
+    max_hold_hours: '',
   })
   const [confirmWiden, setConfirmWiden] = useState(false)
 
@@ -63,6 +77,50 @@ export default function RiskPage() {
       setConfirmWiden(false)
     },
   })
+
+  // ── #04 spot-perp 配置（D.1.5）──
+  const { data: spCfg } = useQuery<SpotPerpConfig>({
+    queryKey: ['spot-perp-config'],
+    queryFn: getSpotPerpConfig,
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  const [spEditing, setSpEditing] = useState(false)
+  const [spDraft, setSpDraft] = useState<SpotPerpConfigPatch>({})
+  const spPatchMut = useMutation({
+    mutationFn: patchSpotPerpConfig,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['spot-perp-config'] })
+      setSpEditing(false)
+    },
+  })
+  const spStartEdit = () => {
+    if (!spCfg) return
+    setSpDraft({
+      entry_pct: spCfg.entry_pct,
+      exit_pct: spCfg.exit_pct,
+      max_hold_hours: spCfg.max_hold_hours,
+      max_concurrent: spCfg.max_concurrent,
+      notional_per_position: spCfg.notional_per_position,
+      direction_filter: spCfg.direction_filter,
+    })
+    setSpEditing(true)
+  }
+  const spCancelEdit = () => { setSpEditing(false); spPatchMut.reset() }
+  const spSaveEdit = () => {
+    if (!spCfg) return
+    const patch: SpotPerpConfigPatch = {}
+    for (const k of Object.keys(spDraft) as (keyof SpotPerpConfigPatch)[]) {
+      const newV = spDraft[k]
+      const oldV = spCfg[k as keyof SpotPerpConfig] as unknown
+      if (newV !== undefined && String(newV) !== String(oldV)) {
+        // @ts-expect-error 动态赋值，类型已收窄
+        patch[k] = newV
+      }
+    }
+    if (Object.keys(patch).length === 0) { spCancelEdit(); return }
+    spPatchMut.mutate(patch)
+  }
 
   if (isLoading || !data) {
     return <div style={{ padding: 48, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{t('加载中…')}</div>
@@ -77,6 +135,8 @@ export default function RiskPage() {
       min_apr_pct: data.min_apr_pct,
       max_positions: String(data.max_positions),
       max_total_notional_usd: data.max_total_notional_usd,
+      stop_loss_pct: data.stop_loss_pct,
+      max_hold_hours: data.max_hold_hours,
     })
     setEditing(true)
   }
@@ -92,6 +152,8 @@ export default function RiskPage() {
     if (draft.min_apr_pct !== data.min_apr_pct) patch.min_apr_pct = draft.min_apr_pct
     if (draft.max_positions !== String(data.max_positions)) patch.max_positions = parseInt(draft.max_positions, 10)
     if (draft.max_total_notional_usd !== data.max_total_notional_usd) patch.max_total_notional_usd = draft.max_total_notional_usd
+    if (draft.stop_loss_pct !== data.stop_loss_pct) patch.stop_loss_pct = draft.stop_loss_pct
+    if (draft.max_hold_hours !== data.max_hold_hours) patch.max_hold_hours = draft.max_hold_hours
     if (Object.keys(patch).length === 0) {
       cancelEdit()
       return
@@ -102,7 +164,9 @@ export default function RiskPage() {
   const isWidening =
     parseFloat(draft.min_apr_pct || '0') < minApr ||
     parseInt(draft.max_positions || '0', 10) > maxPos ||
-    parseFloat(draft.max_total_notional_usd || '0') > maxNot
+    parseFloat(draft.max_total_notional_usd || '0') > maxNot ||
+    parseFloat(draft.stop_loss_pct || '0') > parseFloat(data.stop_loss_pct || '0') ||
+    parseFloat(draft.max_hold_hours || '0') > parseFloat(data.max_hold_hours || '0')
 
   const errorMsg = patchMut.isError
     ? String((patchMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败')
@@ -122,13 +186,18 @@ export default function RiskPage() {
     textAlign: 'right',
   }
 
+  const stopLoss = parseFloat(data.stop_loss_pct || '0')
+  const maxHold = parseFloat(data.max_hold_hours || '0')
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, alignItems: 'start' }}>
-        {/* Tier 1 — 可编辑 */}
+      {/* 策略风控参数（每策略一卡，2 列网格）*/}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, alignItems: 'start' }}>
+        {/* 卡 1 · 策略 #01 资金费率套利 */}
         <CardElevated style={{ padding: 20 }} className="animate-in">
           <SectionHeader
-            title={t('Tier 1 · 仪表盘可调')}
+            title="#01 资金费率套利 · 风控参数"
+            subtitle="FUNDING RATE · LIVE TUNABLE"
             right={
               editing ? (
                 <button
@@ -199,6 +268,20 @@ export default function RiskPage() {
                 </div>
                 <ProgressBar pct={50} tone="success" />
               </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>止损百分比</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{stopLoss.toFixed(2)}%</span>
+                </div>
+                <ProgressBar pct={Math.min(100, stopLoss * 10)} tone="success" />
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>最大持仓时长</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{maxHold.toFixed(0)}h</span>
+                </div>
+                <ProgressBar pct={Math.min(100, (maxHold / 720) * 100)} tone="success" />
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -230,6 +313,28 @@ export default function RiskPage() {
                   step="100"
                   value={draft.max_total_notional_usd}
                   onChange={(e) => setDraft((d) => ({ ...d, max_total_notional_usd: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }}>止损百分比 (%)</div>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  value={draft.stop_loss_pct}
+                  onChange={(e) => setDraft((d) => ({ ...d, stop_loss_pct: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }}>最大持仓时长 (h)</div>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={draft.max_hold_hours}
+                  onChange={(e) => setDraft((d) => ({ ...d, max_hold_hours: e.target.value }))}
                   style={inputStyle}
                 />
               </div>
@@ -289,91 +394,254 @@ export default function RiskPage() {
           )}
         </CardElevated>
 
-        {/* Tier 2 */}
+        {/* 卡 2 · 策略 #04 期现套利 */}
+        {spCfg && (
         <CardElevated style={{ padding: 20 }} className="animate-in">
-          <SectionHeader title={t('Tier 2 · 延迟生效')} right={<Badge tone="active">SAFE</Badge>} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div title="集中度统计待后端实现 / pending backend">
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 50%</span>
+          <SectionHeader
+            title="#04 期现套利 · 风控参数"
+            subtitle="SPOT-PERP BASIS · LIVE TUNABLE"
+            right={
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Badge tone={spCfg.live_mode ? 'warn' : 'active'}>
+                  {spCfg.live_mode ? 'LIVE' : 'PAPER'}
+                </Badge>
+                {spEditing ? (
+                  <button
+                    type="button"
+                    onClick={spCancelEdit}
+                    title="取消"
+                    style={{ background: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', padding: 4, cursor: 'pointer', display: 'inline-flex' }}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={spStartEdit}
+                    title="编辑参数"
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)', background: 'transparent', border: '1px solid rgba(227,64,88,0.3)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Pencil size={10} />
+                    <span>调整</span>
+                  </button>
+                )}
               </div>
-              <ProgressBar pct={0} tone="success" />
-            </div>
-            <div title="集中度统计待后端实现 / pending backend">
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>— / 20%</span>
-              </div>
-              <ProgressBar pct={0} tone="success" />
-            </div>
+            }
+          />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginTop: 12 }}>
+            {/* 入场阈值 */}
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>止损百分比 (config)</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>{parseFloat(data.stop_loss_pct || '0').toFixed(2)}%</span>
+                <span style={{ color: 'var(--text-secondary)' }}>入场基差阈值</span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.01" min="0"
+                    value={spDraft.entry_pct ?? spCfg.entry_pct}
+                    onChange={(e) => setSpDraft({ ...spDraft, entry_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(spCfg.entry_pct).toFixed(2)}%</span>
+                )}
               </div>
-              <ProgressBar pct={Math.min(100, parseFloat(data.stop_loss_pct || '0') * 10)} tone="success" />
+              <ProgressBar pct={Math.min(100, (Number(spCfg.entry_pct) / 1) * 100)} tone="success" />
+            </div>
+
+            {/* 收敛平仓 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>收敛平仓阈值</span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.01" min="0"
+                    value={spDraft.exit_pct ?? spCfg.exit_pct}
+                    onChange={(e) => setSpDraft({ ...spDraft, exit_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(spCfg.exit_pct).toFixed(2)}%</span>
+                )}
+              </div>
+              <ProgressBar pct={Math.min(100, (Number(spCfg.exit_pct) / 0.5) * 100)} tone="success" />
+            </div>
+
+            {/* 最大持仓时长 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>最大持仓 (h)</span>
+                {spEditing ? (
+                  <input
+                    type="number" step="1" min="1"
+                    value={spDraft.max_hold_hours ?? spCfg.max_hold_hours}
+                    onChange={(e) => setSpDraft({ ...spDraft, max_hold_hours: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(spCfg.max_hold_hours).toFixed(0)}h</span>
+                )}
+              </div>
+            </div>
+
+            {/* 同时持仓数 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>同时持仓上限</span>
+                {spEditing ? (
+                  <input
+                    type="number" step="1" min="1" max="10"
+                    value={spDraft.max_concurrent ?? spCfg.max_concurrent}
+                    onChange={(e) => setSpDraft({ ...spDraft, max_concurrent: parseInt(e.target.value, 10) })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{spCfg.max_concurrent}</span>
+                )}
+              </div>
+            </div>
+
+            {/* 单笔规模 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>单笔 notional ($)</span>
+                {spEditing ? (
+                  <input
+                    type="number" step="10" min="0"
+                    value={spDraft.notional_per_position ?? spCfg.notional_per_position}
+                    onChange={(e) => setSpDraft({ ...spDraft, notional_per_position: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>${Number(spCfg.notional_per_position).toFixed(0)}</span>
+                )}
+              </div>
+            </div>
+
+            {/* 方向过滤 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>方向过滤</span>
+                {spEditing ? (
+                  <select
+                    value={spDraft.direction_filter ?? spCfg.direction_filter}
+                    onChange={(e) => setSpDraft({ ...spDraft, direction_filter: e.target.value as 'premium' | 'discount' | 'both' })}
+                    style={{ ...inputStyle, width: 120, textAlign: 'left' }}
+                  >
+                    <option value="premium">premium</option>
+                    <option value="discount">discount (D.2)</option>
+                    <option value="both">both (D.2)</option>
+                  </select>
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{spCfg.direction_filter}</span>
+                )}
+              </div>
             </div>
           </div>
-        </CardElevated>
 
-        {/* Tier 3 — 锁定红线（红线静态来自 config.yaml；当前值实时来自 dashboard/summary） */}
-        <CardElevated style={{ padding: 20, borderColor: 'var(--accent-blood)' }} className="animate-in">
-          <SectionHeader title={t('Tier 3 · 锁定红线')} right={<Badge tone="active">SAFE</Badge>} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {(() => {
-              const dailyDD = parseFloat(summary?.daily_drawdown_pct ?? '0')
-              const weeklyDD = parseFloat(summary?.weekly_dd_pct ?? '0')
-              const marginPct = parseFloat(summary?.margin_usage_pct ?? '0')
-              const fmt = (v: string | undefined, sign: string) =>
-                summary === undefined ? '—' : `${sign}${parseFloat(v ?? '0').toFixed(2)}%`
-              const fmtPct = (v: string | undefined) =>
-                summary === undefined ? '—' : `${parseFloat(v ?? '0').toFixed(1)}%`
-              return (
-                <>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
-                    </div>
-                    <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / 3.0 * 100)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
-                    </div>
-                    <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / 8.0 * 100)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
-                      <span style={{ fontFamily: 'var(--font-mono)' }}>50%</span>
-                    </div>
-                    <ProgressBar pct={Math.min(100, marginPct)} tone="success" />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
-                  </div>
-                </>
-              )
-            })()}
-          </div>
-          <div style={{
-            marginTop: 16,
-            paddingTop: 12,
-            borderTop: '1px solid var(--border-subtle)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 14,
-            color: 'var(--text-tertiary)',
-          }}>
-            <Lock size={12} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>需修改 config.yaml 重启系统才能调整</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            <span>
+              候选币 {spCfg.candidate_symbols.length} · 交易所 {spCfg.exchanges.join('+')} · 扫描门槛 {Number(spCfg.scan_threshold_pct).toFixed(2)}%
+            </span>
+            {spEditing && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                {spPatchMut.isError && (
+                  <span style={{ color: 'var(--accent-blood)' }}>
+                    {String((spPatchMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败')}
+                  </span>
+                )}
+                <Button onClick={spSaveEdit} disabled={spPatchMut.isPending}>
+                  {spPatchMut.isPending ? '保存中…' : '保存'}
+                </Button>
+              </div>
+            )}
+            {!spEditing && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-emerald)' }}>
+                <CheckCircle2 size={12} /> 修改即时持久化（重启不丢）
+              </span>
+            )}
           </div>
         </CardElevated>
+        )}
       </div>
+
+      {/* 锁定红线 · 账户级（不属于任何单一策略，独立全宽展示）*/}
+      <CardElevated style={{ padding: 20, borderColor: 'var(--accent-blood)' }} className="animate-in">
+        <SectionHeader
+          title="锁定红线 · 账户级"
+          subtitle="TIER 3 · ACCOUNT-LEVEL CIRCUIT BREAKERS"
+          right={<Badge tone="active">SAFE</Badge>}
+        />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginTop: 12 }}>
+          {(() => {
+            const dailyDD = parseFloat(summary?.daily_drawdown_pct ?? '0')
+            const weeklyDD = parseFloat(summary?.weekly_dd_pct ?? '0')
+            const marginPct = parseFloat(summary?.margin_usage_pct ?? '0')
+            const fmt = (v: string | undefined, sign: string) =>
+              summary === undefined ? '—' : `${sign}${parseFloat(v ?? '0').toFixed(2)}%`
+            const fmtPct = (v: string | undefined) =>
+              summary === undefined ? '—' : `${parseFloat(v ?? '0').toFixed(1)}%`
+            return (
+              <>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
+                  </div>
+                  <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / 3.0 * 100)} tone="success" />
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
+                  </div>
+                  <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / 8.0 * 100)} tone="success" />
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>50%</span>
+                  </div>
+                  <ProgressBar pct={Math.min(100, marginPct)} tone="success" />
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>50%</span>
+                  </div>
+                  <ProgressBar pct={0} tone="success" />
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 — (待后端实现)</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>20%</span>
+                  </div>
+                  <ProgressBar pct={0} tone="success" />
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 — (待后端实现)</div>
+                </div>
+              </>
+            )
+          })()}
+        </div>
+        <div style={{
+          marginTop: 16,
+          paddingTop: 12,
+          borderTop: '1px solid var(--border-subtle)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 14,
+          color: 'var(--text-tertiary)',
+        }}>
+          <Lock size={12} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            账户级硬性熔断,触及任意一条立即停所有策略;需修改 config.yaml 重启系统才能调整
+          </span>
+        </div>
+      </CardElevated>
 
       {/* 风控事件日志 */}
       <CardElevated style={{ padding: 20 }} className="animate-in">

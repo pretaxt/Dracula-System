@@ -71,3 +71,42 @@ export async function getSpotPerpOpportunities(): Promise<SpotPerpOpportunitiesR
   )
   return data
 }
+
+// ---------------------------------------------------------------------------
+// spot-perp 策略配置（D.1.5）
+// ---------------------------------------------------------------------------
+
+export type SpotPerpConfig = {
+  enabled: boolean
+  entry_pct: string
+  exit_pct: string
+  max_hold_hours: string
+  max_concurrent: number
+  notional_per_position: string
+  direction_filter: 'premium' | 'discount' | 'both'
+  scan_threshold_pct: string
+  candidate_symbols: string[]
+  exchanges: string[]
+  live_mode: boolean
+  session_running: boolean
+}
+
+export type SpotPerpConfigPatch = Partial<{
+  entry_pct: string
+  exit_pct: string
+  max_hold_hours: string
+  max_concurrent: number
+  notional_per_position: string
+  direction_filter: 'premium' | 'discount' | 'both'
+  scan_threshold_pct: string
+}>
+
+export async function getSpotPerpConfig(): Promise<SpotPerpConfig> {
+  const { data } = await apiClient.get<SpotPerpConfig>('/strategies/spot-perp/config')
+  return data
+}
+
+export async function patchSpotPerpConfig(patch: SpotPerpConfigPatch): Promise<SpotPerpConfig> {
+  const { data } = await apiClient.patch<SpotPerpConfig>('/strategies/spot-perp/config', patch)
+  return data
+}

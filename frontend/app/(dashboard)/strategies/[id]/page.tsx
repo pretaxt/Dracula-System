@@ -1,12 +1,12 @@
 'use client'
 import Link from 'next/link'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, AlertTriangle, Play, Square } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, AlertTriangle } from 'lucide-react'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
-import { Badge, Button, type BadgeTone } from '@/components/ui/Button'
+import { Badge, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
-import { getStrategyStatus, getSpotPerpOpportunities, startStrategyById, stopStrategyById } from '@/lib/api/strategies'
+import { getStrategyStatus, getSpotPerpOpportunities } from '@/lib/api/strategies'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
@@ -35,7 +35,6 @@ const BACK_LINK_STYLE = {
 
 export default function StrategyDetailPage({ params }: { params: { id: string } }) {
   const { t } = useT()
-  const qc = useQueryClient()
   const strategy = getStrategyById(params.id)
 
   const { data: live } = useQuery({
@@ -54,15 +53,6 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryKey: ['dashboard'],
     queryFn: getDashboardSummary,
     refetchInterval: 30_000,
-  })
-
-  const startMut = useMutation({
-    mutationFn: () => startStrategyById(params.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }),
-  })
-  const stopMut = useMutation({
-    mutationFn: () => stopStrategyById(params.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy'] }),
   })
 
   if (!strategy) {
@@ -96,8 +86,6 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         ? 'MONITOR'
         : 'PLANNED'
       : strategy.status
-
-  const isRunning = status === 'RUNNING' || status === 'UNDERWATER'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -274,7 +262,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                       fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     }}>{i + 1}</span>
-                    <span>{r}</span>
+                    <span>{t(r)}</span>
                   </li>
                 ))}
               </ol>
@@ -291,7 +279,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                   width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-blood)',
                   boxShadow: '0 0 6px var(--accent-blood)',
                 }} />
-                {t('出场条件')} · EXIT (任一触发)
+                {t('出场条件')} · EXIT ({t('任一触发')})
               </div>
               <ol style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
                 {strategy.rules.exit.map((r, i) => (
@@ -306,7 +294,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                       fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     }}>{i + 1}</span>
-                    <span>{r}</span>
+                    <span>{t(r)}</span>
                   </li>
                 ))}
               </ol>
@@ -332,9 +320,9 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                     borderBottom: i < strategy.rules!.params.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                     display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 14,
                   }}>
-                    <span style={{ color: 'var(--text-muted)' }}>{p.label}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{t(p.label)}</span>
                     <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', textAlign: 'right' }}>
-                      {p.value}
+                      {t(p.value)}
                     </span>
                   </div>
                 ))}
@@ -506,75 +494,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         </CardElevated>
       )}
 
-      <CardElevated style={{ padding: 24 }}>
-        <SectionHeader title={t('控制台')} subtitle="CONTROLS" />
-        <div
-          style={{
-            display: 'flex',
-            gap: 12,
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            marginTop: 12,
-          }}
-        >
-          {strategy.status === 'DISABLED' ? (
-            <>
-              <Badge tone="warn">{t('需手动启用')}</Badge>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 13,
-                  color: 'var(--text-tertiary)',
-                }}
-              >
-                {t('达到资金解锁条件后才能启用')}
-              </span>
-            </>
-          ) : isRunning ? (
-            <Button
-              variant="secondary"
-              onClick={() => {
-                if (
-                  !confirm(
-                    `${t('停止策略')} #${strategy.num} ${t(strategy.zhName)}?\n${t('现有持仓不会自动平仓。')}`,
-                  )
-                )
-                  return
-                stopMut.mutate()
-              }}
-              disabled={stopMut.isPending}
-              style={{ color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}
-            >
-              <Square size={14} />
-              <span style={{ marginLeft: 6 }}>
-                {stopMut.isPending ? t('停止中…') : t('停止策略')}
-              </span>
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              onClick={() => startMut.mutate()}
-              disabled={startMut.isPending}
-            >
-              <Play size={14} />
-              <span style={{ marginLeft: 6 }}>
-                {startMut.isPending ? t('启动中…') : t('启动策略')}
-              </span>
-            </Button>
-          )}
-          {strategy.id !== 'funding-rate' && (
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 13,
-                color: 'var(--text-muted)',
-              }}
-            >
-              ⓘ {t('该策略后端为 shell 实现,启动/停止仅返回壳子响应')}
-            </span>
-          )}
-        </div>
-      </CardElevated>
+      {/* 启动/停止控制移至策略中心列表页(避免在详情页与列表页重复) */}
     </div>
   )
 }

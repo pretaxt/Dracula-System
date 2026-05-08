@@ -80,6 +80,63 @@ def save_overrides(patch: dict[str, Any]) -> None:
         logger.exception("overrides_save_failed", error=str(exc))
 
 
+# ---------------------------------------------------------------------------
+# spot-perp 子节（D.1.5）
+# ---------------------------------------------------------------------------
+
+
+_SPOT_PERP_ALLOWED = {
+    "entry_pct", "exit_pct", "max_hold_hours", "max_concurrent",
+    "notional_per_position", "direction_filter", "scan_threshold_pct",
+    "candidate_symbols", "exchanges",
+}
+
+
+def save_spot_perp_overrides(patch: dict[str, Any]) -> None:
+    """合并 spot-perp patch 到 overrides.json 的 ``spot_perp`` 子节。
+
+    与 save_overrides 共用同一文件，原子写入。"""
+    filtered = {
+        k: v for k, v in patch.items()
+        if k in _SPOT_PERP_ALLOWED and v is not None
+    }
+    if not filtered:
+        return
+
+    existing = load_overrides()
+    sp_existing = existing.get("spot_perp") or {}
+    if not isinstance(sp_existing, dict):
+        sp_existing = {}
+    merged_sp = {**sp_existing, **filtered}
+    merged = {**existing, "spot_perp": merged_sp}
+
+    try:
+        _OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".overrides_", suffix=".json.tmp",
+            dir=str(_OVERRIDES_PATH.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(merged, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _OVERRIDES_PATH)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        logger.info(
+            "spot_perp_overrides_saved",
+            path=str(_OVERRIDES_PATH),
+            keys=list(filtered.keys()),
+        )
+    except Exception as exc:
+        logger.exception("spot_perp_overrides_save_failed", error=str(exc))
+
+
 def apply_to_strategy_cfg(cfg: dict, overrides: dict[str, Any]) -> dict:
     """把 overrides 合并到 strategy_cfg dict（YAML 加载结果）。返回合并后的 cfg。
 

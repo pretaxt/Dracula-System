@@ -9,18 +9,28 @@ from app.api.deps import CurrentUser
 from app.core.config import get_settings
 from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
+    SpotPerpConfigPatchRequest,
+    SpotPerpConfigResponse,
     SpotPerpOpportunitiesResponse,
     SpotPerpOpportunityOut,
     StrategyActionResponse,
     StrategyConfig,
     StrategyStatusResponse,
 )
-from app.services.strategy_control import patch_strategy_config, start_paper, stop_paper
+from app.services.runtime_overrides import save_spot_perp_overrides
+from app.services.strategy_control import (
+    is_spot_perp_running,
+    patch_strategy_config,
+    start_paper,
+    start_spot_perp,
+    stop_paper,
+    stop_spot_perp,
+)
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
-# 已实现真实控制的策略 (funding_rate 是 P0 主力)
-_LIVE_STRATEGIES = {"funding-rate"}
+# 已实现真实控制的策略
+_LIVE_STRATEGIES = {"funding-rate", "spot-perp"}
 
 # 12 策略保留列表 (2026-05-07 决策, 砍掉 #8 #11 #12 #15 #17)
 _VALID_STRATEGY_IDS = {
@@ -121,6 +131,87 @@ async def spot_perp_opportunities(
 
 
 # ---------------------------------------------------------------------------
+# spot-perp 配置 GET / PATCH (D.1.5 — UI 调阈值)
+# ---------------------------------------------------------------------------
+
+
+def _build_default_spot_perp_cfg():
+    """无 session 时（已 stop）回退到 yaml + overrides 构造配置展示。"""
+    import yaml as _yaml  # noqa: PLC0415
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.services.runtime_overrides import load_overrides  # noqa: PLC0415
+    from app.strategies.spot_perp_basis.paper_trading import (  # noqa: PLC0415
+        SpotPerpStrategyConfig,
+    )
+
+    try:
+        with open("config/strategies/spot_perp_main.yaml") as f:
+            yaml_data = _yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        yaml_data = {}
+    cfg = SpotPerpStrategyConfig.from_yaml(yaml_data)
+    sp_overrides = (load_overrides() or {}).get("spot_perp") or {}
+    if sp_overrides:
+        cfg = cfg.apply_overrides(sp_overrides)
+    settings = get_settings()
+    if settings.spot_perp_notional_usd:
+        cfg = cfg.apply_overrides(
+            {"notional_per_position": settings.spot_perp_notional_usd}
+        )
+    return cfg
+
+
+def _spot_perp_cfg_response(session, app_state) -> SpotPerpConfigResponse:
+    """构造响应。session=None 时退回 yaml/overrides，session_running=False。"""
+    if session is None:
+        cfg = _build_default_spot_perp_cfg()
+        from app.core.config import get_settings  # noqa: PLC0415
+        live_mode = get_settings().trading_mode.lower() == "live"
+    else:
+        cfg = session.cfg
+        live_mode = session.live_mode
+    return SpotPerpConfigResponse(
+        enabled=cfg.enabled,
+        entry_pct=str(cfg.entry_pct),
+        exit_pct=str(cfg.exit_pct),
+        max_hold_hours=str(cfg.max_hold_hours),
+        max_concurrent=cfg.max_concurrent,
+        notional_per_position=str(cfg.notional_per_position),
+        direction_filter=cfg.direction_filter,
+        scan_threshold_pct=str(cfg.scan_threshold_pct),
+        candidate_symbols=list(cfg.candidate_symbols),
+        exchanges=list(cfg.exchanges),
+        live_mode=live_mode,
+        session_running=is_spot_perp_running(app_state),
+    )
+
+
+@router.get("/spot-perp/config", response_model=SpotPerpConfigResponse)
+async def get_spot_perp_config(
+    _: CurrentUser, request: Request
+) -> SpotPerpConfigResponse:
+    """读 spot-perp 当前生效配置（含 UI override 后）。stopped 时退回 yaml。"""
+    session = getattr(request.app.state, "spot_perp_paper", None)
+    return _spot_perp_cfg_response(session, request.app.state)
+
+
+@router.patch("/spot-perp/config", response_model=SpotPerpConfigResponse)
+async def patch_spot_perp_config(
+    body: SpotPerpConfigPatchRequest,
+    _: CurrentUser,
+    request: Request,
+) -> SpotPerpConfigResponse:
+    """热更新 spot-perp 配置（下一 tick 生效）+ 持久化到 overrides.json。"""
+    session = getattr(request.app.state, "spot_perp_paper", None)
+    patch = body.model_dump(exclude_none=True)
+    if patch:
+        save_spot_perp_overrides(patch)
+        if session is not None:
+            session.update_cfg(patch)
+    return _spot_perp_cfg_response(session, request.app.state)
+
+
+# ---------------------------------------------------------------------------
 # 多策略通用 start/stop (Phase 1+ 真实接入, 当前仅 funding-rate 已实现)
 # ---------------------------------------------------------------------------
 
@@ -129,12 +220,19 @@ async def spot_perp_opportunities(
 async def start_any(
     _: CurrentUser, request: Request, strategy_id: str
 ) -> StrategyActionResponse:
-    """启动指定策略。funding-rate 真实启动,其他策略返回 mock(等待 Phase 1+ 实现)。"""
+    """启动指定策略。funding-rate / spot-perp 真实启动；其他策略返回 mock。"""
     if strategy_id not in _VALID_STRATEGY_IDS:
         raise HTTPException(status_code=404, detail=f"Unknown strategy: {strategy_id}")
-    if strategy_id in _LIVE_STRATEGIES:
-        await start_paper(request.app.state)
+    state = request.app.state
+    if strategy_id == "funding-rate":
+        await start_paper(state)
         return StrategyActionResponse(paper_running=True, timestamp=datetime.now(timezone.utc))
+    if strategy_id == "spot-perp":
+        await start_spot_perp(state)
+        return StrategyActionResponse(
+            paper_running=is_spot_perp_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
     # 未实现策略:返回响应壳子,前端展示 "queued"
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
 
@@ -143,10 +241,17 @@ async def start_any(
 async def stop_any(
     _: CurrentUser, request: Request, strategy_id: str
 ) -> StrategyActionResponse:
-    """停止指定策略。"""
+    """停止指定策略（持仓不自动平仓）。"""
     if strategy_id not in _VALID_STRATEGY_IDS:
         raise HTTPException(status_code=404, detail=f"Unknown strategy: {strategy_id}")
-    if strategy_id in _LIVE_STRATEGIES:
-        await stop_paper(request.app.state)
+    state = request.app.state
+    if strategy_id == "funding-rate":
+        await stop_paper(state)
         return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
+    if strategy_id == "spot-perp":
+        await stop_spot_perp(state)
+        return StrategyActionResponse(
+            paper_running=is_spot_perp_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))

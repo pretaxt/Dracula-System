@@ -63,3 +63,56 @@ class SpotPerpOpportunitiesResponse(BaseModel):
     running: bool
     last_scan_at: datetime | None
     data: list[SpotPerpOpportunityOut]
+
+
+# ---------------------------------------------------------------------------
+# spot-perp 策略配置（D.1.5 — UI 调阈值用）
+# ---------------------------------------------------------------------------
+
+
+class SpotPerpConfigResponse(BaseModel):
+    enabled: bool
+    entry_pct: str          # "0.30" 表示 0.30%
+    exit_pct: str           # "0.03"
+    max_hold_hours: str     # "12"
+    max_concurrent: int
+    notional_per_position: str
+    direction_filter: str   # "premium" | "discount" | "both"
+    scan_threshold_pct: str
+    candidate_symbols: list[str]
+    exchanges: list[str]
+    live_mode: bool         # 当前是否实盘运行（透传）
+    session_running: bool = False  # session task 是否在跑（用于 UI 显示启停按钮）
+
+
+class SpotPerpConfigPatchRequest(BaseModel):
+    """所有字段可选，仅传需更新的项。"""
+    entry_pct: str | None = None
+    exit_pct: str | None = None
+    max_hold_hours: str | None = None
+    max_concurrent: int | None = None
+    notional_per_position: str | None = None
+    direction_filter: str | None = None
+    scan_threshold_pct: str | None = None
+
+    @field_validator("entry_pct", "exit_pct", "scan_threshold_pct",
+                     "max_hold_hours", "notional_per_position")
+    @classmethod
+    def validate_non_negative(cls, v: str | None) -> str | None:
+        if v is not None and float(v) < 0:
+            raise ValueError("must be non-negative")
+        return v
+
+    @field_validator("max_concurrent")
+    @classmethod
+    def validate_concurrent(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError("max_concurrent must be >= 1")
+        return v
+
+    @field_validator("direction_filter")
+    @classmethod
+    def validate_direction(cls, v: str | None) -> str | None:
+        if v is not None and v.lower() not in {"premium", "discount", "both"}:
+            raise ValueError("direction_filter must be premium|discount|both")
+        return v.lower() if v else v

@@ -1,26 +1,13 @@
 'use client'
+import Link from 'next/link'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getPositions, closePosition } from '@/lib/api/positions'
+import { getPositions, closePosition, type Position } from '@/lib/api/positions'
 import { getOrders, type Order } from '@/lib/api/orders'
 import { Card, CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button, StatusDot } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useT } from '@/components/i18n/I18nProvider'
-
-type Position = {
-  uuid: string
-  symbol: string
-  strategy_instance: string
-  status: string
-  notional_usd: string
-  target_apr_pct: string | null
-  unrealized_pnl: string
-  realized_pnl: string
-  funding_received: string
-  fees_paid: string
-  days_held: string
-}
 
 function sideTone(side: string): 'positive' | 'negative' | 'neutral' {
   if (side.includes('open') || side === 'BUY') return 'positive'
@@ -31,7 +18,12 @@ function sideTone(side: string): 'positive' | 'negative' | 'neutral' {
 export default function PositionsPage() {
   const { t } = useT()
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery({ queryKey: ['positions', 'open'], queryFn: () => getPositions({ status: 'open', page_size: 50 }), refetchInterval: 15_000 })
+  const [tab, setTab] = useState<'open' | 'closed'>('open')
+  const { data, isLoading } = useQuery({
+    queryKey: ['positions', tab],
+    queryFn: () => getPositions({ status: tab, page_size: 50 }),
+    refetchInterval: tab === 'open' ? 15_000 : 60_000,
+  })
   const { data: ordersData } = useQuery({ queryKey: ['orders'], queryFn: () => getOrders(20), refetchInterval: 30_000 })
   const [pendingClose, setPendingClose] = useState<{ uuid: string; symbol: string } | null>(null)
   const closeMut = useMutation({
@@ -74,14 +66,47 @@ export default function PositionsPage() {
         </Card>
       </div>
 
-      {/* 当前持仓 */}
+      {/* 当前持仓 / 历史持仓 切换 */}
       <CardElevated style={{ padding: 20 }}>
         <SectionHeader
-          title={t('当前持仓')}
+          title={tab === 'open' ? t('当前持仓') : t('历史持仓')}
+          subtitle={tab === 'open' ? 'OPEN POSITIONS' : 'CLOSED POSITIONS · CUMULATIVE PNL'}
           right={
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" style={{ fontSize: 14 }}>导出 CSV</Button>
-              <Button variant="secondary" style={{ fontSize: 14, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}>紧急平仓所有</Button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {/* tab 按钮 */}
+              <div style={{ display: 'flex', gap: 4, marginRight: 8 }}>
+                <button
+                  onClick={() => setTab('open')}
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 13,
+                    padding: '6px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid',
+                    borderColor: tab === 'open' ? 'var(--accent-emerald)' : 'var(--border-default)',
+                    background: tab === 'open' ? 'rgba(16,185,129,0.08)' : 'transparent',
+                    color: tab === 'open' ? 'var(--accent-emerald)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >持仓中</button>
+                <button
+                  onClick={() => setTab('closed')}
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 13,
+                    padding: '6px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid',
+                    borderColor: tab === 'closed' ? 'var(--accent-blood)' : 'var(--border-default)',
+                    background: tab === 'closed' ? 'rgba(227,64,88,0.08)' : 'transparent',
+                    color: tab === 'closed' ? 'var(--accent-blood)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >已平仓</button>
+              </div>
+              {tab === 'open' && (
+                <Button variant="secondary" style={{ fontSize: 14, color: 'var(--accent-blood)', borderColor: 'rgba(227,64,88,0.4)' }}>紧急平仓所有</Button>
+              )}
             </div>
           }
         />
@@ -119,7 +144,16 @@ export default function PositionsPage() {
                   <td style={{ padding: '10px 12px' }}>
                     <Badge tone="active">{p.strategy_instance.includes('funding') ? t('资金费率') : p.strategy_instance}</Badge>
                   </td>
-                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{p.symbol}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <Link
+                      href={`/positions/${p.uuid}`}
+                      style={{
+                        color: 'var(--accent-blood)',
+                        textDecoration: 'none',
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >{p.symbol}</Link>
+                  </td>
                   <td style={{ padding: '10px 12px' }}><StatusDot tone={tone} /></td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>${parseFloat(p.notional_usd).toFixed(0)}</td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--accent-emerald)' }}>{apr !== null ? `${apr.toFixed(2)}%` : '—'}</td>

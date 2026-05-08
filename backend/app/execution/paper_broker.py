@@ -39,6 +39,9 @@ class OrderRequest:
     reduce_only: bool = False           # 是否为平仓单
     client_order_id: str = ""
     instrument_type: InstrumentType = InstrumentType.SPOT
+    # D.2.c — 现货保证金（做空）支持。仅 instrument_type=SPOT 时有意义
+    margin_mode: str | None = None      # None=现货普通；'cross' / 'isolated' = 保证金模式
+    side_effect: str | None = None      # 'MARGIN_BUY'=借币卖空开仓；'AUTO_REPAY'=买回还币平仓
 
 
 @dataclass

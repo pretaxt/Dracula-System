@@ -107,6 +107,66 @@ export const dict: Record<string, string> = {
 
   // ===== 顶栏 =====
   'ARBITRAGE SYSTEM': 'ARBITRAGE SYSTEM',
+
+  // ===== 策略详情通用 =====
+  '入场条件': 'ENTRY',
+  '出场条件': 'EXIT',
+  '参数': 'PARAMETERS',
+  '任一触发': 'any triggers',
+
+  // ===== #04 期现套利 entry / exit =====
+  '基差绝对值 ≥ 0.25%(实盘入场阈值,留出手续费 + 资金费缓冲)':
+    '|basis| ≥ 0.25% (live entry threshold, fees + funding buffer)',
+  '基差绝对值 ≥ 0.10%(候选展示用)': '|basis| ≥ 0.10% (candidate display)',
+  '基差绝对值 ≥ 0.25%(实盘开仓)': '|basis| ≥ 0.25% (live open)',
+  '方向为升水(永续 > 现货)或贴水(永续 < 现货),双向均已实盘':
+    'Direction = premium (perp > spot) or discount (perp < spot); both live',
+  '升水 + 贴水双向(贴水自动借币卖空)':
+    'Premium + discount (discount auto-borrows for spot short)',
+  'PnL 计算': 'PnL Computation',
+  '真实成交价 + 资金费 + 借币利息(实时显示)':
+    'Real fill prices + funding + borrow interest (real-time)',
+  '方向为升水(永续价 > 现货价；贴水方向需要现货保证金,二期开放)':
+    'Direction = premium (perp > spot; discount requires spot margin, opens in Phase 2)',
+  '同时持仓数小于 3 笔': 'Concurrent positions < 3',
+  '同一标的不可重复开仓': 'No duplicate symbol entry',
+  '候选币种在 30 标的列表内': 'Symbol within the 30-token whitelist',
+  '当前基差绝对值 ≤ 0.03%(基差收敛,主要盈利路径)':
+    'Current |basis| ≤ 0.03% (convergence, primary PnL path)',
+  '持仓时长达到 12 小时(超时强平)': 'Holding ≥ 12h (timeout force-close)',
+  '永续单腿被交易所强平 → 强平监控自动平掉现货腿兜底':
+    'Perp leg liquidated → LiquidationWatcher auto-unwinds spot leg',
+
+  // ===== #04 参数 label =====
+  '候选币种': 'Candidate symbols',
+  '同时持仓上限': 'Max concurrent positions',
+  '单笔名义规模': 'Per-position notional',
+  '永续杠杆': 'Perp leverage',
+  '单笔保证金': 'Per-position margin',
+  '单笔总占用': 'Total capital per trade',
+  '入场阈值': 'Entry threshold',
+  '收敛平仓阈值': 'Convergence exit threshold',
+  '最大持仓时长': 'Max holding duration',
+  '总名义敞口上限': 'Max total notional exposure',
+  '扫描间隔': 'Scan interval',
+  '允许方向': 'Allowed direction',
+
+  // ===== #04 参数 value =====
+  '币安 + 欧易 各 30 主流 USDT 永续合约':
+    'Binance + OKX, 30 major USDT perps each',
+  '3 笔': '3',
+  '50 美元(一期实盘起步)': '$50 (Phase 1 live launch)',
+  '3 倍(逐仓)': '3x (isolated)',
+  '约 17 美元(=50/3)': '~$17 (=$50 / 3)',
+  '67 美元(现货 50 + 保证金 17)':
+    '$67 ($50 spot + $17 margin)',
+  '基差绝对值 ≤ 0.03%': '|basis| ≤ 0.03%',
+  '扫描门槛': 'Scan threshold',
+  '12 小时': '12 hours',
+  '150 美元(3 × 50)': '$150 (3 × $50)',
+  '60 秒': '60 seconds',
+  '仅升水方向(一期；二期开放贴水)':
+    'Premium only (Phase 1; discount opens in Phase 2)',
 }
 
 export type Lang = 'zh' | 'en'

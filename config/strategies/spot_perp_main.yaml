@@ -1,24 +1,70 @@
-# 策略 #4 — 期现套利 (Phase 0 主力)
+# 策略 #4 — 期现套利 (Phase 0 主力, D.1.5)
 # 对应文档: docs/04_strategy_spot_perp.md
+#
+# 交易模式切换（通过服务器 .env 控制，不改此文件）:
+#   TRADING_MODE=paper  → PaperBroker 模拟成交（默认）
+#   TRADING_MODE=live   → LiveBroker 真实下单（仅 premium 方向，D.1）
+#
+# D.1.5 阈值校准（2026-05-09）:
+#   round-trip 手续费 ≈ 0.16% (4 legs × 0.04%)
+#   入场 0.30% 留 0.10% 缓冲 + 0.04% 利润空间
+#   收敛 0.03% 让大部分 premium 入场后 1-3 tick 内可平
+#
+# D.2 待开放: discount 方向（需 Binance spot margin）+ 真实成交价 PnL
 
 instance_name: spot_perp_main
 strategy_type: spot_perp
-enabled: false
-capital_usd: 1000.0
+enabled: true
 
 entry:
-  min_basis_pct: 0.3
+  min_basis_pct: 0.20           # 入场阈值（fee 0.16% + 缓冲；2026-05-09 从 0.30 调低至 0.20 增加触发频率）
+  scan_threshold_pct: 0.10      # scanner 候选门槛（API 暴露所有 ≥0.10% 的机会，不一定开仓）
   min_orderbook_depth_usd: 5000
 
 exit:
-  basis_convergence_pct: 0.05
-  max_hold_hours: 720.0
+  basis_convergence_pct: 0.03   # 收敛平仓阈值
+  max_hold_hours: 12.0          # 持仓超时强平
 
 position:
-  max_positions: 2
-  size_usd: 500.0
-  exchanges: ["binance"]
+  max_positions: 3              # 同时持仓上限（含 paper 试样）
+  size_usd: 50.0                # D.1 实盘 notional（也可被 .env SPOT_PERP_NOTIONAL_USD 覆盖）
+  exchanges: ["binance", "okx"] # 双交易所并行扫描
+  direction_filter: "premium"   # D.1 仅 premium；D.2 改为 "both" 并接 spot margin
+  candidate_symbols:            # 30 主流 USDT 永续候选币（市值 / 流动性靠前）
+    - BTC
+    - ETH
+    - SOL
+    - BNB
+    - XRP
+    - DOGE
+    - TRX
+    - ADA
+    - AVAX
+    - LINK
+    - DOT
+    - NEAR
+    - BCH
+    - LTC
+    - UNI
+    - APT
+    - ARB
+    - OP
+    - SUI
+    - ATOM
+    - FIL
+    - ETC
+    - AAVE
+    - INJ
+    - ICP
+    - XLM
+    - RUNE
+    - SEI
+    - LDO
+    - TIA
+
+execution:
+  fee_rate: 0.0004              # 单边 taker 费率
+  slippage_bps: 2
 
 leverage:
-  default: 1.0
-  max: 2.0
+  default: 3.0                  # 永续 isolated 杠杆

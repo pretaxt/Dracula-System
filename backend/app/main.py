@@ -336,10 +336,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             from app.strategies.spot_perp_basis.paper_trading import (  # noqa: PLC0415
                 SpotPerpPaperSession,
+                SpotPerpStrategyConfig,
+            )
+
+            # D.1.5: 加载 spot_perp_main.yaml + 应用 UI overrides
+            _sp_cfg_path = "config/strategies/spot_perp_main.yaml"
+            try:
+                with open(_sp_cfg_path) as _f:
+                    _sp_yaml = yaml.safe_load(_f) or {}
+            except FileNotFoundError:
+                logger.warning("spot_perp_yaml_not_found", path=_sp_cfg_path)
+                _sp_yaml = {}
+
+            sp_strategy_cfg = SpotPerpStrategyConfig.from_yaml(_sp_yaml)
+
+            # 应用 runtime_overrides 中的 spot_perp.* 子节
+            from app.services.runtime_overrides import load_overrides  # noqa: PLC0415
+            _sp_overrides = (load_overrides() or {}).get("spot_perp") or {}
+            if _sp_overrides:
+                sp_strategy_cfg = sp_strategy_cfg.apply_overrides(_sp_overrides)
+                logger.info("spot_perp_overrides_applied", keys=list(_sp_overrides.keys()))
+
+            # scanner 候选币 / 交易所 / 阈值取自 yaml（与 session 一致）
+            sp_scanner_symbols = (
+                sp_strategy_cfg.candidate_symbols
+                or list(SpotPerpConfig().symbols)
+            )
+            sp_scanner_exchanges = (
+                sp_strategy_cfg.exchanges
+                or list(adapters.keys())
             )
             sp_scanner = SpotPerpBasisScanner(
                 adapters=adapters,
-                config=SpotPerpConfig(),
+                config=SpotPerpConfig(
+                    min_basis_pct=sp_strategy_cfg.scan_threshold_pct,
+                    symbols=sp_scanner_symbols,
+                ),
+                exchanges=sp_scanner_exchanges,
             )
             spot_perp_runner = SpotPerpRunner(
                 scanner=sp_scanner, scan_interval_seconds=60.0
@@ -349,13 +382,50 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             logger.info("spot_perp_runner_task_created")
 
+            # 实盘 broker 路由（同 funding_rate）
+            from decimal import Decimal as _Dec  # noqa: PLC0415
+            from app.execution.live_broker import LiveBroker  # noqa: PLC0415
+
+            _sp_live = settings.trading_mode.lower() == "live"
+            _sp_brokers: dict | None = None
+            if _sp_live:
+                _sp_brokers = {
+                    ex: LiveBroker(adapter=ad, fee_rate=_Dec("0.0004"),
+                                   perp_leverage=_Dec("3"))
+                    for ex, ad in adapters.items()
+                    if getattr(ad, "_api_key", "")
+                }
+                if not _sp_brokers:
+                    logger.warning("spot_perp_live_no_authed_adapters_falling_back_paper")
+                    _sp_live = False
+                    _sp_brokers = None
+
+            # 单笔 notional 优先级: env SPOT_PERP_NOTIONAL_USD > yaml > 默认
+            _sp_notional_env = settings.spot_perp_notional_usd
+            if _sp_notional_env:
+                sp_strategy_cfg = sp_strategy_cfg.apply_overrides(
+                    {"notional_per_position": _sp_notional_env}
+                )
+
             spot_perp_paper = SpotPerpPaperSession(
-                runner=spot_perp_runner, tick_interval_seconds=60.0
+                runner=spot_perp_runner,
+                tick_interval_seconds=60.0,
+                live_mode=_sp_live,
+                brokers=_sp_brokers,
+                strategy_config=sp_strategy_cfg,
             )
             spot_perp_paper_task = asyncio.create_task(
                 spot_perp_paper.run_forever(), name="spot_perp_paper_session"
             )
-            logger.info("spot_perp_paper_session_task_created")
+            logger.info(
+                "spot_perp_paper_session_task_created",
+                live=_sp_live,
+                notional=str(sp_strategy_cfg.notional_per_position),
+                entry_pct=str(sp_strategy_cfg.entry_pct),
+                exit_pct=str(sp_strategy_cfg.exit_pct),
+                max_concurrent=sp_strategy_cfg.max_concurrent,
+                direction_filter=sp_strategy_cfg.direction_filter,
+            )
         except Exception:
             logger.exception("spot_perp_init_failed")
 
@@ -373,9 +443,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.liquidation_watcher = liquidation_watcher
     app.state.okx_polling_watcher = okx_polling_watcher
 
+    # --- Telegram 双向命令 bot（C 项）---
+    telegram_bot = None
+    if (
+        settings.telegram_command_bot_enabled
+        and settings.telegram_bot_token
+    ):
+        from app.notifications.telegram_bot import TelegramCommandBot  # noqa: PLC0415
+        from app.notifications.telegram_bot_handlers import (  # noqa: PLC0415
+            build_command_handlers,
+        )
+
+        # 白名单优先 telegram_allowed_chat_ids（逗号分隔）；否则退回 telegram_chat_id
+        _raw = (settings.telegram_allowed_chat_ids
+                or settings.telegram_chat_id or "")
+        allowed = {x.strip() for x in _raw.split(",") if x.strip()}
+        if allowed:
+            try:
+                telegram_bot = TelegramCommandBot(
+                    token=settings.telegram_bot_token,
+                    allowed_chat_ids=allowed,
+                    handlers=build_command_handlers(app.state),
+                    bot_username=None,  # 私聊场景不需要校验 @suffix
+                )
+                await telegram_bot.start()
+                logger.info("telegram_command_bot_enabled",
+                            allowed_chats=len(allowed))
+            except Exception:
+                logger.exception("telegram_command_bot_start_failed")
+                telegram_bot = None
+        else:
+            logger.info("telegram_command_bot_disabled_no_allowlist")
+    else:
+        logger.info(
+            "telegram_command_bot_disabled",
+            reason=("flag_off" if not settings.telegram_command_bot_enabled
+                    else "no_token"),
+        )
+    app.state.telegram_bot = telegram_bot
+
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
+    if telegram_bot is not None:
+        try:
+            await telegram_bot.stop()
+        except Exception:
+            logger.exception("telegram_bot_stop_failed")
     if liquidation_watcher is not None:
         await liquidation_watcher.stop()
     if okx_polling_watcher is not None:
