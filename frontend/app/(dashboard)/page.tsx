@@ -189,8 +189,9 @@ export default function DashboardPage() {
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {(() => {
-              const perfData: Array<{ instance: string; label: string; total_pnl: string; open_positions: number; closed_positions: number }> =
-                (summary?.strategy_performance as any[]) ?? []
+              type PerfRow = { instance: string; label: string; total_pnl: string; open_positions: number; closed_positions: number }
+              const perfData: PerfRow[] =
+                (summary?.strategy_performance as PerfRow[] | undefined) ?? []
               if (perfData.length === 0) {
                 return (
                   <div style={{ padding: 16, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
