@@ -173,9 +173,12 @@ def _spot_perp_cfg_response(session, app_state) -> SpotPerpConfigResponse:
     return SpotPerpConfigResponse(
         enabled=cfg.enabled,
         entry_pct=str(cfg.entry_pct),
+        entry_pct_premium=str(cfg.entry_pct_premium),
+        entry_pct_discount=str(cfg.entry_pct_discount),
         exit_pct=str(cfg.exit_pct),
         max_hold_hours=str(cfg.max_hold_hours),
         min_hold_minutes=str(cfg.min_hold_minutes),
+        stop_basis_widening_pct=str(cfg.stop_basis_widening_pct),
         max_concurrent=cfg.max_concurrent,
         notional_per_position=str(cfg.notional_per_position),
         direction_filter=cfg.direction_filter,

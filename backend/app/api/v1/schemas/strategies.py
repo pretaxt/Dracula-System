@@ -73,9 +73,14 @@ class SpotPerpOpportunitiesResponse(BaseModel):
 class SpotPerpConfigResponse(BaseModel):
     enabled: bool
     entry_pct: str          # "0.30" 表示 0.30%
+    # c — per-direction 阈值（"0" 表示回退用 entry_pct）
+    entry_pct_premium: str = "0"
+    entry_pct_discount: str = "0"
     exit_pct: str           # "0.03"
     max_hold_hours: str     # "12"
     min_hold_minutes: str = "5"  # 防噪音平仓的最短持仓时长
+    # a — 基差扩大止损阈值（"0" 禁用）
+    stop_basis_widening_pct: str = "0.50"
     max_concurrent: int
     notional_per_position: str
     direction_filter: str   # "premium" | "discount" | "both"
@@ -89,16 +94,21 @@ class SpotPerpConfigResponse(BaseModel):
 class SpotPerpConfigPatchRequest(BaseModel):
     """所有字段可选，仅传需更新的项。"""
     entry_pct: str | None = None
+    entry_pct_premium: str | None = None
+    entry_pct_discount: str | None = None
     exit_pct: str | None = None
     max_hold_hours: str | None = None
     min_hold_minutes: str | None = None
+    stop_basis_widening_pct: str | None = None
     max_concurrent: int | None = None
     notional_per_position: str | None = None
     direction_filter: str | None = None
     scan_threshold_pct: str | None = None
 
-    @field_validator("entry_pct", "exit_pct", "scan_threshold_pct",
+    @field_validator("entry_pct", "entry_pct_premium", "entry_pct_discount",
+                     "exit_pct", "scan_threshold_pct",
                      "max_hold_hours", "min_hold_minutes",
+                     "stop_basis_widening_pct",
                      "notional_per_position")
     @classmethod
     def validate_non_negative(cls, v: str | None) -> str | None:

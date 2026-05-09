@@ -72,6 +72,12 @@ class SpotPerpStrategyConfig:
     min_hold_minutes: Decimal = Decimal("5")  # 防 scanner 抖动 → 1-3min 内噪音平仓
     entry_pct: Decimal = ENTRY_PCT
     exit_pct: Decimal = EXIT_PCT
+    # a — 基差扩大止损：当前基差较入场扩大 ≥ 该值（pct），立止防扛飞刀。0=禁用。
+    stop_basis_widening_pct: Decimal = Decimal("0.50")
+    # c — 方向独立入场阈值。0 = 回退用 entry_pct（向下兼容）。
+    # discount 方向有 borrow + 付 funding 双层成本，应设比 premium 更高门槛。
+    entry_pct_premium: Decimal = Decimal("0")
+    entry_pct_discount: Decimal = Decimal("0")
     round_trip_fee_usd: Decimal = ROUND_TRIP_FEE_USD
     direction_filter: str = "premium"  # "premium" | "discount" | "both"
     candidate_symbols: list[str] = field(default_factory=list)
@@ -88,10 +94,15 @@ class SpotPerpStrategyConfig:
         return cls(
             enabled=bool(data.get("enabled", True)),
             entry_pct=Decimal(str(entry.get("min_basis_pct", ENTRY_PCT))),
+            entry_pct_premium=Decimal(str(entry.get("min_basis_pct_premium", "0") or "0")),
+            entry_pct_discount=Decimal(str(entry.get("min_basis_pct_discount", "0") or "0")),
             scan_threshold_pct=Decimal(str(entry.get("scan_threshold_pct", "0.10"))),
             exit_pct=Decimal(str(exit_.get("basis_convergence_pct", EXIT_PCT))),
             max_hold_hours=Decimal(str(exit_.get("max_hold_hours", MAX_HOLD_HOURS))),
             min_hold_minutes=Decimal(str(exit_.get("min_hold_minutes", "5"))),
+            stop_basis_widening_pct=Decimal(
+                str(exit_.get("stop_basis_widening_pct", "0.50") or "0"),
+            ),
             max_concurrent=int(position.get("max_positions", MAX_CONCURRENT)),
             notional_per_position=Decimal(str(position.get("size_usd", NOTIONAL_PER_POSITION))),
             direction_filter=str(position.get("direction_filter", "premium")).lower(),
@@ -107,9 +118,14 @@ class SpotPerpStrategyConfig:
         new = SpotPerpStrategyConfig(
             enabled=bool(overrides.get("enabled", self.enabled)),
             entry_pct=Decimal(str(overrides.get("entry_pct", self.entry_pct))),
+            entry_pct_premium=Decimal(str(overrides.get("entry_pct_premium", self.entry_pct_premium))),
+            entry_pct_discount=Decimal(str(overrides.get("entry_pct_discount", self.entry_pct_discount))),
             exit_pct=Decimal(str(overrides.get("exit_pct", self.exit_pct))),
             max_hold_hours=Decimal(str(overrides.get("max_hold_hours", self.max_hold_hours))),
             min_hold_minutes=Decimal(str(overrides.get("min_hold_minutes", self.min_hold_minutes))),
+            stop_basis_widening_pct=Decimal(
+                str(overrides.get("stop_basis_widening_pct", self.stop_basis_widening_pct)),
+            ),
             max_concurrent=int(overrides.get("max_concurrent", self.max_concurrent)),
             notional_per_position=Decimal(str(overrides.get("notional_per_position", self.notional_per_position))),
             direction_filter=str(overrides.get("direction_filter", self.direction_filter)).lower(),
@@ -119,6 +135,15 @@ class SpotPerpStrategyConfig:
             round_trip_fee_usd=self.round_trip_fee_usd,
         )
         return new
+
+    def entry_threshold_for(self, direction: str) -> Decimal:
+        """c — 返回某方向的入场阈值。per-direction > 0 时优先，否则回退 entry_pct。"""
+        d = (direction or "").lower()
+        if d == "discount" and self.entry_pct_discount > 0:
+            return self.entry_pct_discount
+        if d == "premium" and self.entry_pct_premium > 0:
+            return self.entry_pct_premium
+        return self.entry_pct
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +337,19 @@ class SpotPerpPaperSession:
             held_minutes = held_hours * Decimal("60")
             # min_hold_minutes 门槛：防 1-3 min 内 scanner 抖动触发噪音平仓
             min_hold_passed = held_minutes >= self._cfg.min_hold_minutes
+            # a — 基差扩大止损（方向感知）：current 比 entry 朝相反方向走得太远即止
+            widening = self._basis_widened_pct(entry_basis, current_basis)
+            stop_threshold = self._cfg.stop_basis_widening_pct
             if abs(current_basis) <= self._cfg.exit_pct and min_hold_passed:
                 should_close = True
                 exit_reason = "basis_convergence"
+            elif (
+                stop_threshold > 0
+                and widening >= stop_threshold
+                and min_hold_passed
+            ):
+                should_close = True
+                exit_reason = "basis_stop"
             elif held_hours >= self._cfg.max_hold_hours:
                 should_close = True
                 exit_reason = "max_hold"
@@ -397,7 +432,9 @@ class SpotPerpPaperSession:
                     break
                 if opp.symbol in existing_syms:
                     continue
-                if abs(Decimal(str(opp.basis_pct))) < self._cfg.entry_pct:
+                # c — per-direction 入场阈值（discount 因 borrow + funding 双层成本默认更严）
+                threshold = self._cfg.entry_threshold_for(opp.direction)
+                if abs(Decimal(str(opp.basis_pct))) < threshold:
                     continue
 
                 meta: dict | None = None
@@ -790,6 +827,25 @@ class SpotPerpPaperSession:
                 symbol=symbol_pair, exc_info=True,
             )
             return Decimal("0")
+
+    @staticmethod
+    def _basis_widened_pct(entry_basis: Decimal, current_basis: Decimal) -> Decimal:
+        """a — 方向感知的"基差扩大幅度"。返回值 > 0 表示朝不利方向走了多少 pct。
+
+        - **premium** (entry > 0): widening = current - entry
+          basis 从 +0.30 走到 +0.80 → +0.50（扩大 0.50pct）
+        - **discount** (entry < 0): widening = entry - current
+          basis 从 -0.30 走到 -0.80 → +0.50（扩大 0.50pct，即更负）
+        - **flat** (entry == 0): 永远不算扩大
+
+        反向收敛或穿越 0（如 premium → discount）会返回负值，由调用方忽略，
+        改走 basis_convergence 路径。
+        """
+        if entry_basis > 0:
+            return current_basis - entry_basis
+        if entry_basis < 0:
+            return entry_basis - current_basis
+        return Decimal("0")
 
     @staticmethod
     def _real_pnl_from_fills(meta: dict, close_result: dict) -> Decimal | None:

@@ -149,6 +149,7 @@ _EXIT_REASON_ZH = {
     "manual": "手动平仓",
     "manual_close": "手动平仓",
     "stop_loss": "止损",
+    "basis_stop": "基差止损",
     "liquidation": "强平",
     "perp_liq_risk": "强平兜底",
     "funding_reversal": "费率反转",
@@ -270,6 +271,8 @@ def _classify_exit(
     pnl_str = f"{'+' if realized_pnl >= 0 else ''}${float(realized_pnl):.2f}"
     if reason == "stop_loss":
         return ("TIER 2", "止损触发", f"{symbol} 跌破止损线", pnl_str, "stopped_out", True)
+    if reason == "basis_stop":
+        return ("TIER 2", "基差止损", f"{symbol} 基差扩大触发止损", pnl_str, "stopped_out", True)
     if reason == "funding_reversal":
         return ("TIER 1", "资金费率反转", f"{symbol} 费率转负", pnl_str, "auto_closed", True)
     if reason == "max_hold":

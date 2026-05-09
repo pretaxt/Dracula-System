@@ -98,8 +98,11 @@ export default function RiskPage() {
     if (!spCfg) return
     setSpDraft({
       entry_pct: spCfg.entry_pct,
+      entry_pct_premium: spCfg.entry_pct_premium,
+      entry_pct_discount: spCfg.entry_pct_discount,
       exit_pct: spCfg.exit_pct,
       max_hold_hours: spCfg.max_hold_hours,
+      stop_basis_widening_pct: spCfg.stop_basis_widening_pct,
       max_concurrent: spCfg.max_concurrent,
       notional_per_position: spCfg.notional_per_position,
       direction_filter: spCfg.direction_filter,
@@ -533,6 +536,76 @@ export default function RiskPage() {
                   </select>
                 ) : (
                   <span style={{ fontFamily: 'var(--font-mono)' }}>{spCfg.direction_filter}</span>
+                )}
+              </div>
+            </div>
+
+            {/* a — 基差扩大止损 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="当前基差较入场扩大 ≥ 该值即止损（0=禁用）">
+                  基差扩大止损
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.05" min="0"
+                    value={spDraft.stop_basis_widening_pct ?? spCfg.stop_basis_widening_pct}
+                    onChange={(e) => setSpDraft({ ...spDraft, stop_basis_widening_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {Number(spCfg.stop_basis_widening_pct) > 0
+                      ? `${Number(spCfg.stop_basis_widening_pct).toFixed(2)}%`
+                      : '禁用'}
+                  </span>
+                )}
+              </div>
+              <ProgressBar pct={Math.min(100, (Number(spCfg.stop_basis_widening_pct) / 1) * 100)} tone="warn" />
+            </div>
+
+            {/* c — premium 方向独立阈值 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="premium 方向独立入场阈值（0 回退用入场基差阈值）">
+                  premium 阈值
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.05" min="0"
+                    value={spDraft.entry_pct_premium ?? spCfg.entry_pct_premium}
+                    onChange={(e) => setSpDraft({ ...spDraft, entry_pct_premium: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {Number(spCfg.entry_pct_premium) > 0
+                      ? `${Number(spCfg.entry_pct_premium).toFixed(2)}%`
+                      : '回退'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* c — discount 方向独立阈值 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="discount 方向独立入场阈值（含 borrow + funding 双层成本，建议 ≥ premium + 0.20%）">
+                  discount 阈值
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.05" min="0"
+                    value={spDraft.entry_pct_discount ?? spCfg.entry_pct_discount}
+                    onChange={(e) => setSpDraft({ ...spDraft, entry_pct_discount: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {Number(spCfg.entry_pct_discount) > 0
+                      ? `${Number(spCfg.entry_pct_discount).toFixed(2)}%`
+                      : '回退'}
+                  </span>
                 )}
               </div>
             </div>

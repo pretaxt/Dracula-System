@@ -653,3 +653,170 @@ class TestFundingBorrowFetchers:
             approx_price_usdt=Decimal("50000"),
         )
         assert out == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# a — 基差扩大止损（_basis_widened_pct）
+# ---------------------------------------------------------------------------
+
+
+class TestBasisWidenedPct:
+    """方向感知的基差扩大幅度计算（用于 stop_basis_widening_pct 触发判断）。"""
+
+    def test_premium_widening_returns_positive_delta(self):
+        # 入场 +0.30%，当前 +0.80% → 扩大 0.50pct
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("0.30"), Decimal("0.80"),
+        )
+        assert out == Decimal("0.50")
+
+    def test_premium_converging_returns_negative(self):
+        # 入场 +0.30%，当前 +0.10% → 收敛（负值），不应触发止损
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("0.30"), Decimal("0.10"),
+        )
+        assert out == Decimal("-0.20")
+
+    def test_premium_crossing_zero_returns_negative(self):
+        # 入场 +0.30%，越过 0 到 -0.20% → 大幅收敛/反转
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("0.30"), Decimal("-0.20"),
+        )
+        assert out == Decimal("-0.50")
+
+    def test_discount_widening_returns_positive_delta(self):
+        # 入场 -0.30%，当前 -0.80%（更负）→ 扩大 0.50pct
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("-0.30"), Decimal("-0.80"),
+        )
+        assert out == Decimal("0.50")
+
+    def test_discount_converging_returns_negative(self):
+        # 入场 -0.30%，当前 -0.10%（朝 0 走）→ 收敛
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("-0.30"), Decimal("-0.10"),
+        )
+        assert out == Decimal("-0.20")
+
+    def test_flat_entry_never_widens(self):
+        # 入场基差为 0（边角，理论不会发生）→ 永远返回 0，不误触发
+        out = SpotPerpPaperSession._basis_widened_pct(
+            Decimal("0"), Decimal("0.50"),
+        )
+        assert out == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# c — 方向独立入场阈值（entry_threshold_for）
+# ---------------------------------------------------------------------------
+
+
+class TestEntryThresholdFor:
+    """per-direction 入场阈值：>0 时优先，0/未设回退到 entry_pct。"""
+
+    def test_premium_uses_per_direction_when_set(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig(
+            entry_pct=Decimal("0.30"),
+            entry_pct_premium=Decimal("0.40"),
+            entry_pct_discount=Decimal("0.60"),
+        )
+        assert cfg.entry_threshold_for("premium") == Decimal("0.40")
+
+    def test_discount_uses_per_direction_when_set(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig(
+            entry_pct=Decimal("0.30"),
+            entry_pct_premium=Decimal("0.40"),
+            entry_pct_discount=Decimal("0.60"),
+        )
+        assert cfg.entry_threshold_for("discount") == Decimal("0.60")
+
+    def test_falls_back_to_entry_pct_when_per_direction_zero(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig(
+            entry_pct=Decimal("0.30"),
+            entry_pct_premium=Decimal("0"),
+            entry_pct_discount=Decimal("0"),
+        )
+        assert cfg.entry_threshold_for("premium") == Decimal("0.30")
+        assert cfg.entry_threshold_for("discount") == Decimal("0.30")
+
+    def test_unknown_direction_falls_back(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig(
+            entry_pct=Decimal("0.30"),
+            entry_pct_premium=Decimal("0.40"),
+            entry_pct_discount=Decimal("0.60"),
+        )
+        # 未知方向（理论不应出现，防御）退回 entry_pct
+        assert cfg.entry_threshold_for("sideways") == Decimal("0.30")
+        assert cfg.entry_threshold_for("") == Decimal("0.30")
+
+    def test_case_insensitive(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig(
+            entry_pct=Decimal("0.30"),
+            entry_pct_discount=Decimal("0.60"),
+        )
+        assert cfg.entry_threshold_for("DISCOUNT") == Decimal("0.60")
+
+
+# ---------------------------------------------------------------------------
+# Config — yaml 加载与 override 合并新字段
+# ---------------------------------------------------------------------------
+
+
+class TestConfigYamlAndOverrides:
+    def test_from_yaml_reads_new_fields(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        cfg = SpotPerpStrategyConfig.from_yaml({
+            "enabled": True,
+            "entry": {
+                "min_basis_pct": 0.30,
+                "min_basis_pct_premium": 0.40,
+                "min_basis_pct_discount": 0.60,
+            },
+            "exit": {
+                "basis_convergence_pct": 0.10,
+                "max_hold_hours": 12,
+                "min_hold_minutes": 5,
+                "stop_basis_widening_pct": 0.45,
+            },
+            "position": {
+                "max_positions": 2, "size_usd": 50,
+                "direction_filter": "both",
+            },
+        })
+        assert cfg.entry_pct == Decimal("0.30")
+        assert cfg.entry_pct_premium == Decimal("0.40")
+        assert cfg.entry_pct_discount == Decimal("0.60")
+        assert cfg.stop_basis_widening_pct == Decimal("0.45")
+
+    def test_from_yaml_defaults_when_new_fields_missing(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        # 旧 yaml 缺新字段 → entry_pct_* 默认 0（fallback）, stop_basis_widening_pct 默认 0.50
+        cfg = SpotPerpStrategyConfig.from_yaml({
+            "entry": {"min_basis_pct": 0.30},
+            "exit": {"basis_convergence_pct": 0.10},
+            "position": {"max_positions": 2, "size_usd": 50},
+        })
+        assert cfg.entry_pct_premium == Decimal("0")
+        assert cfg.entry_pct_discount == Decimal("0")
+        assert cfg.stop_basis_widening_pct == Decimal("0.50")
+
+    def test_apply_overrides_updates_new_fields(self):
+        from app.strategies.spot_perp_basis.paper_trading import SpotPerpStrategyConfig
+        base = SpotPerpStrategyConfig()
+        new = base.apply_overrides({
+            "entry_pct_premium": "0.35",
+            "entry_pct_discount": "0.55",
+            "stop_basis_widening_pct": "0.40",
+        })
+        assert new.entry_pct_premium == Decimal("0.35")
+        assert new.entry_pct_discount == Decimal("0.55")
+        assert new.stop_basis_widening_pct == Decimal("0.40")
+        # 其他字段不动
+        assert new.entry_pct == base.entry_pct
+        # 不可变：原对象未变
+        assert base.entry_pct_premium == Decimal("0")

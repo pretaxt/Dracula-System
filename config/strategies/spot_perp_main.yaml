@@ -18,6 +18,10 @@ enabled: true
 
 entry:
   min_basis_pct: 0.50           # 入场阈值（D.2.b 实战调优 0.25→0.50：留滑点 0.20% + 手续费 0.16% + 利润 0.14%）
+  # c — 方向独立阈值（>0 时覆盖 min_basis_pct；0 或省略则回退）
+  # discount 方向有 borrow 利息 + 付 funding 双层成本，建议 ≥ premium 阈值 + 0.20%
+  min_basis_pct_premium: 0      # 0 = 用 min_basis_pct
+  min_basis_pct_discount: 0     # 0 = 用 min_basis_pct（建议设 0.50+）
   scan_threshold_pct: 0.10      # scanner 候选门槛（API 暴露所有 ≥0.10% 的机会，不一定开仓）
   min_orderbook_depth_usd: 5000
 
@@ -25,6 +29,9 @@ exit:
   basis_convergence_pct: 0.10   # 收敛平仓阈值（D.2.b 实战调优 0.03→0.10 防噪音）
   max_hold_hours: 12.0          # 持仓超时强平
   min_hold_minutes: 5.0         # 最短持仓（防 1-3min 内 scanner 抖动触发噪音平仓）
+  # a — 基差扩大止损：当前基差较入场扩大 ≥ 该值（pct）触发止损，封顶单笔尾部风险
+  # 例 entry +0.30% → current +0.80% widening=0.50% 立止；0 = 禁用
+  stop_basis_widening_pct: 0.50
 
 position:
   max_positions: 3              # 同时持仓上限（含 paper 试样）

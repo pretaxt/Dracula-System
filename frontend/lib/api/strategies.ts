@@ -79,8 +79,15 @@ export async function getSpotPerpOpportunities(): Promise<SpotPerpOpportunitiesR
 export type SpotPerpConfig = {
   enabled: boolean
   entry_pct: string
+  /** c — premium 方向独立阈值（"0" 回退用 entry_pct） */
+  entry_pct_premium: string
+  /** c — discount 方向独立阈值（建议 ≥ premium + 0.20% 覆盖借币利息） */
+  entry_pct_discount: string
   exit_pct: string
   max_hold_hours: string
+  min_hold_minutes?: string
+  /** a — 基差扩大止损阈值（"0" 禁用） */
+  stop_basis_widening_pct: string
   max_concurrent: number
   notional_per_position: string
   direction_filter: 'premium' | 'discount' | 'both'
@@ -93,8 +100,12 @@ export type SpotPerpConfig = {
 
 export type SpotPerpConfigPatch = Partial<{
   entry_pct: string
+  entry_pct_premium: string
+  entry_pct_discount: string
   exit_pct: string
   max_hold_hours: string
+  min_hold_minutes: string
+  stop_basis_widening_pct: string
   max_concurrent: number
   notional_per_position: string
   direction_filter: 'premium' | 'discount' | 'both'

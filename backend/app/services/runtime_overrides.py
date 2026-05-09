@@ -89,6 +89,10 @@ _SPOT_PERP_ALLOWED = {
     "entry_pct", "exit_pct", "max_hold_hours", "min_hold_minutes",
     "max_concurrent", "notional_per_position", "direction_filter",
     "scan_threshold_pct", "candidate_symbols", "exchanges",
+    # a — 基差扩大止损
+    "stop_basis_widening_pct",
+    # c — 方向独立入场阈值
+    "entry_pct_premium", "entry_pct_discount",
 }
 
 
