@@ -269,3 +269,131 @@ class TestRunForever:
             await runner.run_forever()
 
         assert tick_count == 2
+
+
+# ---------------------------------------------------------------------------
+# v0.4.3 — schedule cache + window gate（取消 8h 假设，每标的真实周期）
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleCacheAndWindowGate:
+    """`window_only_minutes` gate + schedule cache GC + auto-advance。"""
+
+    def _runner(self, window_min: float) -> FundingRateRunner:
+        r = FundingRateRunner(
+            adapters={},
+            symbols=[BTC],
+            config=ScannerConfig(min_apr_pct=Decimal("10")),
+            scan_interval_seconds=0.0,
+            window_only_minutes=window_min,
+        )
+        return r
+
+    def test_window_disabled_always_in_window(self):
+        r = self._runner(window_min=0)
+        # 即使 cache 空 + window=0 → 永远 True（旧行为兼容）
+        assert r._is_in_funding_window(datetime.now(UTC)) is True
+
+    def test_cold_start_empty_cache_returns_true(self):
+        r = self._runner(window_min=15)
+        # cache 空 = 冷启动 → 必扫一次填 cache
+        assert r._is_in_funding_window(datetime.now(UTC)) is True
+
+    def test_within_window_returns_true(self):
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 7, 50, tzinfo=UTC)
+        next_funding = datetime(2026, 5, 10, 8, 0, tzinfo=UTC)  # 10min later
+        r._schedule_cache[("binance", "BTC/USDT")] = {
+            "next_funding_ms": int(next_funding.timestamp() * 1000),
+            "interval_hours": 8,
+            "updated_at": now,
+        }
+        assert r._is_in_funding_window(now) is True
+
+    def test_outside_window_returns_false(self):
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 12, 30, tzinfo=UTC)
+        next_funding = datetime(2026, 5, 10, 16, 0, tzinfo=UTC)  # 3h30min later
+        r._schedule_cache[("binance", "BTC/USDT")] = {
+            "next_funding_ms": int(next_funding.timestamp() * 1000),
+            "interval_hours": 8,
+            "updated_at": now,
+        }
+        assert r._is_in_funding_window(now) is False
+
+    def test_mixed_cadence_one_in_window_triggers_scan(self):
+        """8h 标的距 4h，1h 标的距 5min → 1h 触发扫描。"""
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 12, 30, tzinfo=UTC)
+        r._schedule_cache[("binance", "BTC/USDT")] = {
+            "next_funding_ms": int(datetime(2026, 5, 10, 16, 0, tzinfo=UTC).timestamp() * 1000),
+            "interval_hours": 8,
+            "updated_at": now,
+        }
+        r._schedule_cache[("okx", "ALT/USDT")] = {
+            "next_funding_ms": int(datetime(2026, 5, 10, 12, 35, tzinfo=UTC).timestamp() * 1000),
+            "interval_hours": 1,
+            "updated_at": now,
+        }
+        assert r._is_in_funding_window(now) is True
+
+    def test_advance_schedule_past_now(self):
+        """next_funding 已过 → += interval。"""
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 9, 0, tzinfo=UTC)
+        # next_funding 设在 now 前 1h，interval=8h → 应 advance 到 now + 7h
+        past = datetime(2026, 5, 10, 8, 0, tzinfo=UTC)
+        r._schedule_cache[("binance", "BTC/USDT")] = {
+            "next_funding_ms": int(past.timestamp() * 1000),
+            "interval_hours": 8,
+            "updated_at": now,
+        }
+        r._advance_schedule(now)
+        new_ts = r._schedule_cache[("binance", "BTC/USDT")]["next_funding_ms"]
+        expected = datetime(2026, 5, 10, 16, 0, tzinfo=UTC)  # past + 8h
+        assert new_ts == int(expected.timestamp() * 1000)
+
+    def test_advance_schedule_handles_multiple_intervals(self):
+        """next_funding 远古（>1 个 interval 前）→ while loop 多次 advance。"""
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 9, 0, tzinfo=UTC)
+        # 1h 标的，next_funding 设在 5h 前 → 应 advance 5 次到 4:00 + 5h = 9h（仍 ≤ now=9）→ 再 advance 一次到 10:00
+        r._schedule_cache[("binance", "ALT/USDT")] = {
+            "next_funding_ms": int(datetime(2026, 5, 10, 4, 0, tzinfo=UTC).timestamp() * 1000),
+            "interval_hours": 1,
+            "updated_at": now,
+        }
+        r._advance_schedule(now)
+        new_ts = r._schedule_cache[("binance", "ALT/USDT")]["next_funding_ms"]
+        # while loop: 4 → 5 → 6 → 7 → 8 → 9 → 10 (>9, exits)
+        expected = datetime(2026, 5, 10, 10, 0, tzinfo=UTC)
+        assert new_ts == int(expected.timestamp() * 1000)
+
+    def test_gc_removes_stale_entries(self):
+        """24h 没更新的条目被 GC 掉。"""
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+        r._schedule_cache[("binance", "FRESH/USDT")] = {
+            "next_funding_ms": 0,
+            "interval_hours": 8,
+            "updated_at": datetime(2026, 5, 10, 11, 0, tzinfo=UTC),  # 1h 前
+        }
+        r._schedule_cache[("binance", "STALE/USDT")] = {
+            "next_funding_ms": 0,
+            "interval_hours": 8,
+            "updated_at": datetime(2026, 5, 9, 10, 0, tzinfo=UTC),  # 26h 前
+        }
+        r._gc_stale_schedule(now)
+        assert ("binance", "FRESH/USDT") in r._schedule_cache
+        assert ("binance", "STALE/USDT") not in r._schedule_cache
+
+    def test_update_schedule_writes_from_opps(self):
+        r = self._runner(window_min=15)
+        now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+        opp = _make_opportunity()
+        r._update_schedule([opp], now)
+        key = ("binance", "BTC/USDT")
+        assert key in r._schedule_cache
+        assert r._schedule_cache[key]["next_funding_ms"] == 1_700_064_000_000
+        assert r._schedule_cache[key]["interval_hours"] == 8
+        assert r._schedule_cache[key]["updated_at"] == now

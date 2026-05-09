@@ -50,7 +50,7 @@ from app.exchanges.models import (
     Ticker,
     TimeInForce,
 )
-from app.exchanges.rate_limiter import TokenBucketRateLimiter
+from app.exchanges.rate_limiter import TokenBucketRateLimiter, get_global_limiter
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -113,7 +113,9 @@ class CCXTAdapter(ExchangeAdapter):
     ) -> None:
         self._exchange_id = exchange_id
         self._clients: Dict[InstrumentType, ccxt.Exchange] = {}
-        self._rate_limiter = TokenBucketRateLimiter(max_rpm=max_rpm)
+        # v0.4.3 改用跨策略全局共享池 — 12 策略共用同一桶，永不超 exchange limit
+        # 旧字段 _rate_limiter 保留兼容外部读取（指向同一全局实例）
+        self._rate_limiter = get_global_limiter(exchange_id, default_rpm=max_rpm)
         self._api_key = api_key
         self._api_secret = api_secret
         self._extra_params = extra_params or {}

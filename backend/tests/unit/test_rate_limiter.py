@@ -6,7 +6,11 @@ import time
 
 import pytest
 
-from app.exchanges.rate_limiter import TokenBucketRateLimiter
+from app.exchanges.rate_limiter import (
+    TokenBucketRateLimiter,
+    get_global_limiter,
+    reset_global_limiters,
+)
 
 
 class TestTokenBucketRateLimiter:
@@ -64,3 +68,54 @@ class TestTokenBucketRateLimiter:
         limiter = TokenBucketRateLimiter(max_rpm=60, burst_factor=2.0)
         # capacity = 60 * 2.0 / 60 = 2.0 tokens
         assert limiter.available_tokens >= 2.0
+
+
+# ---------------------------------------------------------------------------
+# v0.4.3 — 跨策略全局共享池（singleton per exchange）
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalLimiter:
+    def setup_method(self):
+        reset_global_limiters()
+
+    def teardown_method(self):
+        reset_global_limiters()
+
+    def test_returns_same_instance_for_same_exchange(self):
+        a = get_global_limiter("binance")
+        b = get_global_limiter("binance")
+        assert a is b  # singleton
+
+    def test_different_exchanges_get_different_limiters(self):
+        a = get_global_limiter("binance")
+        b = get_global_limiter("okx")
+        assert a is not b
+
+    def test_case_insensitive_exchange_id(self):
+        a = get_global_limiter("BINANCE")
+        b = get_global_limiter("binance")
+        assert a is b
+
+    def test_known_exchange_uses_configured_rpm(self):
+        # OKX 配置 400 rpm，capacity = 400/60 ≈ 6.67
+        limiter = get_global_limiter("okx")
+        assert 6.0 < limiter.available_tokens <= 7.0
+
+    def test_unknown_exchange_uses_default(self):
+        limiter = get_global_limiter("nonexistent_exchange", default_rpm=300)
+        # 300 rpm，capacity = 300/60 = 5
+        assert 4.5 < limiter.available_tokens <= 5.5
+
+    @pytest.mark.asyncio
+    async def test_singleton_shared_across_concurrent_callers(self):
+        """两个"adapter"用同一 exchange 应共享 token 桶。"""
+        # OKX 默认 400 rpm = 6.67/sec → 1 token 大约 0.15s
+        # 拿 5 个 token 后第 6 个会等
+        a = get_global_limiter("okx")
+        b = get_global_limiter("okx")
+        assert a is b
+        # 同一桶 → 容量受限于一个 limiter 的可用 tokens
+        before = a.available_tokens
+        await a.acquire()
+        assert b.available_tokens < before

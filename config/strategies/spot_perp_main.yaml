@@ -70,6 +70,9 @@ position:
     - LDO
     - TIA
 
+scanning:
+  scan_interval_seconds: 60     # scanner 周期（秒）；P0 策略保持 60s
+
 execution:
   fee_rate: 0.0004              # 单边 taker 费率
   slippage_bps: 2

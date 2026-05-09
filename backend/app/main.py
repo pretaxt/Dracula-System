@@ -67,7 +67,16 @@ _DEFAULT_SYMBOLS = [
     Symbol("RUNE", "USDT"),
 ]
 
-_SCAN_INTERVAL_SECONDS = 60.0
+_SCAN_INTERVAL_SECONDS = 60.0  # 默认值；按 yaml `scanning.scan_interval_seconds` 覆盖
+
+
+def _read_scan_interval(cfg: dict, default: float = _SCAN_INTERVAL_SECONDS) -> float:
+    """从策略 yaml 读 ``scanning.scan_interval_seconds``，缺省回退默认值。"""
+    try:
+        scanning = (cfg or {}).get("scanning") or {}
+        return float(scanning.get("scan_interval_seconds", default))
+    except (TypeError, ValueError):
+        return default
 _STRATEGY_CONFIG_PATH = "config/strategies/funding_rate_main.yaml"
 
 
@@ -167,11 +176,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("symbol_universe_fallback_to_default", count=len(scan_symbols))
         logger.info("symbol_universe_total", total=len(scan_symbols))
 
+        fr_scan_interval = _read_scan_interval(strategy_cfg)
+        fr_window_min = float(
+            (strategy_cfg or {}).get("scanning", {}).get("window_only_minutes", 0) or 0
+        )
         runner = FundingRateRunner(
             adapters=adapters,
             symbols=scan_symbols,
             config=scanner_config,
-            scan_interval_seconds=_SCAN_INTERVAL_SECONDS,
+            scan_interval_seconds=fr_scan_interval,
+            window_only_minutes=fr_window_min,
         )
         runner_task = asyncio.create_task(runner.run_forever(), name="funding_rate_runner")
         logger.info("funding_rate_runner_task_created")
@@ -182,7 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 cfg=strategy_cfg,
                 adapters=adapters,
                 symbols=scan_symbols,
-                scan_interval_seconds=_SCAN_INTERVAL_SECONDS,
+                scan_interval_seconds=fr_scan_interval,
                 live_mode=_live_mode,
             )
             logger.info("trading_mode", mode=settings.trading_mode, live=_live_mode)
@@ -374,8 +388,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 ),
                 exchanges=sp_scanner_exchanges,
             )
+            sp_scan_interval = _read_scan_interval(_sp_yaml)
             spot_perp_runner = SpotPerpRunner(
-                scanner=sp_scanner, scan_interval_seconds=60.0
+                scanner=sp_scanner, scan_interval_seconds=sp_scan_interval
             )
             spot_perp_task = asyncio.create_task(
                 spot_perp_runner.run_forever(), name="spot_perp_runner"

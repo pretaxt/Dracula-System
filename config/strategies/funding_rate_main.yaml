@@ -41,6 +41,12 @@ position:
   size_usd: 50.0                  # 实盘第一阶段：单笔 $50（spot $50 + perp $10 保证金 = $60/笔）
   exchanges: ["binance", "okx"]   # 双交易所并行扫描
 
+scanning:
+  scan_interval_seconds: 60       # scanner 周期（秒）；P0 策略保持 60s
+  # 仅在任意标的的 funding 结算前 N 分钟内扫描，0=禁用（24h 不停扫）
+  # 用每标的 next_funding_time 真实判断，不假设 8h 周期
+  window_only_minutes: 15
+
 execution:
   slippage_bps: 2                 # 保守滑点估计
   fee_rate: 0.0002                # Maker 挂单费率（Post-Only 模式）
