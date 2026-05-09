@@ -148,6 +148,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("exchange_adapter_init_failed", exchange="okx")
 
+    # Bitget — 公开行情即可（无 key 也能扫），有 key 时 trading 启用
+    try:
+        from app.exchanges.cex.bitget import BitgetAdapter  # noqa: PLC0415
+        _bg = get_exchange_credentials("bitget")
+        adapters["bitget"] = BitgetAdapter(
+            api_key=_bg.get("api_key") or settings.bitget_api_key,
+            api_secret=_bg.get("api_secret") or settings.bitget_api_secret,
+            passphrase=_bg.get("passphrase") or settings.bitget_api_passphrase,
+        )
+        logger.info("exchange_adapter_ready", exchange="bitget",
+                    source="file" if _bg.get("api_key") else "env")
+    except Exception:
+        logger.exception("exchange_adapter_init_failed", exchange="bitget")
+
+    # Bybit
+    try:
+        from app.exchanges.cex.bybit import BybitAdapter  # noqa: PLC0415
+        _by = get_exchange_credentials("bybit")
+        adapters["bybit"] = BybitAdapter(
+            api_key=_by.get("api_key") or settings.bybit_api_key,
+            api_secret=_by.get("api_secret") or settings.bybit_api_secret,
+        )
+        logger.info("exchange_adapter_ready", exchange="bybit",
+                    source="file" if _by.get("api_key") else "env")
+    except Exception:
+        logger.exception("exchange_adapter_init_failed", exchange="bybit")
+
+    # HTX
+    try:
+        from app.exchanges.cex.htx import HTXAdapter  # noqa: PLC0415
+        _ht = get_exchange_credentials("htx")
+        adapters["htx"] = HTXAdapter(
+            api_key=_ht.get("api_key") or settings.htx_api_key,
+            api_secret=_ht.get("api_secret") or settings.htx_api_secret,
+        )
+        logger.info("exchange_adapter_ready", exchange="htx",
+                    source="file" if _ht.get("api_key") else "env")
+    except Exception:
+        logger.exception("exchange_adapter_init_failed", exchange="htx")
+
     # --- Start funding-rate runner (扫描 → DB + Redis) ---
     runner: FundingRateRunner | None = None
     runner_task: asyncio.Task | None = None  # type: ignore[type-arg]

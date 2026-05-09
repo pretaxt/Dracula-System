@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     okx_api_key: str = Field(default="")
     okx_api_secret: str = Field(default="")
     okx_api_passphrase: str = Field(default="")
+    bitget_api_key: str = Field(default="")
+    bitget_api_secret: str = Field(default="")
+    bitget_api_passphrase: str = Field(default="")
+    htx_api_key: str = Field(default="")
+    htx_api_secret: str = Field(default="")
 
     # 交易模式：paper（模拟）或 live（实盘）
     trading_mode: str = Field(default="paper")

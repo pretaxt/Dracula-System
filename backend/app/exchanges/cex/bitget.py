@@ -1,12 +1,9 @@
-"""OKXAdapter — OKX 永续合约行情适配器 (只读, 无需 API Key)
+"""BitgetAdapter — Bitget 现货 + USDT-M 永续适配器。
 
-用途:
-  多交易所行情对比 — 资金费率 / Ticker 差价分析。
-  所有调用的均为公开端点, API Key 为空时自动降级为公开模式。
+设计与 OKX 相似（统一账户共享 USDT 余额），funding 周期 4h/8h 动态识别。
+为 #04 spot-perp / #02 跨所基差套利 提供数据源。
 
-CCXT 映射:
-  InstrumentType.PERPETUAL → ccxt.okx(defaultType="swap")
-  Symbol 格式: "BTC/USDT:USDT" (CCXT unified linear perp)
+API key 为空时仅支持公开市场数据接口（无需 trading 权限即可扫描）。
 """
 from __future__ import annotations
 
@@ -15,26 +12,18 @@ from typing import List, Optional
 
 import ccxt.async_support as ccxt
 
-from app.exchanges.cex.ccxt_base import CCXTAdapter
-from app.exchanges.models import FundingRate, InstrumentType, Symbol
 from app.core.logging import get_logger
+from app.exchanges.cex.ccxt_base import CCXTAdapter
+from app.exchanges.cex.funding_interval import infer_funding_interval_hours
+from app.exchanges.models import FundingRate, InstrumentType, Symbol
 
 logger = get_logger(__name__)
 
-_OKX_FUNDING_INTERVAL_HOURS = 8  # 默认；动态推断 fallback
-
-from app.exchanges.cex.funding_interval import infer_funding_interval_hours  # noqa: E402
+_DEFAULT_FUNDING_INTERVAL_HOURS = 8  # Bitget 主流 8h，alts 多为 4h（动态识别）
 
 
-class OKXAdapter(CCXTAdapter):
-    """OKX 永续合约适配器。
-
-    无 API Key 时仅支持公开市场数据接口:
-      - fetch_tickers
-      - fetch_funding_rates
-      - fetch_ohlcv
-      - fetch_order_book
-    """
+class BitgetAdapter(CCXTAdapter):
+    """Bitget 永续合约 + 现货适配器。"""
 
     def __init__(
         self,
@@ -44,10 +33,10 @@ class OKXAdapter(CCXTAdapter):
         testnet: bool = False,
     ) -> None:
         super().__init__(
-            exchange_id="okx",
+            exchange_id="bitget",
             api_key=api_key,
             api_secret=api_secret,
-            max_rpm=300,
+            max_rpm=500,
         )
 
         config: dict = {
@@ -57,12 +46,12 @@ class OKXAdapter(CCXTAdapter):
             "enableRateLimit": True,
         }
 
-        perp_client = ccxt.okx({
+        # Bitget USDT-M perpetual
+        perp_client = ccxt.bitget({
             **config,
             "options": {"defaultType": "swap"},
         })
-
-        spot_client = ccxt.okx({
+        spot_client = ccxt.bitget({
             **config,
             "options": {"defaultType": "spot"},
         })
@@ -70,29 +59,26 @@ class OKXAdapter(CCXTAdapter):
         if testnet:
             perp_client.set_sandbox_mode(True)
             spot_client.set_sandbox_mode(True)
-            logger.info("okx_testnet_mode", exchange="okx")
+            logger.info("bitget_testnet_mode")
 
         self._clients = {
             InstrumentType.PERPETUAL: perp_client,
             InstrumentType.SPOT: spot_client,
         }
 
-    async def top_up_perp_margin(self, amount: "Decimal") -> None:
-        """OKX 统一交易账户：spot 和 swap 共享余额池，无需 inter-wallet 划转。
+    # ------------------------------------------------------------------
+    # 资金管理 — Bitget 默认 unified-style 账户，spot/futures 余额可单独查
+    # ------------------------------------------------------------------
 
-        策略只需保证 trading account 整体 USDT >= 单笔现货 + 永续保证金。
-        """
-        logger.debug("okx_top_up_noop", reason="unified_trading_account", amount=str(amount))
+    async def top_up_perp_margin(self, amount: "Decimal") -> None:
+        """Bitget USDT-M 与现货账户分离 — 暂用 noop（用户手动转账）。"""
+        logger.debug("bitget_top_up_perp_noop", amount=str(amount))
 
     async def top_up_spot_margin(self, amount: "Decimal") -> None:
-        """OKX 统一账户：spot margin 共享同一余额池，无需划转。"""
-        logger.debug(
-            "okx_spot_margin_topup_noop",
-            reason="unified_trading_account", amount=str(amount),
-        )
+        logger.debug("bitget_top_up_spot_noop", amount=str(amount))
 
     async def fetch_spot_margin_usdt_balance(self) -> "Decimal":
-        """OKX 统一账户：直接读 spot client 的 USDT 总余额（与 spot 共享）。"""
+        """读 spot 账户 USDT 余额。"""
         from decimal import Decimal as _D  # noqa: PLC0415
         try:
             spot_client = self._clients[InstrumentType.SPOT]
@@ -100,8 +86,12 @@ class OKXAdapter(CCXTAdapter):
             total = (raw.get("total") or {}).get("USDT") or 0
             return _D(str(total))
         except Exception as exc:
-            logger.debug("okx_fetch_spot_margin_balance_failed", error=str(exc)[:200])
+            logger.debug("bitget_fetch_spot_balance_failed", error=str(exc)[:200])
             return _D("0")
+
+    # ------------------------------------------------------------------
+    # 行情
+    # ------------------------------------------------------------------
 
     async def fetch_funding_rate(self, symbol: Symbol) -> FundingRate:
         client = self._clients[InstrumentType.PERPETUAL]
@@ -109,37 +99,36 @@ class OKXAdapter(CCXTAdapter):
         raw = await self._call_with_retry(client.fetch_funding_rate, ccxt_symbol)
         return FundingRate(
             symbol=symbol,
-            exchange="okx",
+            exchange="bitget",
             rate=_to_dec(raw.get("fundingRate")),
             next_funding_time=int(raw.get("fundingTimestamp") or 0),
             funding_interval_hours=infer_funding_interval_hours(
-                raw, default=_OKX_FUNDING_INTERVAL_HOURS,
+                raw, default=_DEFAULT_FUNDING_INTERVAL_HOURS,
             ),
         )
 
     async def fetch_funding_rate_history(
-        self, symbol: Symbol, limit: int = 9
+        self, symbol: Symbol, limit: int = 9,
     ) -> List[FundingRate]:
         client = self._clients[InstrumentType.PERPETUAL]
         ccxt_symbol = f"{symbol.base}/{symbol.quote}:{symbol.quote}"
         raw_list = await self._call_with_retry(
-            client.fetch_funding_rate_history, ccxt_symbol, None, limit
+            client.fetch_funding_rate_history, ccxt_symbol, None, limit,
         )
         return [
             FundingRate(
                 symbol=symbol,
-                exchange="okx",
+                exchange="bitget",
                 rate=_to_dec(r.get("fundingRate")),
                 next_funding_time=int(r.get("timestamp") or r.get("fundingTimestamp") or 0),
                 funding_interval_hours=infer_funding_interval_hours(
-                    r, default=_OKX_FUNDING_INTERVAL_HOURS,
+                    r, default=_DEFAULT_FUNDING_INTERVAL_HOURS,
                 ),
             )
             for r in (raw_list or [])
         ]
 
     async def list_usdt_perpetual_symbols(self) -> list[Symbol]:
-        """列出所有 USDT 永续合约 symbol（用于动态扫描所有币对）。"""
         client = self._clients[InstrumentType.PERPETUAL]
         markets = await self._call_with_retry(client.load_markets, True)
         result: list[Symbol] = []
@@ -163,13 +152,13 @@ class OKXAdapter(CCXTAdapter):
         return []
 
     async def fetch_order(self, order_id: str, symbol: Symbol):  # type: ignore[override]
-        raise NotImplementedError("OKXAdapter is read-only in market-data mode")
+        raise NotImplementedError("BitgetAdapter is read-only in market-data mode")
 
     async def cancel_order(self, order_id: str, symbol: Symbol) -> bool:
-        raise NotImplementedError("OKXAdapter is read-only in market-data mode")
+        raise NotImplementedError("BitgetAdapter is read-only in market-data mode")
 
     async def cancel_all_orders(self, symbol: Optional[Symbol] = None) -> int:
-        raise NotImplementedError("OKXAdapter is read-only in market-data mode")
+        raise NotImplementedError("BitgetAdapter is read-only in market-data mode")
 
     async def close(self) -> None:
         for client in self._clients.values():

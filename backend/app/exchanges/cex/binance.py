@@ -30,7 +30,9 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Binance USDM 永续合约资金费结算间隔(小时)
-_BINANCE_FUNDING_INTERVAL_HOURS = 8
+_BINANCE_FUNDING_INTERVAL_HOURS = 8  # 默认；动态推断在 infer_funding_interval_hours
+
+from app.exchanges.cex.funding_interval import infer_funding_interval_hours  # noqa: E402
 
 
 class BinanceAdapter(CCXTAdapter):
@@ -159,7 +161,9 @@ class BinanceAdapter(CCXTAdapter):
             exchange="binance",
             rate=_to_decimal(raw.get("fundingRate")),
             next_funding_time=int(raw.get("fundingTimestamp") or 0),
-            funding_interval_hours=_BINANCE_FUNDING_INTERVAL_HOURS,
+            funding_interval_hours=infer_funding_interval_hours(
+                raw, default=_BINANCE_FUNDING_INTERVAL_HOURS,
+            ),
             predicted_rate=_to_decimal(predicted) if predicted is not None else None,
         )
 
@@ -186,7 +190,9 @@ class BinanceAdapter(CCXTAdapter):
                 exchange="binance",
                 rate=_to_decimal(r.get("fundingRate")),
                 next_funding_time=int(r.get("timestamp") or r.get("fundingTimestamp") or 0),
-                funding_interval_hours=_BINANCE_FUNDING_INTERVAL_HOURS,
+                funding_interval_hours=infer_funding_interval_hours(
+                    r, default=_BINANCE_FUNDING_INTERVAL_HOURS,
+                ),
             )
             for r in (raw_list or [])
         ]

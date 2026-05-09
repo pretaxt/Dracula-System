@@ -101,9 +101,9 @@ async def update_exchange_credentials(
     - 若实盘模式且 OrderExecutor.broker 是 dict，同步重建该交易所的 LiveBroker
     - **无需重启容器**
 
-    支持 binance / okx。空字符串字段被忽略（不覆盖）。
+    支持 binance / okx / bitget / bybit / htx。空字符串字段被忽略（不覆盖）。
     """
-    if exchange not in ("binance", "okx"):
+    if exchange not in ("binance", "okx", "bitget", "bybit", "htx"):
         raise HTTPException(status_code=400, detail=f"Unsupported exchange: {exchange}")
     patch = body.model_dump(exclude_none=True)
     try:
@@ -159,6 +159,25 @@ async def _hot_reload_exchange(app_state, exchange: str) -> None:
             api_key=creds.get("api_key") or settings.okx_api_key,
             api_secret=creds.get("api_secret") or settings.okx_api_secret,
             passphrase=creds.get("passphrase") or settings.okx_api_passphrase,
+        )
+    elif exchange == "bitget":
+        from app.exchanges.cex.bitget import BitgetAdapter  # noqa: PLC0415
+        new_adapter = BitgetAdapter(
+            api_key=creds.get("api_key") or settings.bitget_api_key,
+            api_secret=creds.get("api_secret") or settings.bitget_api_secret,
+            passphrase=creds.get("passphrase") or settings.bitget_api_passphrase,
+        )
+    elif exchange == "bybit":
+        from app.exchanges.cex.bybit import BybitAdapter  # noqa: PLC0415
+        new_adapter = BybitAdapter(
+            api_key=creds.get("api_key") or settings.bybit_api_key,
+            api_secret=creds.get("api_secret") or settings.bybit_api_secret,
+        )
+    elif exchange == "htx":
+        from app.exchanges.cex.htx import HTXAdapter  # noqa: PLC0415
+        new_adapter = HTXAdapter(
+            api_key=creds.get("api_key") or settings.htx_api_key,
+            api_secret=creds.get("api_secret") or settings.htx_api_secret,
         )
     else:
         return

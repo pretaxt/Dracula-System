@@ -117,7 +117,7 @@ def list_credentials_metadata() -> list[dict[str, Any]]:
     用于 GET /api/v1/system/exchange-credentials。"""
     creds = load_credentials()
     out: list[dict[str, Any]] = []
-    for exchange in ("binance", "okx"):
+    for exchange in ("binance", "okx", "bitget", "bybit", "htx"):
         entry = creds.get(exchange, {})
         configured = bool(entry.get("api_key") and entry.get("api_secret"))
         out.append({

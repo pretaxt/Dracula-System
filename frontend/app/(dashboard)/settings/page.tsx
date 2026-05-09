@@ -16,7 +16,14 @@ import {
 const EXCHANGE_LABEL: Record<string, string> = {
   binance: 'Binance',
   okx: 'OKX',
+  bitget: 'Bitget',
+  bybit: 'Bybit',
+  htx: 'HTX',
 }
+
+const EXCHANGES_REQUIRING_PASSPHRASE: Set<string> = new Set(['okx', 'bitget'])
+
+const ALL_EXCHANGES = ['binance', 'okx', 'bitget', 'bybit', 'htx'] as const
 
 export default function SettingsPage() {
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth, refetchInterval: 60_000 })
@@ -94,10 +101,10 @@ function ExchangeCredentialsSection({ credentials }: { credentials: ExchangeCred
     },
   })
 
-  // 兜底：如果 API 还没返回数据，至少显示 binance + okx 两张未配置卡
+  // 兜底：如果 API 还没返回数据，至少显示全部 5 家未配置卡
   const display: ExchangeCredential[] = credentials.length
     ? credentials
-    : (['binance', 'okx'] as const).map((ex) => ({
+    : ALL_EXCHANGES.map((ex) => ({
         exchange: ex,
         configured: false,
         api_key_preview: '',
@@ -196,7 +203,7 @@ function CredentialEditModal({
   const [apiKey, setApiKey] = useState('')
   const [apiSecret, setApiSecret] = useState('')
   const [passphrase, setPassphrase] = useState('')
-  const requiresPassphrase = exchange === 'okx'
+  const requiresPassphrase = EXCHANGES_REQUIRING_PASSPHRASE.has(exchange)
 
   const canSubmit = apiKey.trim() && apiSecret.trim() && (!requiresPassphrase || passphrase.trim())
 
@@ -234,7 +241,13 @@ function CredentialEditModal({
         <Field label="API Key" value={apiKey} onChange={setApiKey} placeholder="例: P2Xn4ybYQLzAr..." />
         <Field label="API Secret" value={apiSecret} onChange={setApiSecret} placeholder="对应的 secret（提交后不再显示）" type="password" />
         {requiresPassphrase && (
-          <Field label="Passphrase" value={passphrase} onChange={setPassphrase} placeholder="OKX 创建 API 时设置的口令" type="password" />
+          <Field
+            label="Passphrase"
+            value={passphrase}
+            onChange={setPassphrase}
+            placeholder={`${EXCHANGE_LABEL[exchange] ?? exchange} 创建 API 时设置的口令`}
+            type="password"
+          />
         )}
 
         <div style={{ fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
