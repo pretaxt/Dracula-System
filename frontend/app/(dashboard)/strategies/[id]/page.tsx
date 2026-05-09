@@ -521,16 +521,31 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               </table>
             </div>
           )}
-          <div
-            style={{
-              marginTop: 12,
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-              color: 'var(--text-muted)',
-            }}
-          >
-            {t('扫描候选门槛 |basis| ≥ 0.10%（仅展示），实盘入场阈值 |basis| ≥ 0.25%（升水/贴水双向自动开平仓） · 60 秒扫描')}
-          </div>
+          {(() => {
+            const scanT = parseFloat(spotPerpOpps?.scan_threshold_pct ?? '0')
+            const ePrem = parseFloat(spotPerpOpps?.entry_pct_premium ?? '0')
+            const eDisc = parseFloat(spotPerpOpps?.entry_pct_discount ?? '0')
+            const eGen = parseFloat(spotPerpOpps?.entry_pct ?? '0')
+            const premThresh = ePrem > 0 ? ePrem : eGen
+            const discThresh = eDisc > 0 ? eDisc : eGen
+            const entryDisplay = premThresh === discThresh
+              ? `${premThresh.toFixed(2)}%`
+              : `${t('升水')} ${premThresh.toFixed(2)}% / ${t('贴水')} ${discThresh.toFixed(2)}%`
+            return (
+              <div
+                style={{
+                  marginTop: 12,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                {t('扫描候选门槛')} |basis| ≥ {scanT.toFixed(2)}%（{t('仅展示')}）
+                ， {t('实盘入场阈值')} |basis| ≥ {entryDisplay}
+                （{t('升水/贴水双向自动开平仓')}）· 60 {t('秒扫描')}
+              </div>
+            )
+          })()}
         </CardElevated>
       )}
 

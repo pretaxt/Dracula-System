@@ -191,6 +191,7 @@ async def spot_perp_opportunities(
         entry_pct=str(cfg.entry_pct) if cfg else "0",
         entry_pct_premium=str(cfg.entry_pct_premium) if cfg else "0",
         entry_pct_discount=str(cfg.entry_pct_discount) if cfg else "0",
+        scan_threshold_pct=str(cfg.scan_threshold_pct) if cfg else "0",
         data=opps,
     )
 

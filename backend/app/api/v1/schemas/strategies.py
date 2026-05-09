@@ -62,10 +62,11 @@ class SpotPerpOpportunityOut(BaseModel):
 class SpotPerpOpportunitiesResponse(BaseModel):
     running: bool
     last_scan_at: datetime | None
-    # 当前生效的入场门槛（供 UI 渲染"距入场"列）
+    # 当前生效的入场门槛（供 UI 渲染"距入场"列 + footer 文案）
     entry_pct: str = "0"                # 通用兜底
     entry_pct_premium: str = "0"        # premium 方向独立阈值（0 = 回退 entry_pct）
     entry_pct_discount: str = "0"       # discount 方向独立阈值（0 = 回退 entry_pct）
+    scan_threshold_pct: str = "0"       # 候选展示门槛（UI footer 用）
     data: list[SpotPerpOpportunityOut]
 
 

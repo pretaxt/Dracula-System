@@ -68,6 +68,8 @@ export type SpotPerpOpportunitiesResponse = {
   entry_pct_premium?: string
   /** discount 方向独立入场阈值（"0" 回退 entry_pct） */
   entry_pct_discount?: string
+  /** 候选展示门槛（UI footer 用） */
+  scan_threshold_pct?: string
   data: SpotPerpOpportunity[]
 }
 
