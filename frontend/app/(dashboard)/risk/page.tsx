@@ -109,6 +109,7 @@ export default function RiskPage() {
       max_concurrent: spCfg.max_concurrent,
       notional_per_position: spCfg.notional_per_position,
       direction_filter: spCfg.direction_filter,
+      scan_threshold_pct: spCfg.scan_threshold_pct,
     })
     setSpEditing(true)
   }
@@ -634,6 +635,25 @@ export default function RiskPage() {
                       ? `${Number(spCfg.entry_pct_discount).toFixed(2)}%`
                       : '回退'}
                   </span>
+                )}
+              </div>
+            </div>
+
+            {/* 候选展示门槛（scan_threshold_pct）— UI 显示 |basis| ≥ 该值的候选；< entry_pct */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="候选展示门槛 — |基差| ≥ 该值进 UI 候选表（仅展示，不实盘开仓）">
+                  候选展示门槛
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.05" min="0"
+                    value={spDraft.scan_threshold_pct ?? spCfg.scan_threshold_pct}
+                    onChange={(e) => setSpDraft({ ...spDraft, scan_threshold_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(spCfg.scan_threshold_pct).toFixed(2)}%</span>
                 )}
               </div>
             </div>

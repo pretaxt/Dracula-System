@@ -430,11 +430,11 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               >
                 <thead>
                   <tr>
-                    {[t('币对'), t('方向'), t('现货'), t('永续'), t('基差'), t('基差 %')].map((h, i) => (
+                    {[t('币对'), t('方向'), t('现货'), t('永续'), t('基差'), t('基差 %'), t('距入场'), t('状态')].map((h, i) => (
                       <th
                         key={i}
                         style={{
-                          textAlign: i === 0 || i === 1 ? 'left' : 'right',
+                          textAlign: i === 0 || i === 1 || i === 7 ? 'left' : 'right',
                           padding: '10px 12px',
                           color: 'var(--text-tertiary)',
                           fontWeight: 500,
@@ -453,10 +453,26 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 <tbody>
                   {(spotPerpOpps?.data ?? []).map((o) => {
                     const basisPct = parseFloat(o.basis_pct)
+                    const absBasis = Math.abs(basisPct)
                     const isPremium = o.direction === 'premium'
+                    // 按方向取入场阈值：per-direction > 0 优先，否则回退 entry_pct
+                    const entryGeneric = parseFloat(spotPerpOpps?.entry_pct ?? '0')
+                    const entryPremium = parseFloat(spotPerpOpps?.entry_pct_premium ?? '0')
+                    const entryDiscount = parseFloat(spotPerpOpps?.entry_pct_discount ?? '0')
+                    const entryThresh = isPremium
+                      ? (entryPremium > 0 ? entryPremium : entryGeneric)
+                      : (entryDiscount > 0 ? entryDiscount : entryGeneric)
+                    const distance = entryThresh > 0 ? entryThresh - absBasis : 0
+                    const passesEntry = entryThresh > 0 && absBasis >= entryThresh
+                    const isNear = !passesEntry && distance > 0 && distance <= entryThresh * 0.2
                     const dirColor = isPremium
                       ? 'var(--accent-emerald)'
                       : 'var(--accent-blood)'
+                    const statusColor = passesEntry
+                      ? 'var(--accent-emerald)'
+                      : isNear
+                      ? 'var(--accent-gold)'
+                      : 'var(--text-tertiary)'
                     return (
                       <tr
                         key={o.symbol}
@@ -479,6 +495,24 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                         </td>
                         <td style={{ padding: '12px', textAlign: 'right', color: dirColor, fontWeight: 600 }}>
                           {basisPct >= 0 ? '+' : ''}{basisPct.toFixed(4)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: statusColor }}>
+                          {entryThresh <= 0
+                            ? '—'
+                            : passesEntry
+                            ? `✓ ${t('已达')}`
+                            : `−${distance.toFixed(2)}%`}
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <Badge tone={passesEntry ? 'active' : isNear ? 'warn' : 'paused'}>
+                            {entryThresh <= 0
+                              ? t('候选')
+                              : passesEntry
+                              ? t('可开仓')
+                              : isNear
+                              ? t('接近')
+                              : t('候选')}
+                          </Badge>
                         </td>
                       </tr>
                     )

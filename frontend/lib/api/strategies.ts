@@ -62,6 +62,12 @@ export type SpotPerpOpportunity = {
 export type SpotPerpOpportunitiesResponse = {
   running: boolean
   last_scan_at: string | null
+  /** 通用入场基差阈值（兜底，per-direction 为 0 时使用） */
+  entry_pct?: string
+  /** premium 方向独立入场阈值（"0" 回退 entry_pct） */
+  entry_pct_premium?: string
+  /** discount 方向独立入场阈值（"0" 回退 entry_pct） */
+  entry_pct_discount?: string
   data: SpotPerpOpportunity[]
 }
 

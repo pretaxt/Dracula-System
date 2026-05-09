@@ -225,6 +225,12 @@ class SpotPerpBasisScanner:
         """
         if not raw_tickers or not hasattr(client, "fetch_bids_asks"):
             return
+        # 提前 short-circuit: CCXT 显式标记不支持时跳过（避免 OKX 每 tick 抛 traceback）
+        try:
+            if not (getattr(client, "has", {}) or {}).get("fetchBidsAsks", False):
+                return
+        except Exception:
+            pass
         # 找出所有 bid 或 ask 缺失的 symbol
         needs = [
             s for s in symbols
@@ -237,8 +243,13 @@ class SpotPerpBasisScanner:
             book = await asyncio.wait_for(
                 client.fetch_bids_asks(needs), timeout=8.0,
             )
-        except Exception:
-            logger.debug("scanner_fetch_bids_asks_failed", exc_info=True)
+        except Exception as exc:
+            # NotSupported 是预期的（已在上面 short-circuit，但兜底）；其他异常保留 traceback
+            from ccxt.base.errors import NotSupported  # noqa: PLC0415
+            if isinstance(exc, NotSupported):
+                logger.debug("scanner_fetch_bids_asks_unsupported", error=str(exc)[:80])
+            else:
+                logger.debug("scanner_fetch_bids_asks_failed", exc_info=True)
             return
         for sym, t in raw_tickers.items():
             if not isinstance(t, dict):

@@ -172,16 +172,25 @@ async def funding_rate_opportunities(
 async def spot_perp_opportunities(
     _: CurrentUser, request: Request
 ) -> SpotPerpOpportunitiesResponse:
-    """spot-perp 基差扫描器最新机会(每 60s 刷新)。"""
+    """spot-perp 基差扫描器最新机会(每 60s 刷新)。
+
+    返回当前生效的入场门槛（entry_pct + per-direction），让 UI 渲染"距入场"列。
+    """
     runner = getattr(request.app.state, "spot_perp_runner", None)
     if runner is None:
         return SpotPerpOpportunitiesResponse(running=False, last_scan_at=None, data=[])
     opps = [
         SpotPerpOpportunityOut(**opp.to_dict()) for opp in runner.latest_opportunities
     ]
+    # 从 paper_session.cfg 读当前生效阈值（含 runtime override）；session 不存在时回退 0
+    sp_paper = getattr(request.app.state, "spot_perp_paper", None)
+    cfg = getattr(sp_paper, "cfg", None) if sp_paper else None
     return SpotPerpOpportunitiesResponse(
         running=runner.is_running,
         last_scan_at=runner.last_scan_at,
+        entry_pct=str(cfg.entry_pct) if cfg else "0",
+        entry_pct_premium=str(cfg.entry_pct_premium) if cfg else "0",
+        entry_pct_discount=str(cfg.entry_pct_discount) if cfg else "0",
         data=opps,
     )
 
