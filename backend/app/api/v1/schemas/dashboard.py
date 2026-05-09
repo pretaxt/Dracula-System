@@ -46,3 +46,9 @@ class DashboardSummary(BaseModel):
     max_exchange_concentration_pct: str = "0"
     # 单币种最大占比 % (max symbol open notional / total open notional * 100)
     max_symbol_concentration_pct: str = "0"
+    # 运维指标（5min 滑窗 in-memory）
+    api_latency_p95_ms: str = "0"
+    # {strategy: {p95_ms, count_5m}}
+    scan_perf: dict[str, dict[str, float | int]] = {}
+    # {exchange: {calls_5m, error_rate_pct}}
+    ccxt_health: dict[str, dict[str, float | int]] = {}

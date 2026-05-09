@@ -148,12 +148,16 @@ class CCXTAdapter(ExchangeAdapter):
         self, coro_fn: Callable, *args: Any, **kwargs: Any
     ) -> Any:
         """带限速 + 指数退避重试的 CCXT 调用包装"""
+        from app.core.metrics import get_metrics  # noqa: PLC0415
         last_exc: Optional[Exception] = None
         for attempt in range(_MAX_RETRIES):
             await self._rate_limiter.acquire()
             try:
-                return await coro_fn(*args, **kwargs)
+                result = await coro_fn(*args, **kwargs)
+                get_metrics().record_ccxt(self._exchange_id, ok=True)
+                return result
             except ccxt.RateLimitExceeded as e:
+                get_metrics().record_ccxt(self._exchange_id, ok=False)
                 retry_after = 5.0
                 logger.warning(
                     "rate_limit_exceeded",
@@ -169,6 +173,7 @@ class CCXTAdapter(ExchangeAdapter):
                     retry_after=retry_after,
                 )
             except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+                get_metrics().record_ccxt(self._exchange_id, ok=False)
                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
                     "network_error",

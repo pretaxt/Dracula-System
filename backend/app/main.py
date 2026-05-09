@@ -580,6 +580,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # 轻量级 metrics 中间件：记录 HTTP latency + error rate（5min 滑窗）
+    @_app.middleware("http")
+    async def _metrics_middleware(request, call_next):
+        from time import perf_counter  # noqa: PLC0415
+        from app.core.metrics import get_metrics  # noqa: PLC0415
+        start = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed_ms = (perf_counter() - start) * 1000
+            get_metrics().record_http(elapsed_ms, 500)
+            raise
+        elapsed_ms = (perf_counter() - start) * 1000
+        get_metrics().record_http(elapsed_ms, response.status_code)
+        return response
+
     from app.api.v1 import router as v1_router  # noqa: PLC0415
 
     _app.include_router(v1_router, prefix="/api/v1")

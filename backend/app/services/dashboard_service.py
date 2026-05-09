@@ -150,16 +150,37 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         else Decimal("0")
     )
 
-    # P2 待接 — 真实 5min API 错误率 / WS 稳定性需要监控埋点。
-    # 当前没有错误就用 100% / 0%(诚实占位,等接入 metrics 后改真值)。
-    api_error_rate_5m_pct = Decimal("0")
-    ws_stability_pct = Decimal("100")
+    # 真实 5min HTTP 错误率（in-memory metrics 滑窗）
+    from app.core.metrics import get_metrics  # noqa: PLC0415
+    metrics = get_metrics()
+    api_error_rate_5m_pct = Decimal(str(round(metrics.http_error_rate_5m_pct(), 4)))
+    # WS 稳定性：暂用 100 - HTTP 错误率作为粗略 health 指标，后续接 watcher 心跳
+    ws_stability_pct = max(Decimal("0"), Decimal("100") - api_error_rate_5m_pct)
 
     strategy_perf = await _get_strategy_performance(session)
 
     sharpe_30d = _annualized_sharpe(series, total_equity)
     max_ex_conc = _max_exchange_concentration(per_exchange_equity, total_equity)
     max_sym_conc = await _max_symbol_concentration(session)
+
+    # 运维指标（5min 滑窗 in-memory）
+    api_p95_ms = round(metrics.http_latency_p95_ms(), 1)
+    scan_perf = {
+        "funding_rate": {
+            "p95_ms": round(metrics.scan_p95_ms("funding_rate"), 1),
+            "count_5m": metrics.scan_count_5m("funding_rate"),
+        },
+        "spot_perp": {
+            "p95_ms": round(metrics.scan_p95_ms("spot_perp"), 1),
+            "count_5m": metrics.scan_count_5m("spot_perp"),
+        },
+    }
+    ccxt_health = {}
+    for ex in ("binance", "okx", "binanceusdm"):
+        ccxt_health[ex] = {
+            "calls_5m": metrics.ccxt_call_count_5m(ex),
+            "error_rate_pct": round(metrics.ccxt_error_rate_5m_pct(ex), 2),
+        }
 
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),
@@ -181,6 +202,9 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         "sharpe_30d": str(round(sharpe_30d, 3)),
         "max_exchange_concentration_pct": str(round(max_ex_conc, 2)),
         "max_symbol_concentration_pct": str(round(max_sym_conc, 2)),
+        "api_latency_p95_ms": str(api_p95_ms),
+        "scan_perf": scan_perf,
+        "ccxt_health": ccxt_health,
     }
 
 

@@ -111,6 +111,8 @@ class FundingRateRunner:
     # ------------------------------------------------------------------
 
     async def _tick(self) -> list[FundingRateOpportunity]:
+        from time import perf_counter  # noqa: PLC0415
+        from app.core.metrics import get_metrics  # noqa: PLC0415
         scanned_at = datetime.now(UTC)
 
         # window-gate：先 GC 过期 cache，再 advance 过期 next_funding，再判断窗口
@@ -124,11 +126,15 @@ class FundingRateRunner:
             )
             return self._latest_opportunities  # 用上次缓存
 
+        scan_start = perf_counter()
         try:
             opportunities = await self._scanner.scan()
         except Exception:
             logger.exception("funding_rate_scan_failed")
             return []
+        get_metrics().record_scan(
+            "funding_rate", (perf_counter() - scan_start) * 1000,
+        )
 
         # 缓存供 API 实时读取
         self._latest_opportunities = opportunities

@@ -41,12 +41,18 @@ class SpotPerpRunner:
         return self._running
 
     async def run_forever(self) -> None:
+        from time import perf_counter  # noqa: PLC0415
+        from app.core.metrics import get_metrics  # noqa: PLC0415
         self._running = True
         logger.info("spot_perp_runner_started", interval=self._scan_interval)
         try:
             while not self._stop_event.is_set():
                 try:
+                    scan_start = perf_counter()
                     opps = await self._scanner.scan_once()
+                    get_metrics().record_scan(
+                        "spot_perp", (perf_counter() - scan_start) * 1000,
+                    )
                     self._latest_opportunities = opps
                     self._last_scan_at = datetime.now(timezone.utc)
                     if opps:
