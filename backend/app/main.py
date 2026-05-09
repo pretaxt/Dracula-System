@@ -580,21 +580,36 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # 轻量级 metrics 中间件：记录 HTTP latency + error rate（5min 滑窗）
-    @_app.middleware("http")
-    async def _metrics_middleware(request, call_next):
-        from time import perf_counter  # noqa: PLC0415
-        from app.core.metrics import get_metrics  # noqa: PLC0415
-        start = perf_counter()
-        try:
-            response = await call_next(request)
-        except Exception:
-            elapsed_ms = (perf_counter() - start) * 1000
-            get_metrics().record_http(elapsed_ms, 500)
-            raise
-        elapsed_ms = (perf_counter() - start) * 1000
-        get_metrics().record_http(elapsed_ms, response.status_code)
-        return response
+    # 轻量级 metrics 中间件：纯 ASGI 形式（Starlette 文档推荐方式，绕过
+    # BaseHTTPMiddleware/装饰器 在某些 lifespan 工厂场景的失效问题）
+    from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: PLC0415
+    from time import perf_counter as _perf_counter  # noqa: PLC0415
+
+    class _MetricsMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self._app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await self._app(scope, receive, send)
+                return
+            from app.core.metrics import get_metrics  # noqa: PLC0415
+            start = _perf_counter()
+            status_code = 500
+
+            async def _send(message):
+                nonlocal status_code
+                if message["type"] == "http.response.start":
+                    status_code = int(message.get("status", 500))
+                await send(message)
+
+            try:
+                await self._app(scope, receive, _send)
+            finally:
+                elapsed_ms = (_perf_counter() - start) * 1000
+                get_metrics().record_http(elapsed_ms, status_code)
+
+    _app.add_middleware(_MetricsMiddleware)
 
     from app.api.v1 import router as v1_router  # noqa: PLC0415
 

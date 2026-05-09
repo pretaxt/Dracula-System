@@ -33,4 +33,10 @@ async def summary(_: CurrentUser, db: DbSession, request: Request) -> DashboardS
             StrategyPerf(**s) for s in data.get("strategy_performance", [])
         ],
         equity_by_exchange=data.get("equity_by_exchange", {}),
+        sharpe_30d=data.get("sharpe_30d", "0"),
+        max_exchange_concentration_pct=data.get("max_exchange_concentration_pct", "0"),
+        max_symbol_concentration_pct=data.get("max_symbol_concentration_pct", "0"),
+        api_latency_p95_ms=data.get("api_latency_p95_ms", "0"),
+        scan_perf=data.get("scan_perf", {}),
+        ccxt_health=data.get("ccxt_health", {}),
     )

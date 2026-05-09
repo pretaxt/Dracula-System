@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -49,6 +50,6 @@ class DashboardSummary(BaseModel):
     # 运维指标（5min 滑窗 in-memory）
     api_latency_p95_ms: str = "0"
     # {strategy: {p95_ms, count_5m}}
-    scan_perf: dict[str, dict[str, float | int]] = {}
+    scan_perf: dict = {}
     # {exchange: {calls_5m, error_rate_pct}}
-    ccxt_health: dict[str, dict[str, float | int]] = {}
+    ccxt_health: dict = {}
