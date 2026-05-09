@@ -203,7 +203,13 @@ export default function DashboardPage() {
                 { l: t('起始'), v: fmtOrDash(start) },
                 { l: t('最高'), v: fmtOrDash(high) },
                 { l: t('最低'), v: fmtOrDash(low) },
-                { l: 'Sharpe', v: '—', title: '待后端计算 / pending backend computation' },
+                {
+                  l: 'Sharpe',
+                  v: summary?.sharpe_30d != null
+                    ? Number(summary.sharpe_30d).toFixed(2)
+                    : '—',
+                  title: '30 天年化 Sharpe（基于日 PnL/equity）',
+                },
               ].map((s, i) => (
                 <div key={i} title={s.title}>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{s.l}</div>

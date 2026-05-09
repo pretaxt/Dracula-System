@@ -157,6 +157,10 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
 
     strategy_perf = await _get_strategy_performance(session)
 
+    sharpe_30d = _annualized_sharpe(series, total_equity)
+    max_ex_conc = _max_exchange_concentration(per_exchange_equity, total_equity)
+    max_sym_conc = await _max_symbol_concentration(session)
+
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),
         "realized_pnl_usd": str(round(Decimal(str(r_pnl)), 8)),
@@ -174,7 +178,81 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         "pnl_series_30d": series,
         "strategy_performance": strategy_perf,
         "equity_by_exchange": per_exchange_equity,
+        "sharpe_30d": str(round(sharpe_30d, 3)),
+        "max_exchange_concentration_pct": str(round(max_ex_conc, 2)),
+        "max_symbol_concentration_pct": str(round(max_sym_conc, 2)),
     }
+
+
+# ---------------------------------------------------------------------------
+# 风险 / 表现 衍生指标
+# ---------------------------------------------------------------------------
+
+
+def _annualized_sharpe(series: list[dict], total_equity: Decimal) -> Decimal:
+    """30 天年化 Sharpe ratio（基于日 PnL/equity 算）。
+
+    数据点 < 2 或 std=0 时返回 0。无风险收益假设为 0（加密无国债基准）。
+    """
+    import math  # noqa: PLC0415
+    if len(series) < 2 or total_equity <= 0:
+        return Decimal("0")
+    eq = float(total_equity)
+    rets: list[float] = []
+    for p in series:
+        try:
+            pnl = float(p.get("net_pnl_usd", 0))
+            rets.append(pnl / eq)
+        except (TypeError, ValueError):
+            continue
+    if len(rets) < 2:
+        return Decimal("0")
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / len(rets)
+    std = math.sqrt(var)
+    if std == 0:
+        return Decimal("0")
+    sharpe = (mean / std) * math.sqrt(365)  # 年化
+    return Decimal(str(sharpe))
+
+
+def _max_exchange_concentration(
+    per_exchange: dict[str, str], total_equity: Decimal
+) -> Decimal:
+    """单交易所最大占比 %，total_equity 缺失或 0 → 0。"""
+    if not per_exchange or total_equity <= 0:
+        return Decimal("0")
+    try:
+        max_eq = max(Decimal(str(v)) for v in per_exchange.values())
+    except (ValueError, ArithmeticError):
+        return Decimal("0")
+    return max_eq / total_equity * Decimal("100")
+
+
+async def _max_symbol_concentration(session: AsyncSession) -> Decimal:
+    """单币种最大占比 % (max symbol open notional / total open notional)。"""
+    rows = (
+        await session.execute(
+            select(PositionRecord.notes, PositionRecord.notional_usd).where(
+                PositionRecord.status == "open"
+            )
+        )
+    ).all()
+    if not rows:
+        return Decimal("0")
+    by_sym: dict[str, Decimal] = {}
+    total = Decimal("0")
+    for notes, notional in rows:
+        if notional is None:
+            continue
+        # notes 首行是 symbol（兼容 D.1+ 多行 + 旧记录）
+        sym = (notes or "").split("\n", 1)[0].split("@", 1)[0].strip() or "?"
+        n = Decimal(str(notional))
+        by_sym[sym] = by_sym.get(sym, Decimal("0")) + n
+        total += n
+    if total <= 0 or not by_sym:
+        return Decimal("0")
+    return max(by_sym.values()) / total * Decimal("100")
 
 
 # ---------------------------------------------------------------------------

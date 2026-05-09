@@ -780,16 +780,30 @@ export default function RiskPage() {
                     <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
                     <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>50%</span>
                   </div>
-                  <ProgressBar pct={0} tone="success" />
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 — (待后端实现)</div>
+                  {(() => {
+                    const exConc = parseFloat(summary?.max_exchange_concentration_pct ?? '0')
+                    return <>
+                      <ProgressBar pct={Math.min(100, exConc / 50 * 100)} tone={exConc > 50 ? 'blood' : 'success'} />
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
+                        当前 {summary === undefined ? '—' : `${exConc.toFixed(1)}%`}
+                      </div>
+                    </>
+                  })()}
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
                     <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>20%</span>
                   </div>
-                  <ProgressBar pct={0} tone="success" />
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 — (待后端实现)</div>
+                  {(() => {
+                    const symConc = parseFloat(summary?.max_symbol_concentration_pct ?? '0')
+                    return <>
+                      <ProgressBar pct={Math.min(100, symConc / 20 * 100)} tone={symConc > 20 ? 'blood' : 'success'} />
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
+                        当前 {summary === undefined ? '—' : `${symConc.toFixed(1)}%`}
+                      </div>
+                    </>
+                  })()}
                 </div>
               </>
             )

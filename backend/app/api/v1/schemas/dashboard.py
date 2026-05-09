@@ -40,3 +40,9 @@ class DashboardSummary(BaseModel):
     # 每个交易所的 USD 等值（来自 balance_service.get_per_exchange_equity）
     # 形如 {"binance": "102.39", "okx": "0.00"}；缺数据时为空 dict
     equity_by_exchange: dict[str, str] = {}
+    # 30 天年化 Sharpe（基于 pnl_series_30d / total_equity 算日 return）
+    sharpe_30d: str = "0"
+    # 单交易所最大占比 % (max(equity_by_exchange) / total_equity * 100)
+    max_exchange_concentration_pct: str = "0"
+    # 单币种最大占比 % (max symbol open notional / total open notional * 100)
+    max_symbol_concentration_pct: str = "0"
