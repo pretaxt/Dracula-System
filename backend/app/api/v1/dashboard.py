@@ -39,4 +39,5 @@ async def summary(_: CurrentUser, db: DbSession, request: Request) -> DashboardS
         api_latency_p95_ms=data.get("api_latency_p95_ms", "0"),
         scan_perf=data.get("scan_perf", {}),
         ccxt_health=data.get("ccxt_health", {}),
+        market_data_hub=data.get("market_data_hub", {}),
     )
