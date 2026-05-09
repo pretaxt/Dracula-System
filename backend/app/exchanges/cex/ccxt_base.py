@@ -368,8 +368,13 @@ class CCXTAdapter(ExchangeAdapter):
             params["clientOrderId"] = client_order_id
         if margin_mode:
             params["marginMode"] = margin_mode
+            # OKX UTA 还需显式 tdMode（CCXT 部分版本不会自动从 marginMode 翻译）
+            if self._exchange_id == "okx":
+                params["tdMode"] = margin_mode
         if side_effect:
-            params["sideEffectType"] = side_effect
+            # sideEffectType 是 Binance 现货保证金特有；OKX UTA cross-margin 自动借/还，无此概念
+            if self._exchange_id == "binance":
+                params["sideEffectType"] = side_effect
         if position_side:
             # Binance Hedge 模式必填；One-way 模式忽略此字段
             params["positionSide"] = position_side.upper()

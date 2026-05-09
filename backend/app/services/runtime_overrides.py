@@ -94,6 +94,8 @@ _SPOT_PERP_ALLOWED = {
     "stop_basis_widening_pct",
     # c — 方向独立入场阈值
     "entry_pct_premium", "entry_pct_discount",
+    # b — 入场时机过滤（防接飞刀）
+    "peak_window_minutes", "min_peak_dropoff_pct",
 }
 
 

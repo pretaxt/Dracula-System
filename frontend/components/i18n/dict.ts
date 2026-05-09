@@ -160,6 +160,8 @@ export const dict: Record<string, string> = {
   '候选币种': 'Candidate symbols',
   '同时持仓上限': 'Max concurrent positions',
   '基差扩大止损': 'Basis Widening Stop',
+  '峰值滑窗': 'Peak window',
+  '入场回落要求': 'Entry dropoff',
   '扫描候选门槛': 'Scan threshold',
   '实盘入场阈值': 'Live entry threshold',
   '仅展示': 'display only',

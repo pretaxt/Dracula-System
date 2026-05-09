@@ -245,6 +245,8 @@ def _spot_perp_cfg_response(session, app_state) -> SpotPerpConfigResponse:
         max_hold_hours=str(cfg.max_hold_hours),
         min_hold_minutes=str(cfg.min_hold_minutes),
         stop_basis_widening_pct=str(cfg.stop_basis_widening_pct),
+        peak_window_minutes=str(cfg.peak_window_minutes),
+        min_peak_dropoff_pct=str(cfg.min_peak_dropoff_pct),
         max_concurrent=cfg.max_concurrent,
         notional_per_position=str(cfg.notional_per_position),
         direction_filter=cfg.direction_filter,

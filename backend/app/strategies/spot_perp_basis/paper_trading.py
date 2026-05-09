@@ -83,6 +83,10 @@ class SpotPerpStrategyConfig:
     candidate_symbols: list[str] = field(default_factory=list)
     exchanges: list[str] = field(default_factory=list)
     scan_threshold_pct: Decimal = Decimal("0.10")
+    # b — 入场时机过滤（防接飞刀）：要求 |basis| 已从近 N 分钟峰值回落 ≥ M%
+    # 0 = 禁用（旧行为，见到阈值即入场）
+    peak_window_minutes: Decimal = Decimal("10")
+    min_peak_dropoff_pct: Decimal = Decimal("0.05")
 
     @classmethod
     def from_yaml(cls, data: dict | None) -> "SpotPerpStrategyConfig":
@@ -102,6 +106,12 @@ class SpotPerpStrategyConfig:
             min_hold_minutes=Decimal(str(exit_.get("min_hold_minutes", "5"))),
             stop_basis_widening_pct=Decimal(
                 str(exit_.get("stop_basis_widening_pct", "0.50") or "0"),
+            ),
+            peak_window_minutes=Decimal(
+                str(entry.get("peak_window_minutes", "10") or "0"),
+            ),
+            min_peak_dropoff_pct=Decimal(
+                str(entry.get("min_peak_dropoff_pct", "0.05") or "0"),
             ),
             max_concurrent=int(position.get("max_positions", MAX_CONCURRENT)),
             notional_per_position=Decimal(str(position.get("size_usd", NOTIONAL_PER_POSITION))),
@@ -125,6 +135,12 @@ class SpotPerpStrategyConfig:
             min_hold_minutes=Decimal(str(overrides.get("min_hold_minutes", self.min_hold_minutes))),
             stop_basis_widening_pct=Decimal(
                 str(overrides.get("stop_basis_widening_pct", self.stop_basis_widening_pct)),
+            ),
+            peak_window_minutes=Decimal(
+                str(overrides.get("peak_window_minutes", self.peak_window_minutes)),
+            ),
+            min_peak_dropoff_pct=Decimal(
+                str(overrides.get("min_peak_dropoff_pct", self.min_peak_dropoff_pct)),
             ),
             max_concurrent=int(overrides.get("max_concurrent", self.max_concurrent)),
             notional_per_position=Decimal(str(overrides.get("notional_per_position", self.notional_per_position))),
@@ -218,6 +234,9 @@ class SpotPerpPaperSession:
         # D.2.b 实时 funding：每 N 个 tick 刷新一次，避免每 60s 都打 API
         self._tick_counter = 0
         self._funding_cache: dict[str, Decimal] = {}  # uuid → cached funding USDT
+        # b — 入场时机过滤：每 symbol 维护近 N 分钟的 |basis| 滑窗
+        # key = symbol_pair (e.g. "BTC/USDT"), value = list of (timestamp_ms, abs_basis_pct)
+        self._basis_peak_cache: dict[str, list[tuple[int, Decimal]]] = {}
         # 显式 notional 参数兼容旧调用，覆盖 cfg
         if notional_per_position is not None:
             self._cfg = self._cfg.apply_overrides(
@@ -424,6 +443,10 @@ class SpotPerpPaperSession:
                     exit_reason=exit_reason or "unknown",
                 )
 
+        # b — 把本 tick 所有候选的 |basis| 写入滑窗（在过滤前更新，所有标的都要追踪）
+        now_ms_for_peak = int(now.timestamp() * 1000)
+        self._update_peak_cache(opps, now_ms_for_peak)
+
         slots = self._cfg.max_concurrent - (len(open_rows) - closed_count)
         opened_count = 0
         if slots > 0:
@@ -434,7 +457,21 @@ class SpotPerpPaperSession:
                     continue
                 # c — per-direction 入场阈值（discount 因 borrow + funding 双层成本默认更严）
                 threshold = self._cfg.entry_threshold_for(opp.direction)
-                if abs(Decimal(str(opp.basis_pct))) < threshold:
+                abs_basis = abs(Decimal(str(opp.basis_pct)))
+                if abs_basis < threshold:
+                    continue
+                # b — 入场时机过滤：要求 |basis| 已从近 N 分钟峰值回落 ≥ M%（防接飞刀）
+                pass_dropoff, dropoff = self._check_peak_dropoff(
+                    str(opp.symbol), abs_basis, now_ms_for_peak,
+                )
+                if not pass_dropoff:
+                    logger.info(
+                        "spot_perp_skip_peak_not_dropped",
+                        symbol=opp.symbol,
+                        abs_basis=str(abs_basis),
+                        dropoff=str(dropoff),
+                        required=str(self._cfg.min_peak_dropoff_pct),
+                    )
                     continue
 
                 meta: dict | None = None
@@ -549,27 +586,23 @@ class SpotPerpPaperSession:
                 position_side="SHORT",  # premium 永续做空
             )
         elif direction == "discount":
-            # D.2.c: discount 仅 Binance 实盘（OKX UTA 需独立 margin 配置，待后续接入）
-            if opp.exchange != "binance":
-                logger.info(
-                    "spot_perp_live_skip_discount_non_binance",
-                    symbol=opp.symbol, exchange=opp.exchange,
-                )
-                return None
-            # discount: SHORT spot via margin（自动借币卖出）+ LONG perp
+            # discount: SHORT spot via cross-margin（自动借币卖出）+ LONG perp
+            # - Binance: 需 MARGIN_BUY 标记借币；OKX UTA cross-margin 自动借/无需标记
+            is_binance = opp.exchange == "binance"
             spot_req = OrderRequest(
                 symbol=symbol, side=Side.SELL, size=qty,
                 reference_price=spot_px, exchange=opp.exchange,
                 instrument_type=InstrumentType.SPOT,
                 client_order_id=f"{client_id}s",
-                margin_mode="cross", side_effect="MARGIN_BUY",
+                margin_mode="cross",
+                side_effect="MARGIN_BUY" if is_binance else None,
             )
             perp_req = OrderRequest(
                 symbol=symbol, side=Side.BUY, size=qty,
                 reference_price=perp_px, exchange=opp.exchange,
                 reduce_only=False, instrument_type=InstrumentType.PERPETUAL,
                 client_order_id=f"{client_id}p",
-                position_side="LONG",  # discount 永续做多
+                position_side="LONG",  # discount 永续做多（Binance Hedge 模式必填，OKX 同名）
             )
         else:
             logger.warning("spot_perp_live_unknown_direction",
@@ -653,13 +686,16 @@ class SpotPerpPaperSession:
                 position_side="SHORT",  # 平掉之前开的 SHORT
             )
         elif direction == "discount":
-            # discount close: BUY spot 还币（AUTO_REPAY）+ SELL perp 平多
+            # discount close: BUY spot 还币 + SELL perp 平多
+            # - Binance: AUTO_REPAY 自动还币；OKX UTA cross-margin 买回时自动减债
+            is_binance = exchange == "binance"
             spot_close = OrderRequest(
                 symbol=symbol, side=Side.BUY, size=spot_size,
                 reference_price=entry_spot_px, exchange=exchange,
                 reduce_only=False,  # 借币不能 reduce_only
                 instrument_type=InstrumentType.SPOT,
-                margin_mode="cross", side_effect="AUTO_REPAY",
+                margin_mode="cross",
+                side_effect="AUTO_REPAY" if is_binance else None,
             )
             perp_close = OrderRequest(
                 symbol=symbol, side=Side.SELL, size=perp_size,
@@ -752,6 +788,50 @@ class SpotPerpPaperSession:
         except Exception:
             logger.debug("get_live_funding_failed", uuid=row.uuid, exc_info=True)
             return self._funding_cache.get(row.uuid, Decimal("0"))
+
+    # ------------------------------------------------------------------
+    # b — 入场时机过滤：基差峰值滑窗 + 回落判断
+    # ------------------------------------------------------------------
+
+    def _update_peak_cache(self, opps: list, now_ms: int) -> None:
+        """把本 tick 的所有候选 |basis| 写入对应 symbol 滑窗，淘汰过期条目。"""
+        window_min = self._cfg.peak_window_minutes
+        if window_min <= 0:
+            return
+        cutoff_ms = now_ms - int(window_min * 60 * 1000)
+        for opp in opps:
+            sym = str(opp.symbol)
+            abs_basis = abs(Decimal(str(opp.basis_pct)))
+            entries = self._basis_peak_cache.setdefault(sym, [])
+            entries.append((now_ms, abs_basis))
+            # 淘汰过期 + 容量上限（防内存膨胀）
+            self._basis_peak_cache[sym] = [
+                (t, b) for t, b in entries[-200:] if t >= cutoff_ms
+            ]
+
+    def _check_peak_dropoff(self, symbol_pair: str, current_abs_basis: Decimal, now_ms: int) -> tuple[bool, Decimal]:
+        """检查 |basis| 是否已从近 N 分钟峰值回落 ≥ min_peak_dropoff_pct。
+
+        返回 (是否通过, 当前回落幅度)。
+
+        - peak_window_minutes <= 0 或 min_peak_dropoff_pct <= 0 → 禁用，永远 True
+        - 缓存空（冷启动 / 新标的）→ True，避免错过首次机会
+        - 否则：peak - current_abs_basis ≥ dropoff 才 True
+        """
+        window_min = self._cfg.peak_window_minutes
+        dropoff_min = self._cfg.min_peak_dropoff_pct
+        if window_min <= 0 or dropoff_min <= 0:
+            return True, Decimal("0")
+        entries = self._basis_peak_cache.get(symbol_pair, [])
+        if not entries:
+            return True, Decimal("0")
+        cutoff_ms = now_ms - int(window_min * 60 * 1000)
+        valid = [(t, b) for t, b in entries if t >= cutoff_ms]
+        if not valid:
+            return True, Decimal("0")
+        peak = max(b for _, b in valid)
+        dropoff = peak - current_abs_basis
+        return dropoff >= dropoff_min, dropoff
 
     @staticmethod
     async def _fetch_funding_received(

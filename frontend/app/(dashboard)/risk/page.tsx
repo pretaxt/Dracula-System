@@ -106,6 +106,8 @@ export default function RiskPage() {
       exit_pct: spCfg.exit_pct,
       max_hold_hours: spCfg.max_hold_hours,
       stop_basis_widening_pct: spCfg.stop_basis_widening_pct,
+      peak_window_minutes: spCfg.peak_window_minutes,
+      min_peak_dropoff_pct: spCfg.min_peak_dropoff_pct,
       max_concurrent: spCfg.max_concurrent,
       notional_per_position: spCfg.notional_per_position,
       direction_filter: spCfg.direction_filter,
@@ -654,6 +656,52 @@ export default function RiskPage() {
                   />
                 ) : (
                   <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(spCfg.scan_threshold_pct).toFixed(2)}%</span>
+                )}
+              </div>
+            </div>
+
+            {/* b — 入场时机过滤：滑窗时长 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="入场时机过滤 — 追踪近 N 分钟 |基差| 峰值（防接飞刀）">
+                  峰值滑窗 (min)
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="1" min="0"
+                    value={spDraft.peak_window_minutes ?? spCfg.peak_window_minutes}
+                    onChange={(e) => setSpDraft({ ...spDraft, peak_window_minutes: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {Number(spCfg.peak_window_minutes) > 0
+                      ? `${Number(spCfg.peak_window_minutes).toFixed(0)}min`
+                      : '禁用'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* b — 入场时机过滤：最少回落幅度 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="最少回落幅度 — |基差| 必须从峰值回落 ≥ 该值才入场（0 = 禁用）">
+                  入场回落要求
+                </span>
+                {spEditing ? (
+                  <input
+                    type="number" step="0.01" min="0"
+                    value={spDraft.min_peak_dropoff_pct ?? spCfg.min_peak_dropoff_pct}
+                    onChange={(e) => setSpDraft({ ...spDraft, min_peak_dropoff_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {Number(spCfg.min_peak_dropoff_pct) > 0
+                      ? `${Number(spCfg.min_peak_dropoff_pct).toFixed(2)}%`
+                      : '禁用'}
+                  </span>
                 )}
               </div>
             </div>

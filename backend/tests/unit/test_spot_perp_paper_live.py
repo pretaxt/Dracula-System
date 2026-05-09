@@ -19,6 +19,7 @@ from app.execution.paper_broker import OrderResult
 from app.strategies.spot_perp_basis import paper_trading as pt
 from app.strategies.spot_perp_basis.paper_trading import (
     SpotPerpPaperSession,
+    SpotPerpStrategyConfig,
     _decode_notes,
     _encode_notes,
     _symbol_from_pair,
@@ -432,6 +433,35 @@ class TestOpenLiveDiscount:
         assert captured["spot"].margin_mode is None
         assert captured["perp"].side.value == "sell"
 
+    @pytest.mark.asyncio
+    async def test_okx_discount_uses_cross_no_side_effect(self):
+        """OKX UTA discount: cross-margin 自动借/还，不传 side_effect（与 Binance 不同）。"""
+        captured = {}
+
+        async def _record_pair(spot_req, perp_req):
+            captured["spot"] = spot_req
+            captured["perp"] = perp_req
+            return (
+                _result(filled_size="0.001", avg_price="50100", fees="0.04"),
+                _result(filled_size="0.001", avg_price="50000", fees="0.04"),
+            )
+
+        broker = MagicMock()
+        broker.execute_pair = AsyncMock(side_effect=_record_pair)
+        s = _session(live_mode=True, brokers={"okx": broker})
+        opp = _opp(direction="discount", spot=50100, perp=50000, basis_pct="-0.20", exchange="okx")
+        meta = await s._open_live(opp)
+        assert meta is not None, "OKX discount 应实盘开仓（不再硬跳过）"
+        assert meta["direction"] == "discount"
+        assert meta["exchange"] == "okx"
+        # spot 腿: SELL + cross margin（自动借），但 side_effect=None（OKX 无此概念）
+        assert captured["spot"].side.value == "sell"
+        assert captured["spot"].margin_mode == "cross"
+        assert captured["spot"].side_effect is None, "OKX UTA 不应传 sideEffectType"
+        # perp 腿: BUY (LONG)
+        assert captured["perp"].side.value == "buy"
+        assert captured["perp"].position_side == "LONG"
+
 
 class TestCloseLiveDiscount:
     @pytest.mark.asyncio
@@ -490,6 +520,35 @@ class TestCloseLiveDiscount:
         assert captured[0].margin_mode is None
         # perp BUY + reduce_only
         assert captured[1].side.value == "buy"
+        assert captured[1].reduce_only is True
+
+    @pytest.mark.asyncio
+    async def test_okx_discount_close_no_auto_repay(self):
+        """OKX UTA discount 平仓: cross-margin 买回时自动减债，不传 AUTO_REPAY。"""
+        captured = []
+
+        async def _record(req):
+            captured.append(req)
+            return _result(filled_size="0.001", avg_price="50050", fees="0.05")
+
+        broker = MagicMock()
+        broker.execute = AsyncMock(side_effect=_record)
+        s = _session(live_mode=True, brokers={"okx": broker})
+        out = await s._close_live("BTC/USDT", {
+            "exchange": "okx",
+            "direction": "discount",
+            "spot_size": "0.001",
+            "perp_size": "0.001",
+            "entry_spot_px": "50100",
+            "entry_perp_px": "50000",
+        })
+        assert out is not None
+        # spot BUY + cross margin（自动还债），无 AUTO_REPAY
+        assert captured[0].side.value == "buy"
+        assert captured[0].margin_mode == "cross"
+        assert captured[0].side_effect is None, "OKX UTA 不应传 sideEffectType"
+        # perp SELL reduce_only
+        assert captured[1].side.value == "sell"
         assert captured[1].reduce_only is True
 
     @pytest.mark.asyncio
@@ -820,3 +879,90 @@ class TestConfigYamlAndOverrides:
         assert new.entry_pct == base.entry_pct
         # 不可变：原对象未变
         assert base.entry_pct_premium == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# b — 入场时机过滤（peak dropoff）
+# ---------------------------------------------------------------------------
+
+
+class TestPeakDropoff:
+    """_check_peak_dropoff: 防接飞刀，要求 |basis| 已从峰值回落 ≥ M%。"""
+
+    def _session(self, window_min: Decimal, dropoff: Decimal):
+        runner = MagicMock()
+        runner.latest_opportunities = []
+        return SpotPerpPaperSession(
+            runner=runner,
+            strategy_config=SpotPerpStrategyConfig(
+                peak_window_minutes=window_min,
+                min_peak_dropoff_pct=dropoff,
+            ),
+        )
+
+    def test_disabled_when_window_zero(self):
+        s = self._session(Decimal("0"), Decimal("0.05"))
+        ok, _ = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), 1_000_000)
+        assert ok is True
+
+    def test_disabled_when_dropoff_zero(self):
+        s = self._session(Decimal("10"), Decimal("0"))
+        ok, _ = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), 1_000_000)
+        assert ok is True
+
+    def test_empty_cache_returns_true_cold_start(self):
+        s = self._session(Decimal("10"), Decimal("0.05"))
+        ok, dropoff = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), 1_000_000)
+        assert ok is True
+        assert dropoff == Decimal("0")
+
+    def test_basis_below_peak_meets_dropoff_passes(self):
+        """峰值 0.50%，当前 0.30%，回落 0.20% ≥ 要求 0.05% → 入场通过。"""
+        s = self._session(Decimal("10"), Decimal("0.05"))
+        # 写入历史峰值
+        now_ms = 1_000_000_000
+        # 模拟 5 分钟前的 0.50% 峰值
+        s._basis_peak_cache["BTC/USDT"] = [
+            (now_ms - 5 * 60_000, Decimal("0.50")),
+        ]
+        ok, dropoff = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), now_ms)
+        assert ok is True
+        assert dropoff == Decimal("0.20")
+
+    def test_basis_too_close_to_peak_fails(self):
+        """峰值 0.32%，当前 0.30%，回落仅 0.02% < 要求 0.05% → 入场拒绝（接飞刀）。"""
+        s = self._session(Decimal("10"), Decimal("0.05"))
+        now_ms = 1_000_000_000
+        s._basis_peak_cache["BTC/USDT"] = [
+            (now_ms - 60_000, Decimal("0.32")),
+        ]
+        ok, dropoff = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), now_ms)
+        assert ok is False
+        assert dropoff == Decimal("0.02")
+
+    def test_old_peak_outside_window_ignored(self):
+        """峰值 0.80% 但已经 20min 前（超出 10min 窗口）→ 忽略，按空 cache 处理。"""
+        s = self._session(Decimal("10"), Decimal("0.05"))
+        now_ms = 1_000_000_000
+        s._basis_peak_cache["BTC/USDT"] = [
+            (now_ms - 20 * 60_000, Decimal("0.80")),  # 20min ago, expired
+        ]
+        ok, _ = s._check_peak_dropoff("BTC/USDT", Decimal("0.30"), now_ms)
+        assert ok is True   # 空有效条目 → 通过（冷启动语义）
+
+    def test_update_peak_cache_writes_and_evicts(self):
+        s = self._session(Decimal("10"), Decimal("0.05"))
+        now_ms = 1_000_000_000
+        opp1 = SimpleNamespace(symbol="BTC/USDT", basis_pct=Decimal("0.30"))
+        opp2 = SimpleNamespace(symbol="ETH/USDT", basis_pct=Decimal("-0.40"))
+        s._update_peak_cache([opp1, opp2], now_ms)
+        assert ("BTC/USDT" in s._basis_peak_cache)
+        assert s._basis_peak_cache["BTC/USDT"][0][1] == Decimal("0.30")
+        # 负值取 abs
+        assert s._basis_peak_cache["ETH/USDT"][0][1] == Decimal("0.40")
+        # 老条目（11min 前）会被淘汰
+        s._basis_peak_cache["BTC/USDT"].insert(0, (now_ms - 11 * 60_000, Decimal("9")))
+        s._update_peak_cache([opp1], now_ms + 60_000)
+        # 11min ago 不在 10min window 内 → 应剔除
+        for t, _ in s._basis_peak_cache["BTC/USDT"]:
+            assert t > now_ms - 11 * 60_000

@@ -114,6 +114,9 @@ class SpotPerpConfigResponse(BaseModel):
     min_hold_minutes: str = "5"  # 防噪音平仓的最短持仓时长
     # a — 基差扩大止损阈值（"0" 禁用）
     stop_basis_widening_pct: str = "0.50"
+    # b — 入场时机过滤：滑窗时长 + 最少回落幅度（"0" 禁用）
+    peak_window_minutes: str = "10"
+    min_peak_dropoff_pct: str = "0.05"
     max_concurrent: int
     notional_per_position: str
     direction_filter: str   # "premium" | "discount" | "both"
@@ -133,6 +136,8 @@ class SpotPerpConfigPatchRequest(BaseModel):
     max_hold_hours: str | None = None
     min_hold_minutes: str | None = None
     stop_basis_widening_pct: str | None = None
+    peak_window_minutes: str | None = None
+    min_peak_dropoff_pct: str | None = None
     max_concurrent: int | None = None
     notional_per_position: str | None = None
     direction_filter: str | None = None
@@ -142,6 +147,7 @@ class SpotPerpConfigPatchRequest(BaseModel):
                      "exit_pct", "scan_threshold_pct",
                      "max_hold_hours", "min_hold_minutes",
                      "stop_basis_widening_pct",
+                     "peak_window_minutes", "min_peak_dropoff_pct",
                      "notional_per_position")
     @classmethod
     def validate_non_negative(cls, v: str | None) -> str | None:

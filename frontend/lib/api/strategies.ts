@@ -133,6 +133,10 @@ export type SpotPerpConfig = {
   min_hold_minutes?: string
   /** a — 基差扩大止损阈值（"0" 禁用） */
   stop_basis_widening_pct: string
+  /** b — 入场时机过滤：滑窗时长（分钟） */
+  peak_window_minutes: string
+  /** b — 入场时机过滤：最少回落幅度（pct，"0" 禁用） */
+  min_peak_dropoff_pct: string
   max_concurrent: number
   notional_per_position: string
   direction_filter: 'premium' | 'discount' | 'both'
@@ -151,6 +155,8 @@ export type SpotPerpConfigPatch = Partial<{
   max_hold_hours: string
   min_hold_minutes: string
   stop_basis_widening_pct: string
+  peak_window_minutes: string
+  min_peak_dropoff_pct: string
   max_concurrent: number
   notional_per_position: string
   direction_filter: 'premium' | 'discount' | 'both'
