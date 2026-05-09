@@ -633,13 +633,35 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                     const apr = parseFloat(o.apr_pct)
                     const dist = parseFloat(o.distance_to_entry_pct)
                     const minApr = parseFloat(fundingOpps?.min_apr_pct || '0')
-                    // 距入场 < 20% 入场门槛 算"接近"，高亮橘色
+                    const windowMin = fundingOpps?.pre_funding_window_minutes ?? 15
+                    // 距 funding 结算分钟数；判断是否在 15min 入场窗口内
+                    const minutesToFunding = o.next_funding_time_ms > 0
+                      ? (o.next_funding_time_ms - Date.now()) / 60000
+                      : Infinity
+                    const inWindow = minutesToFunding > 0 && minutesToFunding <= windowMin
                     const isNear = !o.passes_entry && dist > 0 && dist <= minApr * 0.2
-                    const aprColor = o.passes_entry
+                    // 状态分级：可开仓（达标+在窗口）/ 等窗口（达标但等结算）/ 接近（差一点）/ 候选
+                    const canOpen = o.passes_entry && inWindow
+                    const waiting = o.passes_entry && !inWindow
+                    const aprColor = canOpen
                       ? 'var(--accent-emerald)'
+                      : waiting
+                      ? 'var(--accent-azure)'
                       : isNear
                       ? 'var(--accent-gold)'
                       : 'var(--text-secondary)'
+                    const distColor = canOpen
+                      ? 'var(--accent-emerald)'
+                      : waiting
+                      ? 'var(--accent-azure)'
+                      : isNear
+                      ? 'var(--accent-gold)'
+                      : 'var(--text-tertiary)'
+                    const distLabel = canOpen
+                      ? `✓ ${t('已达')}`
+                      : waiting
+                      ? `⏱ ${minutesToFunding < 60 ? `${minutesToFunding.toFixed(0)}min` : `${(minutesToFunding / 60).toFixed(1)}h`}`
+                      : `−${dist.toFixed(2)}%`
                     return (
                       <tr
                         key={`${o.exchange}-${o.symbol}`}
@@ -657,15 +679,15 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                         <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
                           {(parseFloat(o.funding_rate) * 100).toFixed(4)}%
                         </td>
-                        <td style={{ padding: '12px', textAlign: 'right', color: o.passes_entry ? 'var(--accent-emerald)' : isNear ? 'var(--accent-gold)' : 'var(--text-tertiary)' }}>
-                          {o.passes_entry ? `✓ ${t('已达')}` : `−${dist.toFixed(2)}%`}
+                        <td style={{ padding: '12px', textAlign: 'right', color: distColor }}>
+                          {distLabel}
                         </td>
                         <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
                           {o.history_positive_count}/{o.history_total_count}
                         </td>
                         <td style={{ padding: '12px' }}>
-                          <Badge tone={o.passes_entry ? 'active' : isNear ? 'warn' : 'paused'}>
-                            {o.passes_entry ? t('可开仓') : isNear ? t('接近') : t('候选')}
+                          <Badge tone={canOpen ? 'active' : waiting ? 'info' : isNear ? 'warn' : 'paused'}>
+                            {canOpen ? t('可开仓') : waiting ? t('等窗口') : isNear ? t('接近') : t('候选')}
                           </Badge>
                         </td>
                       </tr>

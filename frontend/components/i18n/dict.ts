@@ -180,6 +180,7 @@ export const dict: Record<string, string> = {
   '历史正费率': 'History positive',
   '已达': 'Reached',
   '可开仓': 'Open-able',
+  '等窗口': 'Awaiting window',
   '接近': 'Near',
   '候选': 'Candidate',
   '当前无符合候选门槛的标的': 'No candidates above scan threshold',

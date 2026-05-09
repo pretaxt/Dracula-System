@@ -95,6 +95,8 @@ class FundingRateOpportunitiesResponse(BaseModel):
     last_scan_at: datetime | None
     min_apr_pct: str                    # 当前实盘入场门槛（供 UI 显示参考线）
     scan_threshold_apr_pct: str         # 当前候选展示门槛
+    # 结算前 N 分钟入场窗口（UI 据此区分「可开仓」与「等窗口」徽章）
+    pre_funding_window_minutes: float = 15.0
     data: list[FundingRateOpportunityOut]
 
 

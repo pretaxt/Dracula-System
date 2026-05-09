@@ -106,6 +106,8 @@ export type FundingRateOpportunitiesResponse = {
   last_scan_at: string | null
   min_apr_pct: string
   scan_threshold_apr_pct: string
+  /** 结算前 N 分钟入场窗口；UI 区分「可开仓」与「等窗口」 */
+  pre_funding_window_minutes?: number
   data: FundingRateOpportunity[]
 }
 

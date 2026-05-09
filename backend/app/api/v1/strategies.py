@@ -154,11 +154,15 @@ async def funding_rate_opportunities(
             passes_entry=apr >= min_apr,  # request-time 现算，PATCH min_apr 即时反映
             distance_to_entry_pct=str(distance.quantize(Decimal("0.01"))),
         ))
+    # paper_session 持有真实的 pre_funding_window_minutes（默认 15）
+    paper = getattr(request.app.state, "paper_session", None)
+    pre_window = float(getattr(paper, "_pre_funding_window_min", 15.0) or 15.0)
     return FundingRateOpportunitiesResponse(
         running=runner.is_running,
         last_scan_at=runner.last_scan_at,
         min_apr_pct=str(min_apr),
         scan_threshold_apr_pct=str(cfg.effective_scan_threshold),
+        pre_funding_window_minutes=pre_window,
         data=out,
     )
 
