@@ -12,6 +12,7 @@ class RiskLimitsOut(BaseModel):
     max_hold_hours: str
     min_apr_pct: str
     max_total_notional_usd: str
+    scan_threshold_apr_pct: str = "0"   # 0 = 回退用 min_apr_pct
 
 
 class RiskLimitsPatch(BaseModel):
@@ -20,6 +21,7 @@ class RiskLimitsPatch(BaseModel):
     max_hold_hours: str | None = None
     min_apr_pct: str | None = None
     max_total_notional_usd: str | None = None
+    scan_threshold_apr_pct: str | None = None
     confirm_widening: bool = False
 
 

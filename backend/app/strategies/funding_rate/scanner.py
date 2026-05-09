@@ -116,9 +116,9 @@ class FundingRateOpportunity:
     表示可以在 `exchange` 上针对 `symbol` 建立
     Delta-中性仓位(现货多 + 永续空)的机会。
 
-    ``passes_entry`` 区分"展示候选"与"实盘可开"：
-      True  → APR ≥ min_apr_pct，paper_trading 会真实开仓
-      False → APR ∈ [scan_threshold_apr_pct, min_apr_pct)，仅供 UI 展示"接近开仓"
+    "是否到入场阈值"由 ``apr_pct >= cfg.min_apr_pct`` 在调用方
+    （paper_trading._open_positions / API endpoint）现算，
+    避免 PATCH min_apr_pct 后已缓存对象内存值过期。
     """
 
     symbol: Symbol
@@ -128,7 +128,6 @@ class FundingRateOpportunity:
     perp_orderbook: OrderBook
     history_positive_count: int = 0
     history_total_count: int = 0
-    passes_entry: bool = True
 
     @property
     def apr_pct(self) -> Decimal:
@@ -348,7 +347,6 @@ class FundingRateScanner:
                 perp_orderbook=perp_ob,
                 history_positive_count=positive_count,
                 history_total_count=total_count,
-                passes_entry=apr_pct >= self._config.min_apr_pct,
             )
             log.info(
                 "opportunity_found",

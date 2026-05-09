@@ -177,6 +177,9 @@ export const dict: Record<string, string> = {
   '候选': 'Candidate',
   '当前无符合候选门槛的标的': 'No candidates above scan threshold',
   '扫描候选门槛 APR ≥': 'Scan threshold APR ≥',
+  '候选展示门槛': 'Candidate threshold',
+  '候选展示门槛 — APR ≥ 该值进 UI 候选表（仅展示，不实盘开仓；0 = 回退用扫描最低 APR）':
+    'Candidate threshold — symbols with APR ≥ this value enter UI candidate list (display only, no live entry; 0 = fallback to scan min APR)',
   '（仅展示），实盘入场阈值 APR ≥': '(display only); live entry APR ≥',
   '（结算前 15 分钟内自动开仓） · 60 秒扫描': '(auto-open in 15min pre-funding window) · 60s scan',
   '单笔名义规模': 'Per-position notional',

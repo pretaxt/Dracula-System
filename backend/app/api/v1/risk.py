@@ -22,6 +22,7 @@ def _limits_to_out(limits: RiskLimits) -> RiskLimitsOut:
         max_hold_hours=str(limits.max_hold_hours),
         min_apr_pct=str(limits.min_apr_pct),
         max_total_notional_usd=str(limits.max_total_notional_usd),
+        scan_threshold_apr_pct=str(getattr(limits, "scan_threshold_apr_pct", Decimal("0"))),
     )
 
 
@@ -79,16 +80,17 @@ async def patch_limits(
 def _propagate_limits_to_runtime(app_state, patch: dict) -> None:
     """把 risk_limits PATCH 同步到所有读到它的运行时组件。
 
-    - paper_session._scanner._config.min_apr_pct
-    - runner._scanner._config.min_apr_pct
+    - paper_session._scanner._config.min_apr_pct / scan_threshold_apr_pct
+    - runner._scanner._config.min_apr_pct / scan_threshold_apr_pct
     - app_state.strategy_cfg（让 /strategies/status 显示一致）
     """
     new_apr = patch.get("min_apr_pct")
     new_max_pos = patch.get("max_positions")
     new_max_notional = patch.get("max_total_notional_usd")
+    new_scan_thresh = patch.get("scan_threshold_apr_pct")
 
-    # 更新 scanner config —— scanner 在 scan() 里读 self._config.min_apr_pct
-    if new_apr is not None:
+    # 更新 scanner config —— scanner 在 scan() 里读 self._config.{min_apr_pct,scan_threshold_apr_pct}
+    if new_apr is not None or new_scan_thresh is not None:
         for owner_name in ("paper_session", "runner"):
             owner = getattr(app_state, owner_name, None)
             if owner is None:
@@ -97,9 +99,16 @@ def _propagate_limits_to_runtime(app_state, patch: dict) -> None:
             if scanner is None:
                 continue
             scfg = getattr(scanner, "_config", None)
-            if scfg is not None and hasattr(scfg, "min_apr_pct"):
+            if scfg is None:
+                continue
+            if new_apr is not None and hasattr(scfg, "min_apr_pct"):
                 try:
                     scfg.min_apr_pct = Decimal(str(new_apr))
+                except Exception:
+                    pass
+            if new_scan_thresh is not None and hasattr(scfg, "scan_threshold_apr_pct"):
+                try:
+                    scfg.scan_threshold_apr_pct = Decimal(str(new_scan_thresh))
                 except Exception:
                     pass
 
@@ -112,6 +121,8 @@ def _propagate_limits_to_runtime(app_state, patch: dict) -> None:
             cfg.setdefault("position", {})["max_positions"] = int(new_max_pos)
         if new_max_notional is not None:
             cfg.setdefault("risk", {})["max_total_notional_usd"] = str(new_max_notional)
+        if new_scan_thresh is not None:
+            cfg.setdefault("entry", {})["scan_threshold_apr_pct"] = str(new_scan_thresh)
 
 
 # ---------------------------------------------------------------------------

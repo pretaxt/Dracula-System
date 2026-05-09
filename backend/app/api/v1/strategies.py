@@ -151,7 +151,7 @@ async def funding_rate_opportunities(
             history_total_count=opp.history_total_count,
             spot_depth_usd=str(opp.spot_depth_usd.quantize(Decimal("1"))),
             perp_depth_usd=str(opp.perp_depth_usd.quantize(Decimal("1"))),
-            passes_entry=opp.passes_entry,
+            passes_entry=apr >= min_apr,  # request-time 现算，PATCH min_apr 即时反映
             distance_to_entry_pct=str(distance.quantize(Decimal("0.01"))),
         ))
     return FundingRateOpportunitiesResponse(

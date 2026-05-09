@@ -235,15 +235,18 @@ class PaperTradingSession:
         """对每个机会尝试开仓。
 
         过滤顺序：
-        0. opp.passes_entry == False 跳过（候选展示用，APR 未到入场门槛）
+        0. APR < scanner.min_apr_pct 跳过（现算，避免 PATCH 后 cached opp 过期）
         1. 资金费结算前 N 分钟窗口内才允许开仓（默认 15min）
         2. 已有同标的持仓则跳过
         3. RiskLimitError 和 ValueError 静默跳过
         """
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         window_ms = int(self._pre_funding_window_min * 60 * 1000)
+        # 现算 min_apr — 防御式读取（测试 mock 可能没 _config，回退 0 = 全过）
+        scfg = getattr(self._scanner, "_config", None)
+        min_apr = getattr(scfg, "min_apr_pct", Decimal("0")) if scfg else Decimal("0")
         for opp in opportunities:
-            if not opp.passes_entry:
+            if opp.apr_pct < min_apr:
                 continue
             time_to_funding_ms = opp.funding_rate.next_funding_time - now_ms
             if time_to_funding_ms <= 0 or time_to_funding_ms > window_ms:

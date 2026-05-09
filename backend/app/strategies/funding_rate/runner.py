@@ -136,7 +136,9 @@ class FundingRateRunner:
         # 用本次扫到的真实 next_funding_time 更新 schedule cache
         self._update_schedule(opportunities, scanned_at)
 
-        passing = sum(1 for o in opportunities if o.passes_entry)
+        # 现算 passes_entry（基于当前 cfg.min_apr_pct，不读 stored 字段）
+        min_apr = self._scanner._config.min_apr_pct
+        passing = sum(1 for o in opportunities if o.apr_pct >= min_apr)
         logger.info(
             "funding_rate_scan_complete",
             opportunities=len(opportunities),

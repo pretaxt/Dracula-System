@@ -48,7 +48,8 @@ def save_overrides(patch: dict[str, Any]) -> None:
 
     仅持久化白名单字段，避免误存敏感数据。"""
     allowed = {"min_apr_pct", "max_positions", "max_total_notional_usd",
-               "stop_loss_pct", "max_hold_hours"}
+               "stop_loss_pct", "max_hold_hours",
+               "scan_threshold_apr_pct"}
     filtered = {k: v for k, v in patch.items() if k in allowed and v is not None}
     if not filtered:
         return
@@ -163,4 +164,6 @@ def apply_to_strategy_cfg(cfg: dict, overrides: dict[str, Any]) -> dict:
         cfg.setdefault("risk", {})["stop_loss_pct"] = overrides["stop_loss_pct"]
     if "max_hold_hours" in overrides:
         cfg.setdefault("exit", {})["max_hold_hours"] = overrides["max_hold_hours"]
+    if "scan_threshold_apr_pct" in overrides:
+        cfg.setdefault("entry", {})["scan_threshold_apr_pct"] = overrides["scan_threshold_apr_pct"]
     return cfg

@@ -21,6 +21,7 @@ type RiskLimits = {
   max_hold_hours: string
   min_apr_pct: string
   max_total_notional_usd: string
+  scan_threshold_apr_pct?: string   // #01 候选展示门槛（"0" 回退用 min_apr_pct）
 }
 
 const ACTION_COLOR: Record<string, string> = {
@@ -60,12 +61,14 @@ export default function RiskPage() {
     max_total_notional_usd: string
     stop_loss_pct: string
     max_hold_hours: string
+    scan_threshold_apr_pct: string
   }>({
     min_apr_pct: '',
     max_positions: '',
     max_total_notional_usd: '',
     stop_loss_pct: '',
     max_hold_hours: '',
+    scan_threshold_apr_pct: '',
   })
   const [confirmWiden, setConfirmWiden] = useState(false)
 
@@ -140,6 +143,7 @@ export default function RiskPage() {
       max_total_notional_usd: data.max_total_notional_usd,
       stop_loss_pct: data.stop_loss_pct,
       max_hold_hours: data.max_hold_hours,
+      scan_threshold_apr_pct: data.scan_threshold_apr_pct ?? '0',
     })
     setEditing(true)
   }
@@ -157,6 +161,7 @@ export default function RiskPage() {
     if (draft.max_total_notional_usd !== data.max_total_notional_usd) patch.max_total_notional_usd = draft.max_total_notional_usd
     if (draft.stop_loss_pct !== data.stop_loss_pct) patch.stop_loss_pct = draft.stop_loss_pct
     if (draft.max_hold_hours !== data.max_hold_hours) patch.max_hold_hours = draft.max_hold_hours
+    if (draft.scan_threshold_apr_pct !== (data.scan_threshold_apr_pct ?? '0')) patch.scan_threshold_apr_pct = draft.scan_threshold_apr_pct
     if (Object.keys(patch).length === 0) {
       cancelEdit()
       return
@@ -259,6 +264,16 @@ export default function RiskPage() {
               </div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }} title={t('候选展示门槛 — APR ≥ 该值进 UI 候选表（仅展示，不实盘开仓；0 = 回退用扫描最低 APR）')}>{t('候选展示门槛')}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {parseFloat(data.scan_threshold_apr_pct ?? '0') > 0
+                      ? `${parseFloat(data.scan_threshold_apr_pct ?? '0').toFixed(2)}%`
+                      : t('回退')}
+                  </span>
+                </div>
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                   <span style={{ color: 'var(--text-secondary)' }}>{t('最大同时仓位')}</span>
                   <span style={{ fontFamily: 'var(--font-mono)' }}>{maxPos}</span>
                 </div>
@@ -295,6 +310,19 @@ export default function RiskPage() {
                   step="0.1"
                   value={draft.min_apr_pct}
                   onChange={(e) => setDraft((d) => ({ ...d, min_apr_pct: e.target.value }))}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, marginBottom: 6, color: 'var(--text-secondary)' }} title={t('候选展示门槛 — APR ≥ 该值进 UI 候选表（仅展示，不实盘开仓；0 = 回退用扫描最低 APR）')}>
+                  {t('候选展示门槛')} (%)
+                </div>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  value={draft.scan_threshold_apr_pct}
+                  onChange={(e) => setDraft((d) => ({ ...d, scan_threshold_apr_pct: e.target.value }))}
                   style={inputStyle}
                 />
               </div>

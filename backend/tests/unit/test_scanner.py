@@ -316,8 +316,8 @@ class TestScanThresholdAndPassesEntry:
         assert cfg.effective_scan_threshold == Decimal("25.0")
 
     @pytest.mark.asyncio
-    async def test_candidate_above_scan_below_entry_marked_not_passes(self):
-        """APR ∈ [scan_threshold, min_apr_pct) → 进 opps_list，passes_entry=False"""
+    async def test_candidate_above_scan_below_entry_apr_check(self):
+        """APR ∈ [scan_threshold, min_apr_pct) → 进 opps_list，但 APR 仍 < min_apr_pct"""
         adapter = _make_adapter(
             funding_rate="0.000050",   # APR ~5.475%
             depth_usd=100_000,
@@ -334,13 +334,13 @@ class TestScanThresholdAndPassesEntry:
         )
         results = await scanner.scan()
         assert len(results) == 1
-        assert results[0].passes_entry is False
+        # passes_entry 在调用方现算（API endpoint / paper_trading），不存 dataclass
         assert results[0].apr_pct < Decimal("25")
         assert results[0].apr_pct >= Decimal("5")
 
     @pytest.mark.asyncio
-    async def test_opp_above_entry_marked_passes(self):
-        """APR ≥ min_apr_pct → passes_entry=True"""
+    async def test_opp_above_entry_apr_check(self):
+        """APR ≥ min_apr_pct → 进 opps_list，APR 也 ≥ min_apr_pct（调用方据此现算 passes_entry）"""
         adapter = _make_adapter(
             funding_rate="0.0003",   # APR ~32.85%
             depth_usd=100_000,
@@ -357,7 +357,7 @@ class TestScanThresholdAndPassesEntry:
         )
         results = await scanner.scan()
         assert len(results) == 1
-        assert results[0].passes_entry is True
+        assert results[0].apr_pct >= Decimal("25")
 
     @pytest.mark.asyncio
     async def test_below_scan_threshold_filtered_out(self):

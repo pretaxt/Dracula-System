@@ -76,6 +76,9 @@ class RiskLimits:
 
     # 费率级
     min_apr_pct: Decimal = Decimal("10.0")
+    # #01 候选展示门槛（< min_apr_pct，仅 UI 显示"接近开仓"，不实盘开）
+    # 0 = 回退用 min_apr_pct（旧行为）
+    scan_threshold_apr_pct: Decimal = Decimal("0")
 
     @classmethod
     def from_yaml(cls, cfg: dict) -> "RiskLimits":
@@ -110,6 +113,7 @@ class RiskLimits:
             stop_loss_pct=_d("stop_loss_pct", Decimal("2.0")),
             max_hold_hours=_d("max_hold_hours", Decimal("168")),
             min_apr_pct=_d("min_apr_pct", Decimal("10.0"), src=entry),
+            scan_threshold_apr_pct=_d("scan_threshold_apr_pct", Decimal("0"), src=entry),
         )
 
 
