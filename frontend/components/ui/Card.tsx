@@ -13,7 +13,7 @@ type CardProps = {
 export function Card({ children, style, className, hoverable = false }: CardProps) {
   return (
     <div
-      className={className}
+      className={`card${className ? ' ' + className : ''}`}
       style={{
         background: 'var(--bg-card)',
         border: '1px solid var(--border-subtle)',
@@ -47,7 +47,7 @@ export function Card({ children, style, className, hoverable = false }: CardProp
 export function CardElevated({ children, style, className }: CardProps) {
   return (
     <div
-      className={className}
+      className={`card-elevated${className ? ' ' + className : ''}`}
       style={{
         background:
           'linear-gradient(180deg, var(--bg-card) 0%, var(--bg-base) 100%)',

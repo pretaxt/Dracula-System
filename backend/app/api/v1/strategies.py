@@ -175,6 +175,7 @@ def _spot_perp_cfg_response(session, app_state) -> SpotPerpConfigResponse:
         entry_pct=str(cfg.entry_pct),
         exit_pct=str(cfg.exit_pct),
         max_hold_hours=str(cfg.max_hold_hours),
+        min_hold_minutes=str(cfg.min_hold_minutes),
         max_concurrent=cfg.max_concurrent,
         notional_per_position=str(cfg.notional_per_position),
         direction_filter=cfg.direction_filter,

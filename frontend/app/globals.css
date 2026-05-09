@@ -227,6 +227,33 @@ body::after {
   -webkit-overflow-scrolling: touch;
 }
 
+/* P2.4 移动端: 任意 .data-table 在窄屏自动允许其父容器横滑
+   避免桌面优先布局在手机/平板上挤压列宽看不清数据 */
+@media (max-width: 1023px) {
+  /* 让放在 .card-elevated/.card 内的表格父容器自动横滑 */
+  .card-elevated:has(.data-table),
+  .card:has(.data-table) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .data-table {
+    min-width: max-content;
+    white-space: nowrap;
+  }
+}
+
+/* 移动端: 卡片 padding 减半节省屏宽 */
+@media (max-width: 768px) {
+  .card-elevated,
+  .card {
+    padding: 16px !important;
+  }
+  /* SectionHeader 在小屏 wrap */
+  .section-header {
+    flex-wrap: wrap;
+  }
+}
+
 /* ============================================================
  * 通知抽屉 (P2.3)
  * ============================================================ */

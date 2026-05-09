@@ -365,12 +365,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         </CardElevated>
       )}
 
-      {/* spot-perp 实时机会(B.1 监控扫描器) */}
+      {/* spot-perp 实时机会扫描器 */}
       {strategy.id === 'spot-perp' && (
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('实时基差机会')}
-            subtitle="LIVE BASIS OPPORTUNITIES · BINANCE"
+            subtitle="LIVE BASIS OPPORTUNITIES · BINANCE + OKX"
             right={
               <span
                 style={{
@@ -489,7 +489,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               color: 'var(--text-muted)',
             }}
           >
-            {t('B.1: 仅监控扫描,自动开平仓 (B.2) 待实现 · 阈值 |basis| ≥ 0.10% · 5 秒刷新')}
+            {t('扫描候选门槛 |basis| ≥ 0.10%（仅展示），实盘入场阈值 |basis| ≥ 0.25%（升水/贴水双向自动开平仓） · 60 秒扫描')}
           </div>
         </CardElevated>
       )}

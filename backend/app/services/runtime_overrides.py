@@ -86,9 +86,9 @@ def save_overrides(patch: dict[str, Any]) -> None:
 
 
 _SPOT_PERP_ALLOWED = {
-    "entry_pct", "exit_pct", "max_hold_hours", "max_concurrent",
-    "notional_per_position", "direction_filter", "scan_threshold_pct",
-    "candidate_symbols", "exchanges",
+    "entry_pct", "exit_pct", "max_hold_hours", "min_hold_minutes",
+    "max_concurrent", "notional_per_position", "direction_filter",
+    "scan_threshold_pct", "candidate_symbols", "exchanges",
 }
 
 

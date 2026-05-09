@@ -680,7 +680,7 @@ export default function RiskPage() {
                 <tr key={`${e.time}-${i}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                   <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{formatEventTime(e.time)}</td>
                   <td style={{ padding: '10px 12px' }}><Badge tone="warn">{e.tier}</Badge></td>
-                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{e.event}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{t(e.event)}</td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{e.trigger}</td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: isNegativeValue ? 'var(--accent-blood)' : 'var(--text-primary)' }}>{e.value}</td>
                   <td style={{ padding: '10px 12px', fontSize: 12, color: ACTION_COLOR[e.action] || 'var(--text-tertiary)' }}>

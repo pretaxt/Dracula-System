@@ -17,13 +17,14 @@ strategy_type: spot_perp
 enabled: true
 
 entry:
-  min_basis_pct: 0.20           # 入场阈值（fee 0.16% + 缓冲；2026-05-09 从 0.30 调低至 0.20 增加触发频率）
+  min_basis_pct: 0.50           # 入场阈值（D.2.b 实战调优 0.25→0.50：留滑点 0.20% + 手续费 0.16% + 利润 0.14%）
   scan_threshold_pct: 0.10      # scanner 候选门槛（API 暴露所有 ≥0.10% 的机会，不一定开仓）
   min_orderbook_depth_usd: 5000
 
 exit:
-  basis_convergence_pct: 0.03   # 收敛平仓阈值
+  basis_convergence_pct: 0.10   # 收敛平仓阈值（D.2.b 实战调优 0.03→0.10 防噪音）
   max_hold_hours: 12.0          # 持仓超时强平
+  min_hold_minutes: 5.0         # 最短持仓（防 1-3min 内 scanner 抖动触发噪音平仓）
 
 position:
   max_positions: 3              # 同时持仓上限（含 paper 试样）

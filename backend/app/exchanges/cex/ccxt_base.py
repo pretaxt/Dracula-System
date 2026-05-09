@@ -338,6 +338,7 @@ class CCXTAdapter(ExchangeAdapter):
         client_order_id: Optional[str] = None,
         margin_mode: Optional[str] = None,
         side_effect: Optional[str] = None,
+        position_side: Optional[str] = None,
         extra_params: Optional[Dict[str, Any]] = None,
     ) -> Order:
         """下单。
@@ -353,9 +354,10 @@ class CCXTAdapter(ExchangeAdapter):
             其他直传 ccxt 的 params（高级用法，调用方自己保证 key 正确）。
         """
         client = self._client(instrument)
-        params: Dict[str, Any] = {
-            "timeInForce": time_in_force.value,
-        }
+        params: Dict[str, Any] = {}
+        # MARKET 订单不需要 timeInForce（Binance margin 严格校验报 -1106）
+        if order_type != OrderType.MARKET:
+            params["timeInForce"] = time_in_force.value
         if reduce_only:
             params["reduceOnly"] = True
         if post_only:
@@ -366,6 +368,11 @@ class CCXTAdapter(ExchangeAdapter):
             params["marginMode"] = margin_mode
         if side_effect:
             params["sideEffectType"] = side_effect
+        if position_side:
+            # Binance Hedge 模式必填；One-way 模式忽略此字段
+            params["positionSide"] = position_side.upper()
+            # reduceOnly 不能与 hedge 模式同时存在（hedge 用 positionSide 区分）
+            params.pop("reduceOnly", None)
         if extra_params:
             params.update(extra_params)
 

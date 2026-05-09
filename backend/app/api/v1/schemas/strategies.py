@@ -75,6 +75,7 @@ class SpotPerpConfigResponse(BaseModel):
     entry_pct: str          # "0.30" 表示 0.30%
     exit_pct: str           # "0.03"
     max_hold_hours: str     # "12"
+    min_hold_minutes: str = "5"  # 防噪音平仓的最短持仓时长
     max_concurrent: int
     notional_per_position: str
     direction_filter: str   # "premium" | "discount" | "both"
@@ -90,13 +91,15 @@ class SpotPerpConfigPatchRequest(BaseModel):
     entry_pct: str | None = None
     exit_pct: str | None = None
     max_hold_hours: str | None = None
+    min_hold_minutes: str | None = None
     max_concurrent: int | None = None
     notional_per_position: str | None = None
     direction_filter: str | None = None
     scan_threshold_pct: str | None = None
 
     @field_validator("entry_pct", "exit_pct", "scan_threshold_pct",
-                     "max_hold_hours", "notional_per_position")
+                     "max_hold_hours", "min_hold_minutes",
+                     "notional_per_position")
     @classmethod
     def validate_non_negative(cls, v: str | None) -> str | None:
         if v is not None and float(v) < 0:

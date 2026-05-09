@@ -126,6 +126,23 @@ export const dict: Record<string, string> = {
   'PnL 计算': 'PnL Computation',
   '真实成交价 + 资金费 + 借币利息(实时显示)':
     'Real fill prices + funding + borrow interest (real-time)',
+  '扫描候选门槛 |basis| ≥ 0.10%（仅展示），实盘入场阈值 |basis| ≥ 0.25%（升水/贴水双向自动开平仓） · 60 秒扫描':
+    'Scan candidate threshold |basis| ≥ 0.10% (display only); live entry |basis| ≥ 0.25% (auto open/close, premium + discount) · 60s scan',
+
+  // ===== 订单 side / event 文案 =====
+  '开仓': 'Open',
+  '平仓': 'Close',
+  'MARKET': 'Market',
+  '止损触发': 'Stop Loss',
+  '资金费率反转': 'Funding Rate Reversal',
+  '持仓超时平仓': 'Max Hold Close',
+  '基差收敛平仓': 'Basis Convergence Close',
+  '强平': 'Force Close',
+  '手动平仓': 'Manual Close',
+  '实时基差机会': 'Live Basis Opportunities',
+  '扫描中': 'Scanning',
+  '未启动': 'Not Started',
+  '上次扫描': 'Last scan',
   '方向为升水(永续价 > 现货价；贴水方向需要现货保证金,二期开放)':
     'Direction = premium (perp > spot; discount requires spot margin, opens in Phase 2)',
   '同时持仓数小于 3 笔': 'Concurrent positions < 3',

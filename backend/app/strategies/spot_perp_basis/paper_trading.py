@@ -69,6 +69,7 @@ class SpotPerpStrategyConfig:
     notional_per_position: Decimal = NOTIONAL_PER_POSITION
     max_concurrent: int = MAX_CONCURRENT
     max_hold_hours: Decimal = MAX_HOLD_HOURS
+    min_hold_minutes: Decimal = Decimal("5")  # 防 scanner 抖动 → 1-3min 内噪音平仓
     entry_pct: Decimal = ENTRY_PCT
     exit_pct: Decimal = EXIT_PCT
     round_trip_fee_usd: Decimal = ROUND_TRIP_FEE_USD
@@ -90,6 +91,7 @@ class SpotPerpStrategyConfig:
             scan_threshold_pct=Decimal(str(entry.get("scan_threshold_pct", "0.10"))),
             exit_pct=Decimal(str(exit_.get("basis_convergence_pct", EXIT_PCT))),
             max_hold_hours=Decimal(str(exit_.get("max_hold_hours", MAX_HOLD_HOURS))),
+            min_hold_minutes=Decimal(str(exit_.get("min_hold_minutes", "5"))),
             max_concurrent=int(position.get("max_positions", MAX_CONCURRENT)),
             notional_per_position=Decimal(str(position.get("size_usd", NOTIONAL_PER_POSITION))),
             direction_filter=str(position.get("direction_filter", "premium")).lower(),
@@ -107,6 +109,7 @@ class SpotPerpStrategyConfig:
             entry_pct=Decimal(str(overrides.get("entry_pct", self.entry_pct))),
             exit_pct=Decimal(str(overrides.get("exit_pct", self.exit_pct))),
             max_hold_hours=Decimal(str(overrides.get("max_hold_hours", self.max_hold_hours))),
+            min_hold_minutes=Decimal(str(overrides.get("min_hold_minutes", self.min_hold_minutes))),
             max_concurrent=int(overrides.get("max_concurrent", self.max_concurrent)),
             notional_per_position=Decimal(str(overrides.get("notional_per_position", self.notional_per_position))),
             direction_filter=str(overrides.get("direction_filter", self.direction_filter)).lower(),
@@ -306,7 +309,10 @@ class SpotPerpPaperSession:
 
             should_close = False
             exit_reason: str | None = None
-            if abs(current_basis) <= self._cfg.exit_pct:
+            held_minutes = held_hours * Decimal("60")
+            # min_hold_minutes 门槛：防 1-3 min 内 scanner 抖动触发噪音平仓
+            min_hold_passed = held_minutes >= self._cfg.min_hold_minutes
+            if abs(current_basis) <= self._cfg.exit_pct and min_hold_passed:
                 should_close = True
                 exit_reason = "basis_convergence"
             elif held_hours >= self._cfg.max_hold_hours:
@@ -487,7 +493,8 @@ class SpotPerpPaperSession:
                            symbol=opp.symbol, notional=str(self._notional))
             return None
 
-        client_id = f"sp-{uuid_lib.uuid4().hex[:12]}"
+        # OKX 要求 clOrdId 仅字母数字（无 - / _），故 hex prefix 也用纯字符
+        client_id = f"sp{uuid_lib.uuid4().hex[:14]}"
         direction = opp.direction  # "premium" | "discount"
 
         if direction == "premium":
@@ -495,28 +502,37 @@ class SpotPerpPaperSession:
                 symbol=symbol, side=Side.BUY, size=qty,
                 reference_price=spot_px, exchange=opp.exchange,
                 instrument_type=InstrumentType.SPOT,
-                client_order_id=f"{client_id}-s",
+                client_order_id=f"{client_id}s",
             )
             perp_req = OrderRequest(
                 symbol=symbol, side=Side.SELL, size=qty,
                 reference_price=perp_px, exchange=opp.exchange,
                 reduce_only=False, instrument_type=InstrumentType.PERPETUAL,
-                client_order_id=f"{client_id}-p",
+                client_order_id=f"{client_id}p",
+                position_side="SHORT",  # premium 永续做空
             )
         elif direction == "discount":
+            # D.2.c: discount 仅 Binance 实盘（OKX UTA 需独立 margin 配置，待后续接入）
+            if opp.exchange != "binance":
+                logger.info(
+                    "spot_perp_live_skip_discount_non_binance",
+                    symbol=opp.symbol, exchange=opp.exchange,
+                )
+                return None
             # discount: SHORT spot via margin（自动借币卖出）+ LONG perp
             spot_req = OrderRequest(
                 symbol=symbol, side=Side.SELL, size=qty,
                 reference_price=spot_px, exchange=opp.exchange,
                 instrument_type=InstrumentType.SPOT,
-                client_order_id=f"{client_id}-s",
+                client_order_id=f"{client_id}s",
                 margin_mode="cross", side_effect="MARGIN_BUY",
             )
             perp_req = OrderRequest(
                 symbol=symbol, side=Side.BUY, size=qty,
                 reference_price=perp_px, exchange=opp.exchange,
                 reduce_only=False, instrument_type=InstrumentType.PERPETUAL,
-                client_order_id=f"{client_id}-p",
+                client_order_id=f"{client_id}p",
+                position_side="LONG",  # discount 永续做多
             )
         else:
             logger.warning("spot_perp_live_unknown_direction",
@@ -597,6 +613,7 @@ class SpotPerpPaperSession:
                 symbol=symbol, side=Side.BUY, size=perp_size,
                 reference_price=entry_perp_px, exchange=exchange,
                 reduce_only=True, instrument_type=InstrumentType.PERPETUAL,
+                position_side="SHORT",  # 平掉之前开的 SHORT
             )
         elif direction == "discount":
             # discount close: BUY spot 还币（AUTO_REPAY）+ SELL perp 平多
@@ -611,6 +628,7 @@ class SpotPerpPaperSession:
                 symbol=symbol, side=Side.SELL, size=perp_size,
                 reference_price=entry_perp_px, exchange=exchange,
                 reduce_only=True, instrument_type=InstrumentType.PERPETUAL,
+                position_side="LONG",  # 平掉之前开的 LONG
             )
         else:
             logger.warning("spot_perp_live_close_unknown_direction",

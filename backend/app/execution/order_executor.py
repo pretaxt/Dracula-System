@@ -125,6 +125,7 @@ class OrderExecutor:
             exchange=exchange,
             reduce_only=False,
             instrument_type=InstrumentType.PERPETUAL,
+            position_side="SHORT",  # funding-rate 永远开 SHORT 永续
         )
         spot_result, perp_result = await self._get_broker(exchange).execute_pair(spot_req, perp_req)
 
@@ -191,6 +192,10 @@ class OrderExecutor:
 
         for leg in pos.legs:
             close_side = leg.side.opposite()
+            # Hedge 模式: 永续平仓必须传 positionSide 与原仓方向一致
+            position_side = None
+            if leg.instrument_type == InstrumentType.PERPETUAL:
+                position_side = "SHORT" if leg.side == Side.SELL else "LONG"
             req = OrderRequest(
                 symbol=leg.symbol,
                 side=close_side,
@@ -199,6 +204,7 @@ class OrderExecutor:
                 exchange=leg.exchange,
                 reduce_only=True,
                 instrument_type=leg.instrument_type,
+                position_side=position_side,
             )
             result: OrderResult = await self._get_broker(leg.exchange).execute(req)
 

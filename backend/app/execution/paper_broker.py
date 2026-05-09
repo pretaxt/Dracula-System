@@ -42,6 +42,8 @@ class OrderRequest:
     # D.2.c — 现货保证金（做空）支持。仅 instrument_type=SPOT 时有意义
     margin_mode: str | None = None      # None=现货普通；'cross' / 'isolated' = 保证金模式
     side_effect: str | None = None      # 'MARGIN_BUY'=借币卖空开仓；'AUTO_REPAY'=买回还币平仓
+    # 永续 Hedge 双向持仓模式必填（账户开 dualSidePosition=true 时）：'LONG' / 'SHORT'
+    position_side: str | None = None
 
 
 @dataclass

@@ -34,18 +34,19 @@ async def list_orders(
 
     orders: list[OrderOut] = []
     for row in rows:
-        symbol = row.notes or ""
-        notional_str = str(row.notional_usd)
+        # spot_perp D.1+ 在 notes 末尾追加 "\n{meta_json}"; 这里仅取首行的 symbol
+        symbol = (row.notes or "").split("\n", 1)[0]
+        notional_str = f"${row.notional_usd}"
         if row.opened_at is not None:
             orders.append(
                 OrderOut(
                     time=row.opened_at,
                     exchange="binance",
                     symbol=symbol,
-                    order_type="LIMIT",
-                    side="hedge_open",
+                    order_type="MARKET",
+                    side="开仓",
                     amount=notional_str,
-                    price="market",
+                    price="—",
                     status="filled",
                     position_uuid=row.uuid,
                 )
@@ -56,10 +57,10 @@ async def list_orders(
                     time=row.closed_at,
                     exchange="binance",
                     symbol=symbol,
-                    order_type="LIMIT",
-                    side="hedge_close",
+                    order_type="MARKET",
+                    side="平仓",
                     amount=notional_str,
-                    price="market",
+                    price="—",
                     status="filled",
                     position_uuid=row.uuid,
                 )

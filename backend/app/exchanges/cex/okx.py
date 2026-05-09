@@ -82,6 +82,25 @@ class OKXAdapter(CCXTAdapter):
         """
         logger.debug("okx_top_up_noop", reason="unified_trading_account", amount=str(amount))
 
+    async def top_up_spot_margin(self, amount: "Decimal") -> None:
+        """OKX 统一账户：spot margin 共享同一余额池，无需划转。"""
+        logger.debug(
+            "okx_spot_margin_topup_noop",
+            reason="unified_trading_account", amount=str(amount),
+        )
+
+    async def fetch_spot_margin_usdt_balance(self) -> "Decimal":
+        """OKX 统一账户：直接读 spot client 的 USDT 总余额（与 spot 共享）。"""
+        from decimal import Decimal as _D  # noqa: PLC0415
+        try:
+            spot_client = self._clients[InstrumentType.SPOT]
+            raw = await spot_client.fetch_balance()
+            total = (raw.get("total") or {}).get("USDT") or 0
+            return _D(str(total))
+        except Exception as exc:
+            logger.debug("okx_fetch_spot_margin_balance_failed", error=str(exc)[:200])
+            return _D("0")
+
     async def fetch_funding_rate(self, symbol: Symbol) -> FundingRate:
         client = self._clients[InstrumentType.PERPETUAL]
         ccxt_symbol = f"{symbol.base}/{symbol.quote}:{symbol.quote}"

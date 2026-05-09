@@ -101,6 +101,34 @@ class BinanceAdapter(CCXTAdapter):
             amount=str(amount),
         )
 
+    async def top_up_spot_margin(self, amount: Decimal) -> None:
+        """从 spot 钱包划转 USDT 到现货全仓杠杆钱包（D.2.c 贴水方向开仓前）。
+
+        Binance 现货保证金账户与 spot wallet 隔离；做空需要先转入抵押品。
+        """
+        if amount <= 0:
+            return
+        spot_client = self._clients[InstrumentType.SPOT]
+        await spot_client.transfer("USDT", float(amount), "spot", "margin")
+        logger.info(
+            "binance_spot_margin_topped_up",
+            from_account="spot",
+            to_account="margin",
+            amount=str(amount),
+        )
+
+    async def fetch_spot_margin_usdt_balance(self) -> Decimal:
+        """读现货全仓杠杆账户当前可用 USDT（含借入），失败返回 0。"""
+        try:
+            spot_client = self._clients[InstrumentType.SPOT]
+            # CCXT 统一接口：type=margin 拉杠杆账户余额
+            raw = await spot_client.fetch_balance({"type": "margin"})
+            total = (raw.get("total") or {}).get("USDT") or 0
+            return Decimal(str(total))
+        except Exception as exc:
+            logger.debug("binance_fetch_spot_margin_balance_failed", error=str(exc)[:200])
+            return Decimal("0")
+
     async def fetch_funding_rate(self, symbol: Symbol) -> FundingRate:
         """拉取 USDM 永续当期资金费率
 

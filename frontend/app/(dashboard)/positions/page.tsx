@@ -10,8 +10,8 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useT } from '@/components/i18n/I18nProvider'
 
 function sideTone(side: string): 'positive' | 'negative' | 'neutral' {
-  if (side.includes('open') || side === 'BUY') return 'positive'
-  if (side.includes('close') || side === 'SELL') return 'negative'
+  if (side.includes('open') || side.includes('开仓') || side === 'BUY') return 'positive'
+  if (side.includes('close') || side.includes('平仓') || side === 'SELL') return 'negative'
   return 'neutral'
 }
 
@@ -43,7 +43,7 @@ export default function PositionsPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* 4 KPI */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
         <Card style={{ padding: 16 }}>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)' }}>{t('持仓总数')}</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', marginTop: 8, color: 'var(--text-primary)' }}>{totalCount}</div>
@@ -230,12 +230,12 @@ export default function PositionsPage() {
                   </td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.exchange}</td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-primary)' }}>{o.symbol}</td>
-                  <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{o.order_type}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{t(o.order_type)}</td>
                   <td style={{
                     padding: '10px 12px',
                     color: tone === 'positive' ? 'var(--accent-emerald)' : tone === 'negative' ? 'var(--accent-blood)' : 'var(--text-secondary)',
                   }}>
-                    {o.side}
+                    {t(o.side)}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>${o.amount}</td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>{o.price}</td>

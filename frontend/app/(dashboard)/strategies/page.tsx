@@ -239,10 +239,10 @@ export default function StrategiesPage() {
               <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
             </div>
 
-            {/* 3 列指标 */}
+            {/* 3 列指标 — 移动端自动折叠 */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
               gap: 12,
               margin: '16px 0',
               padding: '12px 0',

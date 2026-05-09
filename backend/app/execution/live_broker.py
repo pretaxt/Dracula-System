@@ -84,6 +84,14 @@ class LiveBroker:
             await self._ensure_perp_leverage(request.symbol)
             await self._ensure_perp_margin(request)
 
+        # 现货保证金做空（D.2.c 贴水方向）开仓前确保 margin 钱包有抵押品
+        if (
+            instrument == InstrumentType.SPOT
+            and getattr(request, "margin_mode", None)
+            and getattr(request, "side_effect", None) == "MARGIN_BUY"
+        ):
+            await self._ensure_spot_margin(request)
+
         try:
             order = await self._adapter.place_order(
                 symbol=request.symbol,
@@ -95,6 +103,7 @@ class LiveBroker:
                 client_order_id=request.client_order_id or None,
                 margin_mode=getattr(request, "margin_mode", None),
                 side_effect=getattr(request, "side_effect", None),
+                position_side=getattr(request, "position_side", None),
             )
             avg_price = order.avg_fill_price or request.reference_price
             fees = avg_price * order.filled * self.fee_rate
@@ -223,6 +232,55 @@ class LiveBroker:
         except Exception as exc:
             logger.warning(
                 "perp_margin_topup_failed",
+                symbol=str(request.symbol),
+                error=str(exc)[:200],
+            )
+
+    async def _ensure_spot_margin(self, request: OrderRequest) -> None:
+        """D.2.c 贴水方向开 SHORT spot 前，确保现货保证金钱包有足够抵押品。
+
+        Binance 现货全仓杠杆账户与 spot wallet 隔离。卖空前需要：
+          collateral >= notional / max_leverage_ratio (默认按 5x 估算)
+        缓冲 30%；不足时调 ``adapter.top_up_spot_margin`` 自动从 spot 划转。
+
+        失败时仅 warning，让 place_order 自行尝试（Binance 会用 -2010 拒绝
+        → execute_pair 捕获 → 跳过本次开仓，不写 row）。
+        """
+        try:
+            adapter = self._adapter
+            balance_fn = getattr(adapter, "fetch_spot_margin_usdt_balance", None)
+            top_up = getattr(adapter, "top_up_spot_margin", None)
+            if balance_fn is None or top_up is None:
+                return  # adapter 不支持 spot margin 路径
+
+            notional = request.size * request.reference_price
+            # 5x 借币比例（Binance 全仓杠杆默认）：抵押 = notional / 5
+            # 加 30% 缓冲应对滑点/利息累计
+            required = notional / Decimal("5") * Decimal("1.3")
+
+            current = await balance_fn()
+            if current >= required:
+                logger.debug(
+                    "spot_margin_sufficient",
+                    symbol=str(request.symbol),
+                    current=str(round(current, 2)),
+                    required=str(round(required, 2)),
+                )
+                return
+
+            shortfall = required - current
+            transfer_amount = shortfall + Decimal("1")  # +1 USDT 精度兜底
+            await top_up(transfer_amount)
+            logger.info(
+                "spot_margin_topped_up",
+                symbol=str(request.symbol),
+                amount=str(round(transfer_amount, 2)),
+                required=str(round(required, 2)),
+                before=str(round(current, 2)),
+            )
+        except Exception as exc:
+            logger.warning(
+                "spot_margin_topup_failed",
                 symbol=str(request.symbol),
                 error=str(exc)[:200],
             )

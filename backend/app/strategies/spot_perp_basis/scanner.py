@@ -146,6 +146,12 @@ class SpotPerpBasisScanner:
             self._safe_fetch(adapter, perp_client, perp_symbols),
         )
 
+        # B+ enrich missing bid/ask via fetch_bids_asks (Binance USDM ticker 不返 bid/ask)
+        await asyncio.gather(
+            self._enrich_bid_ask(spot_client, spot_raw, spot_symbols),
+            self._enrich_bid_ask(perp_client, perp_raw, perp_symbols),
+        )
+
         opportunities: list[SpotPerpOpportunity] = []
         now_ms = int(time.time() * 1000)
         for base in self._config.symbols:
@@ -153,18 +159,49 @@ class SpotPerpBasisScanner:
             perp_sym = f"{base}/USDT:USDT"
             spot_t = spot_raw.get(spot_sym, {}) or {}
             perp_t = perp_raw.get(perp_sym, {}) or {}
-            spot_px = _to_dec(spot_t.get("last"))
-            perp_px = _to_dec(perp_t.get("last"))
-            if spot_px <= 0 or perp_px <= 0:
+            # D.2.x: 用 bid/ask 算"可执行基差"——即市价单实际成交价的近似。
+            # 旧版用 ticker.last 已成交过期价导致 scanner 看到的 vs 真实 fill 偏离 0.20-0.30%。
+            spot_bid = _to_dec(spot_t.get("bid"))
+            spot_ask = _to_dec(spot_t.get("ask"))
+            perp_bid = _to_dec(perp_t.get("bid"))
+            perp_ask = _to_dec(perp_t.get("ask"))
+            spot_last = _to_dec(spot_t.get("last"))
+            perp_last = _to_dec(perp_t.get("last"))
+
+            # bid/ask 缺失时回退 last（少数小币种）
+            if spot_bid <= 0:
+                spot_bid = spot_last
+            if spot_ask <= 0:
+                spot_ask = spot_last
+            if perp_bid <= 0:
+                perp_bid = perp_last
+            if perp_ask <= 0:
+                perp_ask = perp_last
+            if spot_bid <= 0 or spot_ask <= 0 or perp_bid <= 0 or perp_ask <= 0:
                 continue
 
-            basis_abs = perp_px - spot_px
-            basis_pct = basis_abs / spot_px * Decimal("100")
+            # 同时计算两方向 executable basis，取更有利者上报：
+            # - premium: SHORT perp @ perp_bid + LONG spot @ spot_ask → 基差 = perp_bid - spot_ask
+            # - discount: LONG perp @ perp_ask + SHORT spot @ spot_bid → 基差 = perp_ask - spot_bid
+            premium_basis = perp_bid - spot_ask
+            discount_basis = perp_ask - spot_bid
+            # 选择最强的方向（绝对值最大且符号正确）
+            if premium_basis > 0 and abs(premium_basis) >= abs(discount_basis):
+                basis_abs = premium_basis
+                direction = "premium"
+                spot_px, perp_px = spot_ask, perp_bid  # 用作 reference_price
+            elif discount_basis < 0:
+                basis_abs = discount_basis
+                direction = "discount"
+                spot_px, perp_px = spot_bid, perp_ask
+            else:
+                # 没有可执行机会（spread 跨过基差，bid/ask 把信号吃完）
+                continue
 
+            basis_pct = basis_abs / spot_px * Decimal("100")
             if abs(basis_pct) < self._config.min_basis_pct:
                 continue
 
-            direction = "premium" if basis_abs > 0 else "discount"
             opportunities.append(
                 SpotPerpOpportunity(
                     symbol=spot_sym,
@@ -178,6 +215,41 @@ class SpotPerpBasisScanner:
                 )
             )
         return opportunities
+
+    async def _enrich_bid_ask(
+        self, client: Any, raw_tickers: dict[str, Any], symbols: list[str],
+    ) -> None:
+        """B+ 修复：Binance USDM ticker 不返 bid/ask，用 fetch_bids_asks 批量补全。
+
+        原地修改 raw_tickers，仅填补 bid/ask 缺失项。失败时静默不阻塞。
+        """
+        if not raw_tickers or not hasattr(client, "fetch_bids_asks"):
+            return
+        # 找出所有 bid 或 ask 缺失的 symbol
+        needs = [
+            s for s in symbols
+            if (raw_tickers.get(s) or {}).get("bid") is None
+            or (raw_tickers.get(s) or {}).get("ask") is None
+        ]
+        if not needs:
+            return
+        try:
+            book = await asyncio.wait_for(
+                client.fetch_bids_asks(needs), timeout=8.0,
+            )
+        except Exception:
+            logger.debug("scanner_fetch_bids_asks_failed", exc_info=True)
+            return
+        for sym, t in raw_tickers.items():
+            if not isinstance(t, dict):
+                continue
+            b = book.get(sym) if isinstance(book, dict) else None
+            if not b:
+                continue
+            if t.get("bid") is None and b.get("bid") is not None:
+                t["bid"] = b["bid"]
+            if t.get("ask") is None and b.get("ask") is not None:
+                t["ask"] = b["ask"]
 
     async def _safe_fetch(
         self, adapter: Any, client: Any, symbols: list[str]

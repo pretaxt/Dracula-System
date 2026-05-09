@@ -85,6 +85,54 @@ async def _perp_usdt_total(adapter: Any) -> Decimal:
         return Decimal("0")
 
 
+async def _margin_usd_total(adapter: Any, exchange_name: str) -> Decimal:
+    """Binance 跨保证金钱包净资产 USD 等值。
+
+    每条资产: net = total - debt（含借入利息扣减）
+    USDT 等稳定币 1:1；其他币按现货 ticker 换算。
+
+    OKX/统一账户：spot 已含 margin，跳过避免重复计数。
+    """
+    if exchange_name != "binance":
+        return Decimal("0")
+    try:
+        spot_client = adapter._clients.get(InstrumentType.SPOT)
+        if spot_client is None:
+            return Decimal("0")
+        bal = await spot_client.fetch_balance({"type": "margin"})
+    except Exception as exc:
+        logger.debug("margin_balance_fetch_failed", error=str(exc)[:120])
+        return Decimal("0")
+
+    total = Decimal("0")
+    nonstable: list[tuple[str, Decimal]] = []
+    for asset, info in bal.items():
+        if not isinstance(info, dict):
+            continue
+        try:
+            t = Decimal(str(info.get("total") or 0))
+            d = Decimal(str(info.get("debt") or 0))
+        except Exception:
+            continue
+        net = t - d
+        if net == 0:
+            continue
+        if asset in _STABLECOINS:
+            total += net
+        else:
+            nonstable.append((asset, net))
+
+    if nonstable:
+        prices = await asyncio.gather(
+            *(_ticker_usd(adapter, asset) for asset, _ in nonstable),
+            return_exceptions=False,
+        )
+        for (asset, net), price in zip(nonstable, prices):
+            if price is not None:
+                total += net * price
+    return total
+
+
 _PER_EXCHANGE_TIMEOUT_S = 8.0  # 单交易所余额拉取硬超时（避免 OKX 慢导致 dashboard 整体卡）
 
 
@@ -111,12 +159,14 @@ async def get_per_exchange_equity(adapters: dict[str, Any]) -> dict[str, Decimal
                 return Decimal("0")
             try:
                 # 8s 硬超时 — 单交易所卡住不影响整体响应
-                async def _both():
-                    s, p = await asyncio.gather(
-                        _spot_usd_total(adapter), _perp_usdt_total(adapter),
+                async def _all():
+                    s, p, m = await asyncio.gather(
+                        _spot_usd_total(adapter),
+                        _perp_usdt_total(adapter),
+                        _margin_usd_total(adapter, ex_name),
                     )
-                    return s + p
-                return await asyncio.wait_for(_both(), timeout=_PER_EXCHANGE_TIMEOUT_S)
+                    return s + p + m
+                return await asyncio.wait_for(_all(), timeout=_PER_EXCHANGE_TIMEOUT_S)
             except asyncio.TimeoutError:
                 logger.warning("per_exchange_equity_timeout", exchange=ex_name,
                                timeout_s=_PER_EXCHANGE_TIMEOUT_S)
@@ -162,17 +212,19 @@ async def get_total_equity_usd(adapters: dict[str, Any]) -> Decimal | None:
             return None
 
         try:
-            spot_total, perp_total = await asyncio.gather(
+            spot_total, perp_total, margin_total = await asyncio.gather(
                 _spot_usd_total(binance),
                 _perp_usdt_total(binance),
+                _margin_usd_total(binance, "binance"),
             )
-            total = spot_total + perp_total
+            total = spot_total + perp_total + margin_total
             _cache_value = total
             _cache_expires_at = time.monotonic() + _CACHE_TTL_SECONDS
             logger.info(
                 "real_balance_fetched",
                 spot_usd=str(round(spot_total, 4)),
                 perp_usdt=str(round(perp_total, 4)),
+                margin_usd=str(round(margin_total, 4)),
                 total_usd=str(round(total, 4)),
             )
             return total

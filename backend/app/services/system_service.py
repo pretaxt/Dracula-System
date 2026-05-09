@@ -101,7 +101,11 @@ async def get_recent_activity(session: AsyncSession, limit: int = 10) -> list[di
     activities: list[dict] = []
 
     for r in rows:
-        symbol = (r.notes or "").split("@")[0].strip() or "?"
+        # spot_perp D.1+ notes 末尾含 "\n{json}"; 先按 \n 切再去 "@" 兼容旧分隔
+        first_line = (r.notes or "").split("\n", 1)[0]
+        symbol = first_line.split("@", 1)[0].strip() or "?"
+        # spot_perp target_apr_pct 实际是 basis%；funding_rate 才是 APR
+        is_spot_perp = "spot_perp" in (r.strategy_instance or "")
 
         if r.closed_at:
             net = (r.realized_pnl or Decimal("0")) + (r.funding_received or Decimal("0"))
@@ -117,7 +121,8 @@ async def get_recent_activity(session: AsyncSession, limit: int = 10) -> list[di
             activities.append({
                 "icon": "check" if r.status == "open" else "up",
                 "text": _format_open_text(
-                    symbol, float(r.notional_usd or 0), float(r.target_apr_pct or 0)
+                    symbol, float(r.notional_usd or 0),
+                    float(r.target_apr_pct or 0), is_spot_perp,
                 ),
                 "time": _format_time(r.opened_at, now),
                 "_sort_at": r.opened_at,
@@ -138,13 +143,31 @@ async def get_recent_activity(session: AsyncSession, limit: int = 10) -> list[di
     return out
 
 
-def _format_open_text(symbol: str, notional: float, apr: float) -> str:
-    return f"建仓成功 · {symbol} · APR {apr:.2f}% · 仓位 ${notional:.0f}"
+_EXIT_REASON_ZH = {
+    "basis_convergence": "基差收敛",
+    "max_hold": "持仓超时",
+    "manual": "手动平仓",
+    "manual_close": "手动平仓",
+    "stop_loss": "止损",
+    "liquidation": "强平",
+    "perp_liq_risk": "强平兜底",
+    "funding_reversal": "费率反转",
+}
+
+
+def _format_open_text(
+    symbol: str, notional: float, target_pct: float, is_spot_perp: bool,
+) -> str:
+    """spot_perp 显示基差 %; funding_rate 显示 APR %。"""
+    label = "基差" if is_spot_perp else "APR"
+    sign = "+" if target_pct >= 0 else ""
+    return f"建仓成功 · {symbol} · {label} {sign}{target_pct:.2f}% · 仓位 ${notional:.0f}"
 
 
 def _format_close_text(symbol: str, exit_reason: str, net_pnl: float) -> str:
     sign = "+" if net_pnl >= 0 else "-"
-    return f"平仓 · {symbol} · 触发: {exit_reason} · {sign}${abs(net_pnl):.2f}"
+    reason_zh = _EXIT_REASON_ZH.get(exit_reason, exit_reason)
+    return f"平仓 · {symbol} · {reason_zh} · {sign}${abs(net_pnl):.2f}"
 
 
 def _format_time(at: datetime, now: datetime) -> str:
@@ -220,7 +243,9 @@ async def get_recent_risk_events(
             })
 
     for r in rows:
-        symbol = (r.notes or "").split("@")[0].strip() or "?"
+        # spot_perp D.1+ notes 末尾含 "\n{json}"，先按 \n 切再取首段；兼容旧 "@" 分隔
+        first_line = (r.notes or "").split("\n", 1)[0]
+        symbol = first_line.split("@", 1)[0].strip() or "?"
         reason = r.exit_reason or ""
         tier, event_name, trigger_text, value, action, auto = _classify_exit(
             reason, symbol, r.realized_pnl or Decimal("0")
@@ -241,15 +266,18 @@ async def get_recent_risk_events(
 def _classify_exit(
     reason: str, symbol: str, realized_pnl: Decimal
 ) -> tuple[str, str, str, str, str, bool]:
+    """根据 exit_reason 生成友好中文文案 (tier, event, trigger, value, action, auto)。"""
     pnl_str = f"{'+' if realized_pnl >= 0 else ''}${float(realized_pnl):.2f}"
     if reason == "stop_loss":
-        return ("TIER 2", "止损触发", f"{symbol} 止损线", pnl_str, "stopped_out", True)
+        return ("TIER 2", "止损触发", f"{symbol} 跌破止损线", pnl_str, "stopped_out", True)
     if reason == "funding_reversal":
-        return ("TIER 1", "资金费率反转", f"{symbol} funding 转负", pnl_str, "auto_closed", True)
+        return ("TIER 1", "资金费率反转", f"{symbol} 费率转负", pnl_str, "auto_closed", True)
     if reason == "max_hold":
-        return ("TIER 1", "持仓超时平仓", f"{symbol} max hold", pnl_str, "auto_closed", True)
-    if reason == "liquidation":
+        return ("TIER 1", "持仓超时平仓", f"{symbol} 达到最长持仓", pnl_str, "auto_closed", True)
+    if reason == "basis_convergence":
+        return ("TIER 1", "基差收敛平仓", f"{symbol} 基差回归", pnl_str, "auto_closed", True)
+    if reason in {"liquidation", "perp_liq_risk"}:
         return ("TIER 3", "强平", f"{symbol} 保证金不足", pnl_str, "force_closed", False)
     if reason in {"manual", "manual_close"}:
-        return ("TIER 1", "手动平仓", f"{symbol} 操作员", pnl_str, "manual", True)
+        return ("TIER 1", "手动平仓", f"{symbol} 用户操作", pnl_str, "manual", True)
     return ("TIER 1", f"平仓 ({reason})", symbol, pnl_str, reason, True)

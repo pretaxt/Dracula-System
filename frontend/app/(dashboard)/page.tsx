@@ -190,7 +190,7 @@ export default function DashboardPage() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
             {(() => {
               const series = (summary?.pnl_series_30d ?? []) as { date: string; net_pnl_usd: string }[]
               const fmt = (n: number) => `$${n.toFixed(2)}`
