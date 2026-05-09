@@ -9,6 +9,8 @@ from app.api.deps import CurrentUser
 from app.core.config import get_settings
 from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
+    FundingRateOpportunitiesResponse,
+    FundingRateOpportunityOut,
     SpotPerpConfigPatchRequest,
     SpotPerpConfigResponse,
     SpotPerpOpportunitiesResponse,
@@ -104,6 +106,60 @@ async def update_config(
         max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "50")),
         max_concurrent_positions=cfg.get("position", {}).get("max_positions", 3),
         scan_interval_seconds=cfg.get("scan_interval_seconds", 60.0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# funding-rate: 实时机会（候选展示，含 passes_entry 标志）
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/funding-rate/opportunities",
+    response_model=FundingRateOpportunitiesResponse,
+)
+async def funding_rate_opportunities(
+    _: CurrentUser, request: Request
+) -> FundingRateOpportunitiesResponse:
+    """funding-rate scanner 最新机会（每 60s 刷新）。
+
+    返回所有 APR ≥ scan_threshold_apr_pct 的候选，包含 ``passes_entry`` 标志：
+      True  → APR ≥ min_apr_pct，paper_trading 会真实开仓
+      False → 仅展示，未到入场门槛
+    """
+    from decimal import Decimal  # noqa: PLC0415
+    runner = getattr(request.app.state, "runner", None)
+    if runner is None:
+        return FundingRateOpportunitiesResponse(
+            running=False, last_scan_at=None,
+            min_apr_pct="0", scan_threshold_apr_pct="0", data=[],
+        )
+    cfg = runner._scanner._config  # ScannerConfig
+    min_apr = cfg.min_apr_pct
+    out: list[FundingRateOpportunityOut] = []
+    for opp in runner.latest_opportunities:
+        apr = opp.apr_pct
+        distance = max(Decimal("0"), min_apr - apr)
+        out.append(FundingRateOpportunityOut(
+            symbol=str(opp.symbol),
+            exchange=opp.exchange,
+            apr_pct=str(apr.quantize(Decimal("0.01"))),
+            funding_rate=str(opp.funding_rate.rate),
+            funding_interval_hours=float(opp.funding_rate.funding_interval_hours),
+            next_funding_time_ms=int(opp.funding_rate.next_funding_time or 0),
+            history_positive_count=opp.history_positive_count,
+            history_total_count=opp.history_total_count,
+            spot_depth_usd=str(opp.spot_depth_usd.quantize(Decimal("1"))),
+            perp_depth_usd=str(opp.perp_depth_usd.quantize(Decimal("1"))),
+            passes_entry=opp.passes_entry,
+            distance_to_entry_pct=str(distance.quantize(Decimal("0.01"))),
+        ))
+    return FundingRateOpportunitiesResponse(
+        running=runner.is_running,
+        last_scan_at=runner.last_scan_at,
+        min_apr_pct=str(min_apr),
+        scan_threshold_apr_pct=str(cfg.effective_scan_threshold),
+        data=out,
     )
 
 

@@ -276,3 +276,118 @@ class TestFundingRateScanner:
         )
         results = await scanner.scan()
         assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# 候选展示门槛 vs 入场门槛（双阈值架构）
+# ---------------------------------------------------------------------------
+
+
+class TestScanThresholdAndPassesEntry:
+    """scan_threshold_apr_pct 控制 UI 候选范围；min_apr_pct 控制实盘开仓。"""
+
+    def test_effective_scan_threshold_falls_back_to_min_apr_pct(self):
+        cfg = ScannerConfig(
+            min_apr_pct=Decimal("25"),
+            scan_threshold_apr_pct=Decimal("0"),  # 0 = 回退
+        )
+        assert cfg.effective_scan_threshold == Decimal("25")
+
+    def test_effective_scan_threshold_uses_explicit_value(self):
+        cfg = ScannerConfig(
+            min_apr_pct=Decimal("25"),
+            scan_threshold_apr_pct=Decimal("5"),
+        )
+        assert cfg.effective_scan_threshold == Decimal("5")
+
+    def test_from_yaml_reads_scan_threshold(self):
+        cfg = ScannerConfig.from_yaml({
+            "entry": {
+                "min_apr_pct": 25.0,
+                "scan_threshold_apr_pct": 5.0,
+            },
+        })
+        assert cfg.scan_threshold_apr_pct == Decimal("5.0")
+        assert cfg.min_apr_pct == Decimal("25.0")
+
+    def test_from_yaml_default_scan_threshold_is_zero(self):
+        cfg = ScannerConfig.from_yaml({"entry": {"min_apr_pct": 25.0}})
+        assert cfg.scan_threshold_apr_pct == Decimal("0")
+        assert cfg.effective_scan_threshold == Decimal("25.0")
+
+    @pytest.mark.asyncio
+    async def test_candidate_above_scan_below_entry_marked_not_passes(self):
+        """APR ∈ [scan_threshold, min_apr_pct) → 进 opps_list，passes_entry=False"""
+        adapter = _make_adapter(
+            funding_rate="0.000050",   # APR ~5.475%
+            depth_usd=100_000,
+            history=["0.0001", "0.0001", "0.0001"],
+        )
+        scanner = FundingRateScanner(
+            adapters={"binance": adapter},
+            symbols=[BTC],
+            config=_default_config(
+                min_apr_pct=Decimal("25"),
+                scan_threshold_apr_pct=Decimal("5"),
+                min_positive_periods=2,
+            ),
+        )
+        results = await scanner.scan()
+        assert len(results) == 1
+        assert results[0].passes_entry is False
+        assert results[0].apr_pct < Decimal("25")
+        assert results[0].apr_pct >= Decimal("5")
+
+    @pytest.mark.asyncio
+    async def test_opp_above_entry_marked_passes(self):
+        """APR ≥ min_apr_pct → passes_entry=True"""
+        adapter = _make_adapter(
+            funding_rate="0.0003",   # APR ~32.85%
+            depth_usd=100_000,
+            history=["0.0003", "0.0003", "0.0003"],
+        )
+        scanner = FundingRateScanner(
+            adapters={"binance": adapter},
+            symbols=[BTC],
+            config=_default_config(
+                min_apr_pct=Decimal("25"),
+                scan_threshold_apr_pct=Decimal("5"),
+                min_positive_periods=2,
+            ),
+        )
+        results = await scanner.scan()
+        assert len(results) == 1
+        assert results[0].passes_entry is True
+
+    @pytest.mark.asyncio
+    async def test_below_scan_threshold_filtered_out(self):
+        """APR < scan_threshold → 完全跳过，不进 opps_list"""
+        adapter = _make_adapter(
+            funding_rate="0.00001",   # APR ~1.095% < scan_threshold=5
+            depth_usd=100_000,
+        )
+        scanner = FundingRateScanner(
+            adapters={"binance": adapter},
+            symbols=[BTC],
+            config=_default_config(
+                min_apr_pct=Decimal("25"),
+                scan_threshold_apr_pct=Decimal("5"),
+            ),
+        )
+        results = await scanner.scan()
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_legacy_no_scan_threshold_keeps_old_behavior(self):
+        """scan_threshold=0 时回退用 min_apr_pct（向下兼容）"""
+        adapter = _make_adapter(
+            funding_rate="0.000050",   # APR ~5.475% < 10% old threshold
+            depth_usd=100_000,
+        )
+        scanner = FundingRateScanner(
+            adapters={"binance": adapter},
+            symbols=[BTC],
+            config=_default_config(),  # min_apr_pct=10, scan_threshold=0
+        )
+        # Should be filtered out (旧行为：低于 min_apr_pct 直接扔)
+        assert await scanner.scan() == []

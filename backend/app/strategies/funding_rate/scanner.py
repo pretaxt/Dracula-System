@@ -49,12 +49,21 @@ class ScannerConfig:
     """扫描器配置,从 funding_rate_main.yaml 加载"""
 
     min_apr_pct: Decimal = _DEFAULT_MIN_APR_PCT
+    # 候选展示门槛：APR ≥ scan_threshold_apr_pct 的标的会进 opps_list 供 UI 显示，
+    # 但只有 APR ≥ min_apr_pct 才会真正开仓（passes_entry=True）。
+    # 0 = 回退用 min_apr_pct（旧行为，scan == entry）
+    scan_threshold_apr_pct: Decimal = Decimal("0")
     min_orderbook_depth_usd: Decimal = _DEFAULT_MIN_DEPTH_USD
     max_spread_bps: Decimal = _DEFAULT_MAX_SPREAD_BPS
     lookback_periods: int = _DEFAULT_LOOKBACK_PERIODS
     min_positive_periods: int = _DEFAULT_MIN_POSITIVE_PERIODS
     max_opportunities: int = _DEFAULT_MAX_OPPORTUNITIES  # 按 APR 降序后保留前 N 名
     min_volume_24h_usd: Decimal = _DEFAULT_MIN_VOLUME_24H_USD  # 24h quote-volume 下限
+
+    @property
+    def effective_scan_threshold(self) -> Decimal:
+        """实际使用的展示门槛：>0 时用 scan_threshold_apr_pct，否则回退 min_apr_pct。"""
+        return self.scan_threshold_apr_pct if self.scan_threshold_apr_pct > 0 else self.min_apr_pct
 
     @classmethod
     def from_yaml(cls, cfg: dict) -> "ScannerConfig":
@@ -63,6 +72,7 @@ class ScannerConfig:
         cfg 对应 funding_rate_main.yaml 结构:
           entry:
             min_apr_pct: 10.0
+            scan_threshold_apr_pct: 5.0   # 候选展示门槛（可选）
             min_orderbook_depth_usd: 10000
           scanning:
             max_spread_bps: 10
@@ -75,6 +85,9 @@ class ScannerConfig:
         history = scanning.get("funding_history_check", {})
         return cls(
             min_apr_pct=Decimal(str(entry.get("min_apr_pct", _DEFAULT_MIN_APR_PCT))),
+            scan_threshold_apr_pct=Decimal(
+                str(entry.get("scan_threshold_apr_pct", "0") or "0"),
+            ),
             min_orderbook_depth_usd=Decimal(
                 str(entry.get("min_orderbook_depth_usd", _DEFAULT_MIN_DEPTH_USD))
             ),
@@ -102,6 +115,10 @@ class FundingRateOpportunity:
 
     表示可以在 `exchange` 上针对 `symbol` 建立
     Delta-中性仓位(现货多 + 永续空)的机会。
+
+    ``passes_entry`` 区分"展示候选"与"实盘可开"：
+      True  → APR ≥ min_apr_pct，paper_trading 会真实开仓
+      False → APR ∈ [scan_threshold_apr_pct, min_apr_pct)，仅供 UI 展示"接近开仓"
     """
 
     symbol: Symbol
@@ -111,6 +128,7 @@ class FundingRateOpportunity:
     perp_orderbook: OrderBook
     history_positive_count: int = 0
     history_total_count: int = 0
+    passes_entry: bool = True
 
     @property
     def apr_pct(self) -> Decimal:
@@ -247,11 +265,13 @@ class FundingRateScanner:
                 return None
 
             apr_pct = funding.apr * Decimal("100")
-            if apr_pct < self._config.min_apr_pct:
+            # 用展示门槛早退（更宽松），实盘开仓门槛 min_apr_pct 在 opportunity 上标记
+            scan_threshold = self._config.effective_scan_threshold
+            if apr_pct < scan_threshold:
                 log.debug(
                     "apr_below_threshold",
                     apr_pct=float(apr_pct),
-                    threshold=float(self._config.min_apr_pct),
+                    threshold=float(scan_threshold),
                 )
                 return None
 
@@ -328,6 +348,7 @@ class FundingRateScanner:
                 perp_orderbook=perp_ob,
                 history_positive_count=positive_count,
                 history_total_count=total_count,
+                passes_entry=apr_pct >= self._config.min_apr_pct,
             )
             log.info(
                 "opportunity_found",

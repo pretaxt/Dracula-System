@@ -6,7 +6,7 @@ import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
-import { getStrategyStatus, getSpotPerpOpportunities } from '@/lib/api/strategies'
+import { getStrategyStatus, getSpotPerpOpportunities, getFundingRateOpportunities } from '@/lib/api/strategies'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
@@ -48,6 +48,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryFn: getSpotPerpOpportunities,
     refetchInterval: 5_000,
     enabled: params.id === 'spot-perp',
+  })
+  const { data: fundingOpps } = useQuery({
+    queryKey: ['funding-rate-opps'],
+    queryFn: getFundingRateOpportunities,
+    refetchInterval: 10_000,
+    enabled: params.id === 'funding-rate',
   })
   const { data: summary } = useQuery({
     queryKey: ['dashboard'],
@@ -490,6 +496,145 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             }}
           >
             {t('扫描候选门槛 |basis| ≥ 0.10%（仅展示），实盘入场阈值 |basis| ≥ 0.25%（升水/贴水双向自动开平仓） · 60 秒扫描')}
+          </div>
+        </CardElevated>
+      )}
+
+      {/* funding-rate 实时机会扫描器（候选展示，含 passes_entry 标志） */}
+      {strategy.id === 'funding-rate' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('实时费率机会')}
+            subtitle="LIVE FUNDING-RATE OPPORTUNITIES · BINANCE + OKX"
+            right={
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 13,
+                  color: fundingOpps?.running
+                    ? 'var(--accent-emerald)'
+                    : 'var(--text-tertiary)',
+                }}
+              >
+                {fundingOpps?.running
+                  ? `● ${t('扫描中')}`
+                  : `○ ${t('未启动')}`}
+                {fundingOpps?.last_scan_at && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    {t('上次扫描')}{' '}
+                    {new Date(fundingOpps.last_scan_at).toLocaleTimeString(
+                      'en-US',
+                      { hour12: false },
+                    )}
+                  </span>
+                )}
+              </span>
+            }
+          />
+          {(fundingOpps?.data ?? []).length === 0 ? (
+            <div
+              style={{
+                padding: 24,
+                textAlign: 'center',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 14,
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              {fundingOpps?.running
+                ? t('当前无符合候选门槛的标的')
+                : t('扫描器未运行')}
+            </div>
+          ) : (
+            <div className="table-scroll-x">
+              <table
+                className="data-table"
+                style={{
+                  width: '100%',
+                  borderCollapse: 'separate',
+                  borderSpacing: 0,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 14,
+                }}
+              >
+                <thead>
+                  <tr>
+                    {[t('币对'), t('交易所'), t('当前 APR'), t('费率/期'), t('距入场'), t('历史正费率'), t('状态')].map((h, i) => (
+                      <th
+                        key={i}
+                        style={{
+                          textAlign: i === 0 || i === 1 || i === 6 ? 'left' : 'right',
+                          padding: '10px 12px',
+                          color: 'var(--text-tertiary)',
+                          fontWeight: 500,
+                          fontSize: 12,
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                          borderBottom: '1px solid var(--border-default)',
+                          background: 'var(--bg-deepest)',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(fundingOpps?.data ?? []).map((o) => {
+                    const apr = parseFloat(o.apr_pct)
+                    const dist = parseFloat(o.distance_to_entry_pct)
+                    const minApr = parseFloat(fundingOpps?.min_apr_pct || '0')
+                    // 距入场 < 20% 入场门槛 算"接近"，高亮橘色
+                    const isNear = !o.passes_entry && dist > 0 && dist <= minApr * 0.2
+                    const aprColor = o.passes_entry
+                      ? 'var(--accent-emerald)'
+                      : isNear
+                      ? 'var(--accent-gold)'
+                      : 'var(--text-secondary)'
+                    return (
+                      <tr
+                        key={`${o.exchange}-${o.symbol}`}
+                        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                      >
+                        <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                          {o.symbol}
+                        </td>
+                        <td style={{ padding: '12px', color: 'var(--text-secondary)' }}>
+                          {o.exchange}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: aprColor, fontWeight: 600 }}>
+                          {apr.toFixed(2)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                          {(parseFloat(o.funding_rate) * 100).toFixed(4)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: o.passes_entry ? 'var(--accent-emerald)' : isNear ? 'var(--accent-gold)' : 'var(--text-tertiary)' }}>
+                          {o.passes_entry ? `✓ ${t('已达')}` : `−${dist.toFixed(2)}%`}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
+                          {o.history_positive_count}/{o.history_total_count}
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <Badge tone={o.passes_entry ? 'active' : isNear ? 'warn' : 'paused'}>
+                            {o.passes_entry ? t('可开仓') : isNear ? t('接近') : t('候选')}
+                          </Badge>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div
+            style={{
+              marginTop: 12,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--text-muted)',
+            }}
+          >
+            {t('扫描候选门槛 APR ≥')} {parseFloat(fundingOpps?.scan_threshold_apr_pct || '0').toFixed(2)}% {t('（仅展示），实盘入场阈值 APR ≥')} {parseFloat(fundingOpps?.min_apr_pct || '0').toFixed(2)}% {t('（结算前 15 分钟内自动开仓） · 60 秒扫描')}
           </div>
         </CardElevated>
       )}

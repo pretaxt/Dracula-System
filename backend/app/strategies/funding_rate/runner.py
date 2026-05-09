@@ -49,6 +49,21 @@ class FundingRateRunner:
         )
         self._interval = scan_interval_seconds
         self._running = False
+        # 最近一次扫描结果 — 供 API 暴露给前端实时机会表
+        self._latest_opportunities: list[FundingRateOpportunity] = []
+        self._last_scan_at: datetime | None = None
+
+    @property
+    def latest_opportunities(self) -> list[FundingRateOpportunity]:
+        return self._latest_opportunities
+
+    @property
+    def last_scan_at(self) -> datetime | None:
+        return self._last_scan_at
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,9 +100,15 @@ class FundingRateRunner:
             logger.exception("funding_rate_scan_failed")
             return []
 
+        # 缓存供 API 实时读取
+        self._latest_opportunities = opportunities
+        self._last_scan_at = scanned_at
+
+        passing = sum(1 for o in opportunities if o.passes_entry)
         logger.info(
             "funding_rate_scan_complete",
             opportunities=len(opportunities),
+            passes_entry=passing,
             scanned_at=scanned_at.isoformat(),
         )
 

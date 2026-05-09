@@ -18,6 +18,11 @@ capital_usd: 5000.0               # 扩到 30 候选币 × 双交易所，提高
 
 entry:
   min_apr_pct: 50.0               # 高门槛：只吃极端正资金费率机会（≥50% APR）
+  # 候选展示门槛：APR ≥ scan_threshold_apr_pct 进 opps_list 供 UI 显示"接近开仓的候选"
+  # 0 = 回退用 min_apr_pct（旧行为，scan == entry）
+  # 默认 15.0 = 温和起步：覆盖中高 APR 标的（约 100-300 个），减小 scanner API 调用量
+  # 后续可降至 5.0（覆盖所有正费率标的，含 OKX funding floor 5.475%）
+  scan_threshold_apr_pct: 15.0
   min_orderbook_depth_usd: 10000
   max_basis_pct: 0.5
   max_opportunities: 50           # 候选池扩到全市场后，TOP-N 提到 50

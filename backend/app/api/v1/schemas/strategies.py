@@ -66,6 +66,34 @@ class SpotPerpOpportunitiesResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# funding-rate 实时机会（候选展示，含 passes_entry 标志）
+# ---------------------------------------------------------------------------
+
+
+class FundingRateOpportunityOut(BaseModel):
+    symbol: str                         # "BTC/USDT"
+    exchange: str                       # "binance" | "okx"
+    apr_pct: str                        # 年化费率百分比
+    funding_rate: str                   # 单期资金费率
+    funding_interval_hours: float       # 通常 8.0
+    next_funding_time_ms: int           # 下次结算时间戳
+    history_positive_count: int         # 近 N 期正费率次数
+    history_total_count: int
+    spot_depth_usd: str                 # 现货 ask 深度 (USD)
+    perp_depth_usd: str                 # 永续 ask 深度
+    passes_entry: bool                  # True = 满足实盘开仓门槛 (APR ≥ min_apr_pct)
+    distance_to_entry_pct: str          # max(0, min_apr_pct - apr_pct) — UI "距离入场" 显示
+
+
+class FundingRateOpportunitiesResponse(BaseModel):
+    running: bool
+    last_scan_at: datetime | None
+    min_apr_pct: str                    # 当前实盘入场门槛（供 UI 显示参考线）
+    scan_threshold_apr_pct: str         # 当前候选展示门槛
+    data: list[FundingRateOpportunityOut]
+
+
+# ---------------------------------------------------------------------------
 # spot-perp 策略配置（D.1.5 — UI 调阈值用）
 # ---------------------------------------------------------------------------
 

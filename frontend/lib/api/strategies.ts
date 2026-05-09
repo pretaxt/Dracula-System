@@ -73,6 +73,43 @@ export async function getSpotPerpOpportunities(): Promise<SpotPerpOpportunitiesR
 }
 
 // ---------------------------------------------------------------------------
+// funding-rate 实时机会（候选展示，含 passes_entry 标志）
+// ---------------------------------------------------------------------------
+
+export type FundingRateOpportunity = {
+  symbol: string
+  exchange: string
+  apr_pct: string
+  funding_rate: string
+  funding_interval_hours: number
+  next_funding_time_ms: number
+  history_positive_count: number
+  history_total_count: number
+  spot_depth_usd: string
+  perp_depth_usd: string
+  /** True = APR ≥ min_apr_pct，会真实开仓；False = 仅展示候选 */
+  passes_entry: boolean
+  /** max(0, min_apr_pct - apr_pct) — 距离入场门槛百分点 */
+  distance_to_entry_pct: string
+}
+
+export type FundingRateOpportunitiesResponse = {
+  running: boolean
+  last_scan_at: string | null
+  min_apr_pct: string
+  scan_threshold_apr_pct: string
+  data: FundingRateOpportunity[]
+}
+
+export async function getFundingRateOpportunities(): Promise<FundingRateOpportunitiesResponse> {
+  const { data } = await apiClient.get<FundingRateOpportunitiesResponse>(
+    '/strategies/funding-rate/opportunities',
+  )
+  return data
+}
+
+
+// ---------------------------------------------------------------------------
 // spot-perp 策略配置（D.1.5）
 // ---------------------------------------------------------------------------
 
