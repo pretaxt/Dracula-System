@@ -3,7 +3,13 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { useT } from '@/components/i18n/I18nProvider'
-import { runBacktest, type BacktestResult, type EquityPoint } from '@/lib/api/backtest'
+import {
+  runBacktest,
+  runSpotPerpBacktest,
+  type BacktestResult,
+  type EquityPoint,
+  type SpotPerpBacktestResult,
+} from '@/lib/api/backtest'
 import { getSymbols } from '@/lib/api/system'
 
 const FALLBACK_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
@@ -466,6 +472,250 @@ export default function BacktestPage() {
           )}
         </>
       )}
+
+      <SpotPerpBacktestSection symbolBases={symbolBases} />
     </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// #04 spot-perp 回测区块
+// ---------------------------------------------------------------------------
+
+
+function SpotPerpBacktestSection({ symbolBases }: { symbolBases: string[] }) {
+  const { t } = useT()
+  const [symbols, setSymbols] = useState<string[]>(['BTC', 'ETH', 'SOL'])
+  const [exchange, setExchange] = useState('binance')
+  const [days, setDays] = useState(7)
+  const [timeframe, setTimeframe] = useState('1m')
+  const [capital, setCapital] = useState(1000)
+  const [notional, setNotional] = useState(50)
+  const [maxConc, setMaxConc] = useState(2)
+  const [entryPct, setEntryPct] = useState(0.30)
+  const [entryPrem, setEntryPrem] = useState(0)
+  const [entryDisc, setEntryDisc] = useState(0.50)
+  const [exitPct, setExitPct] = useState(0.10)
+  const [maxHold, setMaxHold] = useState(12)
+  const [minHoldMin, setMinHoldMin] = useState(5)
+  const [stopWiden, setStopWiden] = useState(0.50)
+  const [peakWindow, setPeakWindow] = useState(10)
+  const [peakDropoff, setPeakDropoff] = useState(0.05)
+  const [direction, setDirection] = useState<'premium' | 'discount' | 'both'>('both')
+  const [slippage, setSlippage] = useState(0.10)
+  const [feeRate, setFeeRate] = useState(0.0004)
+  const [result, setResult] = useState<SpotPerpBacktestResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const inputStyle: React.CSSProperties = {
+    background: 'var(--surface-2)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    color: 'var(--text-primary)',
+    padding: '6px 10px',
+    fontSize: 14,
+    width: '100%',
+  }
+  const labelStyle: React.CSSProperties = {
+    fontSize: 12, color: 'var(--text-muted)', marginBottom: 4,
+    display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em',
+  }
+
+  async function handleRun() {
+    setLoading(true); setError(null); setResult(null)
+    try {
+      const r = await runSpotPerpBacktest({
+        symbols, exchange, days, timeframe,
+        initial_capital_usd: capital,
+        notional_per_position: notional,
+        max_concurrent: maxConc,
+        entry_pct: entryPct,
+        entry_pct_premium: entryPrem,
+        entry_pct_discount: entryDisc,
+        exit_pct: exitPct,
+        max_hold_hours: maxHold,
+        min_hold_minutes: minHoldMin,
+        stop_basis_widening_pct: stopWiden,
+        peak_window_minutes: peakWindow,
+        min_peak_dropoff_pct: peakDropoff,
+        direction_filter: direction,
+        slippage_pct: slippage,
+        fee_rate: feeRate,
+      })
+      setResult(r)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '回测失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function toggleSymbol(s: string) {
+    setSymbols((curr) => curr.includes(s) ? curr.filter((x) => x !== s) : [...curr, s])
+  }
+
+  const summary = (result?.summary ?? {}) as Record<string, string | number | object>
+  const totalPnl = parseFloat(String(summary.total_pnl_usd ?? '0'))
+  const pnlColor = totalPnl >= 0 ? '#10b981' : '#ef4444'
+
+  return (
+    <CardElevated style={{ padding: 20 }}>
+      <SectionHeader title={t('#04 期现套利回测')} subtitle="SPOT-PERP BASIS · CCXT 1m kline → engine → metrics" />
+
+      {/* 标的选择（多选） */}
+      <div style={{ marginTop: 16 }}>
+        <label style={labelStyle}>{t('标的（多选）')}</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {symbolBases.slice(0, 30).map(s => {
+            const active = symbols.includes(s)
+            return (
+              <button
+                key={s} onClick={() => toggleSymbol(s)}
+                style={{
+                  padding: '4px 10px', fontSize: 13, fontFamily: 'var(--font-mono)',
+                  borderRadius: 4,
+                  background: active ? 'var(--accent-blood)' : 'var(--surface-2)',
+                  color: active ? '#fff' : 'var(--text-secondary)',
+                  border: '1px solid var(--border)', cursor: 'pointer',
+                }}
+              >{s}</button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginTop: 16 }}>
+        <div><label style={labelStyle}>{t('交易所')}</label>
+          <select value={exchange} onChange={e => setExchange(e.target.value)} style={inputStyle}>
+            {EXCHANGES.map(x => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </div>
+        <div><label style={labelStyle}>{t('回测天数')}</label>
+          <select value={days} onChange={e => setDays(Number(e.target.value))} style={inputStyle}>
+            {[1, 3, 7, 14, 30].map(d => <option key={d} value={d}>{d}天</option>)}
+          </select>
+        </div>
+        <div><label style={labelStyle}>K 线周期</label>
+          <select value={timeframe} onChange={e => setTimeframe(e.target.value)} style={inputStyle}>
+            {['1m', '5m', '15m'].map(x => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </div>
+        <div><label style={labelStyle}>{t('起始资金 $')}</label>
+          <input type="number" value={capital} onChange={e => setCapital(Number(e.target.value))} step={100} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>{t('单笔 notional $')}</label>
+          <input type="number" value={notional} onChange={e => setNotional(Number(e.target.value))} step={10} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>{t('同时持仓上限')}</label>
+          <input type="number" value={maxConc} onChange={e => setMaxConc(Number(e.target.value))} min={1} step={1} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>{t('入场基差 %')}</label>
+          <input type="number" value={entryPct} onChange={e => setEntryPct(Number(e.target.value))} step={0.05} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>premium 阈值 %</label>
+          <input type="number" value={entryPrem} onChange={e => setEntryPrem(Number(e.target.value))} step={0.05} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>discount 阈值 %</label>
+          <input type="number" value={entryDisc} onChange={e => setEntryDisc(Number(e.target.value))} step={0.05} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>{t('收敛平仓 %')}</label>
+          <input type="number" value={exitPct} onChange={e => setExitPct(Number(e.target.value))} step={0.05} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>最大持仓 h</label>
+          <input type="number" value={maxHold} onChange={e => setMaxHold(Number(e.target.value))} step={1} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>min hold min</label>
+          <input type="number" value={minHoldMin} onChange={e => setMinHoldMin(Number(e.target.value))} step={1} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>基差扩大止损 %</label>
+          <input type="number" value={stopWiden} onChange={e => setStopWiden(Number(e.target.value))} step={0.05} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>峰值滑窗 min</label>
+          <input type="number" value={peakWindow} onChange={e => setPeakWindow(Number(e.target.value))} step={1} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>入场回落 %</label>
+          <input type="number" value={peakDropoff} onChange={e => setPeakDropoff(Number(e.target.value))} step={0.01} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>方向</label>
+          <select value={direction} onChange={e => setDirection(e.target.value as 'premium' | 'discount' | 'both')} style={inputStyle}>
+            <option value="both">both</option>
+            <option value="premium">premium</option>
+            <option value="discount">discount</option>
+          </select>
+        </div>
+        <div><label style={labelStyle}>滑点 %</label>
+          <input type="number" value={slippage} onChange={e => setSlippage(Number(e.target.value))} step={0.01} style={inputStyle} />
+        </div>
+        <div><label style={labelStyle}>费率</label>
+          <input type="number" value={feeRate} onChange={e => setFeeRate(Number(e.target.value))} step={0.0001} style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={handleRun} disabled={loading || symbols.length === 0} style={{
+          padding: '8px 18px', background: 'var(--accent-blood)', color: '#fff',
+          border: 'none', borderRadius: 6, fontWeight: 600, cursor: loading ? 'wait' : 'pointer',
+          opacity: (loading || symbols.length === 0) ? 0.5 : 1,
+        }}>
+          {loading ? t('运行中…') : t('运行 #04 回测')}
+        </button>
+        {error && <span style={{ color: '#ef4444', fontSize: 13 }}>{error}</span>}
+      </div>
+
+      {result && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16 }}>
+            <Metric label="总笔数" value={String(summary.total_trades ?? 0)} />
+            <Metric label="胜率" value={`${summary.win_rate_pct ?? 0}%`} />
+            <Metric label="净 PnL" value={`$${summary.total_pnl_usd ?? 0}`} color={pnlColor} />
+            <Metric label="总手续费" value={`$${summary.total_fees_usd ?? 0}`} />
+            <Metric label="平均持仓" value={`${summary.avg_held_hours ?? 0}h`} />
+            <Metric label="最大回撤" value={`${summary.max_drawdown_pct ?? 0}%`} />
+            <Metric label="最终资金" value={`$${summary.final_equity_usd ?? 0}`} />
+            <Metric label="总回报" value={`${summary.total_return_pct ?? 0}%`} color={pnlColor} />
+          </div>
+          <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            被 dropoff 拒: {String(summary.rejected_count ?? 0)} · APR 跳过: {String(summary.skipped_count ?? 0)}
+            <span style={{ marginLeft: 12 }}>退出原因: {Object.entries(((summary.by_exit_reason ?? {}) as Record<string, number>)).map(([k, v]) => `${k}:${v}`).join(' / ') || '—'}</span>
+          </div>
+
+          {/* 交易明细 */}
+          {result.trades.length > 0 && (
+            <div style={{ marginTop: 20, maxHeight: 360, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-1)' }}>
+                  <tr style={{ textAlign: 'left' }}>
+                    {['标的', '方向', '入场基差', '出场基差', '持仓 h', '退出原因', 'PnL'].map(h => (
+                      <th key={h} style={{ padding: '8px', color: 'var(--text-tertiary)', fontWeight: 500, fontSize: 12 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.trades.map((tr, i) => {
+                    const pnl = parseFloat(tr.realized_pnl)
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.symbol}</td>
+                        <td style={{ padding: '6px 8px', color: tr.direction === 'premium' ? '#10b981' : '#ef4444' }}>{tr.direction}</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.entry_basis_pct}%</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.exit_basis_pct}%</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.held_hours}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--text-tertiary)' }}>{tr.exit_reason}</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)', fontWeight: 600,
+                          color: pnl >= 0 ? '#10b981' : '#ef4444' }}>
+                          {pnl >= 0 ? '+' : ''}{tr.realized_pnl}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </CardElevated>
   )
 }

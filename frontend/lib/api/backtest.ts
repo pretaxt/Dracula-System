@@ -46,3 +46,58 @@ export async function runBacktest(req: BacktestRequest): Promise<BacktestResult>
   const { data } = await apiClient.post<BacktestResult>('/backtest/run', req)
   return data
 }
+
+
+// ---------------------------------------------------------------------------
+// #04 spot-perp 回测
+// ---------------------------------------------------------------------------
+
+export interface SpotPerpBacktestRequest {
+  symbols: string[]
+  exchange: string
+  days: number
+  timeframe: string
+  initial_capital_usd: number
+  notional_per_position: number
+  max_concurrent: number
+  entry_pct: number
+  entry_pct_premium: number
+  entry_pct_discount: number
+  exit_pct: number
+  max_hold_hours: number
+  min_hold_minutes: number
+  stop_basis_widening_pct: number
+  peak_window_minutes: number
+  min_peak_dropoff_pct: number
+  direction_filter: 'premium' | 'discount' | 'both'
+  slippage_pct: number
+  fee_rate: number
+}
+
+export interface SpotPerpTradeRow {
+  symbol: string
+  direction: string
+  entry_time: string
+  exit_time: string | null
+  entry_basis_pct: string
+  exit_basis_pct: string
+  held_hours: string
+  fees_paid: string
+  realized_pnl: string
+  exit_reason: string
+}
+
+export interface SpotPerpBacktestResult {
+  summary: Record<string, unknown>
+  trades: SpotPerpTradeRow[]
+  equity_curve: { ts: number; equity: number; open_pos: number }[]
+}
+
+export async function runSpotPerpBacktest(
+  req: SpotPerpBacktestRequest,
+): Promise<SpotPerpBacktestResult> {
+  const { data } = await apiClient.post<SpotPerpBacktestResult>(
+    '/backtest/spot-perp', req,
+  )
+  return data
+}
