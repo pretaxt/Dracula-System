@@ -176,11 +176,15 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         },
     }
     ccxt_health = {}
-    for ex in ("binance", "okx", "binanceusdm"):
+    for ex in ("binance", "okx", "binanceusdm", "bitget", "bybit", "htx"):
         ccxt_health[ex] = {
             "calls_5m": metrics.ccxt_call_count_5m(ex),
             "error_rate_pct": round(metrics.ccxt_error_rate_5m_pct(ex), 2),
         }
+    # Market Data Hub health（v0.4.5：跨策略共享行情缓存）
+    from app.core.market_data_hub import get_market_data_hub  # noqa: PLC0415
+    hub = get_market_data_hub()
+    hub_health = hub.health() if hub is not None else {}
 
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),
@@ -205,6 +209,7 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
         "api_latency_p95_ms": str(api_p95_ms),
         "scan_perf": scan_perf,
         "ccxt_health": ccxt_health,
+        "market_data_hub": hub_health,
     }
 
 

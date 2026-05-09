@@ -53,3 +53,6 @@ class DashboardSummary(BaseModel):
     scan_perf: dict = {}
     # {exchange: {calls_5m, error_rate_pct}}
     ccxt_health: dict = {}
+    # Market Data Hub 健康（v0.4.5 跨策略共享行情缓存）
+    # {exchange: {ticker_count, funding_count, ticker_age_s, funding_age_s, consecutive_failures}}
+    market_data_hub: dict = {}

@@ -498,6 +498,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.liquidation_watcher = liquidation_watcher
     app.state.okx_polling_watcher = okx_polling_watcher
 
+    # --- Market Data Hub (跨策略共享行情，去重 API 调用) ---
+    market_data_hub = None
+    if adapters:
+        try:
+            from app.core.market_data_hub import MarketDataHub, set_market_data_hub  # noqa: PLC0415
+            market_data_hub = MarketDataHub(adapters=adapters)
+            await market_data_hub.start()
+            set_market_data_hub(market_data_hub)
+            logger.info("market_data_hub_initialized")
+        except Exception:
+            logger.exception("market_data_hub_init_failed")
+    app.state.market_data_hub = market_data_hub
+
     # --- Telegram 双向命令 bot（C 项）---
     telegram_bot = None
     if (
@@ -540,6 +553,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
+    if market_data_hub is not None:
+        try:
+            await market_data_hub.stop()
+        except Exception:
+            logger.exception("market_data_hub_stop_failed")
     if telegram_bot is not None:
         try:
             await telegram_bot.stop()
