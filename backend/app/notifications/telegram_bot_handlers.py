@@ -154,7 +154,7 @@ async def _status_handler(app_state) -> str:
     from app.core.config import get_settings  # noqa: PLC0415
     settings = get_settings()
     mode = settings.trading_mode.lower()
-    running = _is_paper_running(app_state)
+    fr_running = _is_paper_running(app_state)
 
     sess = getattr(app_state, "paper_session", None)
     fr_count = 0
@@ -164,6 +164,12 @@ async def _status_handler(app_state) -> str:
         except Exception:
             fr_count = -1
 
+    # #04 spot-perp session 状态（独立于 #01）
+    sp_session = getattr(app_state, "spot_perp_paper", None)
+    sp_task = getattr(app_state, "spot_perp_task", None)
+    sp_running = (
+        sp_session is not None and sp_task is not None and not sp_task.done()
+    )
     sp_count = 0
     try:
         sp_count, _ = await _read_spot_perp_open_rows()
@@ -180,13 +186,15 @@ async def _status_handler(app_state) -> str:
     total = sum(per_ex.values(), Decimal("0")) if per_ex else None
 
     mode_emoji = "🔴 LIVE" if mode == "live" else "🟡 PAPER"
-    run_emoji = "✅ 运行中" if running else "⏸ 已暂停"
+    fr_emoji = "✅ 运行中" if fr_running else "⏸ 已暂停"
+    sp_emoji = "✅ 运行中" if sp_running else "⏸ 已暂停"
 
     lines = [
         "<b>📡 Dracula 状态</b>",
         f"  模式:    {mode_emoji}",
-        f"  #01 策略:  {run_emoji}",
+        f"  #01 策略:  {fr_emoji}",
         f"  #01 持仓:  {fr_count if fr_count >= 0 else '—'}",
+        f"  #04 策略:  {sp_emoji}",
         f"  #04 持仓:  {sp_count if sp_count >= 0 else '—'}",
         f"  总资产:    {_fmt_usd(total)}",
     ]
