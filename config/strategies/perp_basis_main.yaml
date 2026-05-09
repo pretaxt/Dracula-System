@@ -1,0 +1,60 @@
+# 策略 #02 — 跨所基差套利 (perp-basis, Phase A: monitor only)
+# 跨所同标的 funding rate 差 → 高 funding 端 SHORT + 低 funding 端 LONG
+#
+# 阶段路线:
+#   A (当前): scanner + UI 监控（不开仓）
+#   B: 回测引擎接入
+#   C: paper_trading + 实盘小额验证
+
+instance_name: perp_basis_main
+strategy_type: perp_basis
+enabled: true
+
+scanning:
+  scan_interval_seconds: 30        # 比 #01/#04 快（funding 数据已在 hub 缓存）
+  max_funding_age_seconds: 180     # hub funding 老于此值则跳过
+
+entry:
+  min_diff_apr_pct: 3.0            # 入场门槛：funding diff APR ≥ 3%（覆盖 4 腿 fee 0.16% × 1095 ≈ 1.75% 年化）
+  max_opportunities: 50
+
+exit:
+  exit_diff_apr_pct: 1.0           # 收敛平仓
+  max_hold_hours: 240              # 10 天兜底
+  margin_warn_pct: 80              # 任一侧 margin 占用 ≥ 80% 触发 stop
+
+position:
+  max_concurrent: 2
+  notional_per_position: 50        # USD 起步，与 #04 一致
+  exchanges: ["binance", "okx", "bitget", "bybit", "htx"]   # 全 5 家两两组合 → 10 pairs
+  candidate_symbols:               # 30 主流（与 #04 同源，避免长尾流动性）
+    - BTC
+    - ETH
+    - SOL
+    - BNB
+    - XRP
+    - DOGE
+    - TRX
+    - ADA
+    - AVAX
+    - LINK
+    - DOT
+    - NEAR
+    - BCH
+    - LTC
+    - UNI
+    - APT
+    - ARB
+    - OP
+    - SUI
+    - ATOM
+    - FIL
+    - ETC
+    - AAVE
+    - INJ
+    - ICP
+    - XLM
+    - RUNE
+    - SEI
+    - LDO
+    - TIA

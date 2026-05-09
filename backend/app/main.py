@@ -511,6 +511,60 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("market_data_hub_init_failed")
     app.state.market_data_hub = market_data_hub
 
+    # --- #02 perp-basis runner (Phase A: monitor only) ---
+    perp_basis_runner = None
+    perp_basis_task = None
+    if market_data_hub is not None:
+        try:
+            from decimal import Decimal as _Decimal  # noqa: PLC0415
+            from app.strategies.perp_basis.runner import PerpBasisRunner  # noqa: PLC0415
+            from app.strategies.perp_basis.scanner import (  # noqa: PLC0415
+                PerpBasisScanner,
+                PerpBasisScannerConfig,
+                all_pairs,
+            )
+            _pb_cfg_path = "config/strategies/perp_basis_main.yaml"
+            try:
+                with open(_pb_cfg_path) as _f:
+                    _pb_yaml = yaml.safe_load(_f) or {}
+            except FileNotFoundError:
+                logger.warning("perp_basis_yaml_not_found", path=_pb_cfg_path)
+                _pb_yaml = {}
+            _pb_entry = _pb_yaml.get("entry", {})
+            _pb_pos = _pb_yaml.get("position", {})
+            _pb_scan = _pb_yaml.get("scanning", {})
+            _pb_exchanges = list(_pb_pos.get("exchanges", []) or list(adapters.keys()))
+            # 仅保留 adapter 已就绪的交易所
+            _pb_exchanges = [e for e in _pb_exchanges if e in adapters]
+            _pb_pairs = all_pairs(_pb_exchanges)
+            pb_scanner = PerpBasisScanner(
+                hub=market_data_hub,
+                config=PerpBasisScannerConfig(
+                    candidate_symbols=list(_pb_pos.get("candidate_symbols", []) or []),
+                    exchange_pairs=_pb_pairs,
+                    min_diff_apr_pct=_Decimal(str(_pb_entry.get("min_diff_apr_pct", "3.0"))),
+                    max_opportunities=int(_pb_entry.get("max_opportunities", 50)),
+                    max_funding_age_seconds=float(_pb_scan.get("max_funding_age_seconds", 180)),
+                ),
+            )
+            perp_basis_runner = PerpBasisRunner(
+                scanner=pb_scanner,
+                scan_interval_seconds=float(_pb_scan.get("scan_interval_seconds", 30)),
+            )
+            perp_basis_task = asyncio.create_task(
+                perp_basis_runner.run_forever(), name="perp_basis_runner",
+            )
+            logger.info(
+                "perp_basis_runner_initialized",
+                exchanges=len(_pb_exchanges),
+                pairs=len(_pb_pairs),
+                symbols=len(_pb_pos.get("candidate_symbols", []) or []),
+            )
+        except Exception:
+            logger.exception("perp_basis_runner_init_failed")
+    app.state.perp_basis_runner = perp_basis_runner
+    app.state.perp_basis_task = perp_basis_task
+
     # --- Telegram 双向命令 bot（C 项）---
     telegram_bot = None
     if (
@@ -553,6 +607,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
+    if perp_basis_runner is not None:
+        perp_basis_runner.stop()
+    if perp_basis_task is not None:
+        perp_basis_task.cancel()
+        try:
+            await perp_basis_task
+        except asyncio.CancelledError:
+            pass
     if market_data_hub is not None:
         try:
             await market_data_hub.stop()

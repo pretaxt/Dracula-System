@@ -120,6 +120,42 @@ export async function getFundingRateOpportunities(): Promise<FundingRateOpportun
 
 
 // ---------------------------------------------------------------------------
+// #02 perp-basis 跨所 funding 差套利
+// ---------------------------------------------------------------------------
+
+export type PerpBasisOpportunity = {
+  symbol: string
+  long_exchange: string
+  short_exchange: string
+  long_funding_rate: string
+  short_funding_rate: string
+  long_apr_pct: string
+  short_apr_pct: string
+  diff_apr_pct: string
+  long_funding_interval_hours: number
+  short_funding_interval_hours: number
+  long_next_funding_ms: number
+  short_next_funding_ms: number
+  timestamp_ms: number
+}
+
+export type PerpBasisOpportunitiesResponse = {
+  running: boolean
+  last_scan_at: string | null
+  min_diff_apr_pct: string
+  exchange_pair_count: number
+  data: PerpBasisOpportunity[]
+}
+
+export async function getPerpBasisOpportunities(): Promise<PerpBasisOpportunitiesResponse> {
+  const { data } = await apiClient.get<PerpBasisOpportunitiesResponse>(
+    '/strategies/perp-basis/opportunities',
+  )
+  return data
+}
+
+
+// ---------------------------------------------------------------------------
 // spot-perp 策略配置（D.1.5）
 // ---------------------------------------------------------------------------
 

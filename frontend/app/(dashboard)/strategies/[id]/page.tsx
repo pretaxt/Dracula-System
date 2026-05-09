@@ -6,7 +6,7 @@ import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
-import { getStrategyStatus, getSpotPerpOpportunities, getFundingRateOpportunities } from '@/lib/api/strategies'
+import { getStrategyStatus, getSpotPerpOpportunities, getFundingRateOpportunities, getPerpBasisOpportunities } from '@/lib/api/strategies'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
@@ -54,6 +54,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryFn: getFundingRateOpportunities,
     refetchInterval: 10_000,
     enabled: params.id === 'funding-rate',
+  })
+  const { data: perpBasisOpps } = useQuery({
+    queryKey: ['perp-basis-opps'],
+    queryFn: getPerpBasisOpportunities,
+    refetchInterval: 10_000,
+    enabled: params.id === 'perp-basis',
   })
   const { data: summary } = useQuery({
     queryKey: ['dashboard'],
@@ -706,6 +712,108 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             }}
           >
             {t('扫描候选门槛 APR ≥')} {parseFloat(fundingOpps?.scan_threshold_apr_pct || '0').toFixed(2)}% {t('（仅展示），实盘入场阈值 APR ≥')} {parseFloat(fundingOpps?.min_apr_pct || '0').toFixed(2)}% {t('（结算前 15 分钟内自动开仓） · 60 秒扫描')}
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #02 perp-basis 实时机会扫描器（跨所 funding 差） */}
+      {strategy.id === 'perp-basis' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('实时跨所 funding 差')}
+            subtitle={`LIVE PERP-BASIS ARB · ${perpBasisOpps?.exchange_pair_count ?? 0} EXCHANGE PAIRS`}
+            right={
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 13,
+                color: perpBasisOpps?.running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+              }}>
+                {perpBasisOpps?.running ? `● ${t('扫描中')}` : `○ ${t('未启动')}`}
+                {perpBasisOpps?.last_scan_at && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    {t('上次扫描')}{' '}
+                    {new Date(perpBasisOpps.last_scan_at).toLocaleTimeString('en-US', { hour12: false })}
+                  </span>
+                )}
+              </span>
+            }
+          />
+          {(perpBasisOpps?.data ?? []).length === 0 ? (
+            <div style={{
+              padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)',
+              fontSize: 14, color: 'var(--text-tertiary)',
+            }}>
+              {perpBasisOpps?.running
+                ? t('当前无 funding 差超过门槛的标的')
+                : t('扫描器未运行')}
+            </div>
+          ) : (
+            <div className="table-scroll-x">
+              <table className="data-table" style={{
+                width: '100%', borderCollapse: 'separate', borderSpacing: 0,
+                fontFamily: 'var(--font-mono)', fontSize: 14,
+              }}>
+                <thead>
+                  <tr>
+                    {[t('币对'), t('long 端'), t('short 端'), t('long APR'), t('short APR'), t('差 APR'), t('long 周期'), t('short 周期')].map((h, i) => (
+                      <th key={i} style={{
+                        textAlign: i <= 2 ? 'left' : 'right',
+                        padding: '10px 12px', color: 'var(--text-tertiary)',
+                        fontWeight: 500, fontSize: 12, letterSpacing: '0.08em',
+                        textTransform: 'uppercase', borderBottom: '1px solid var(--border-default)',
+                        background: 'var(--bg-deepest)',
+                      }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(perpBasisOpps?.data ?? []).map((o) => {
+                    const diff = parseFloat(o.diff_apr_pct)
+                    const minDiff = parseFloat(perpBasisOpps?.min_diff_apr_pct || '0')
+                    // 状态分级：≥ 2× 门槛 = 强；≥ 门槛 = 可开仓；< 门槛理论上不应进 list
+                    const strong = diff >= minDiff * 2
+                    const diffColor = strong ? 'var(--accent-emerald)' : 'var(--accent-gold)'
+                    return (
+                      <tr key={`${o.symbol}-${o.long_exchange}-${o.short_exchange}`}
+                          style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                          {o.symbol}
+                        </td>
+                        <td style={{ padding: '12px', color: 'var(--accent-emerald)' }}>
+                          ↑ {o.long_exchange}
+                        </td>
+                        <td style={{ padding: '12px', color: 'var(--accent-blood)' }}>
+                          ↓ {o.short_exchange}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                          {parseFloat(o.long_apr_pct).toFixed(2)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                          {parseFloat(o.short_apr_pct).toFixed(2)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: diffColor, fontWeight: 600 }}>
+                          {strong && '★ '}{diff.toFixed(2)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
+                          {o.long_funding_interval_hours}h
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
+                          {o.short_funding_interval_hours}h
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div style={{
+            marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 12,
+            color: 'var(--text-muted)',
+          }}>
+            {t('入场门槛 funding diff APR ≥')} {parseFloat(perpBasisOpps?.min_diff_apr_pct || '0').toFixed(1)}%
+            ， {perpBasisOpps?.exchange_pair_count ?? 0} {t('个交易所组合 · 30 秒扫描 · 数据来自 MarketDataHub')}
           </div>
         </CardElevated>
       )}

@@ -101,6 +101,35 @@ class FundingRateOpportunitiesResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# #02 perp-basis 跨所 funding 差套利
+# ---------------------------------------------------------------------------
+
+
+class PerpBasisOpportunityOut(BaseModel):
+    symbol: str
+    long_exchange: str           # 低 funding 端 (LONG perp)
+    short_exchange: str          # 高 funding 端 (SHORT perp)
+    long_funding_rate: str       # rate per period 小数
+    short_funding_rate: str
+    long_apr_pct: str            # 年化百分比
+    short_apr_pct: str
+    diff_apr_pct: str            # short - long
+    long_funding_interval_hours: int
+    short_funding_interval_hours: int
+    long_next_funding_ms: int
+    short_next_funding_ms: int
+    timestamp_ms: int
+
+
+class PerpBasisOpportunitiesResponse(BaseModel):
+    running: bool
+    last_scan_at: datetime | None
+    min_diff_apr_pct: str        # 入场门槛
+    exchange_pair_count: int     # 当前 pair 数量
+    data: list[PerpBasisOpportunityOut]
+
+
+# ---------------------------------------------------------------------------
 # spot-perp 策略配置（D.1.5 — UI 调阈值用）
 # ---------------------------------------------------------------------------
 

@@ -69,7 +69,7 @@ export const STRATEGIES: Strategy[] = [
   },
   {
     num: '02', id: 'perp-basis', zhName: '跨所基差套利',
-    enLabel: 'PERP BASIS ARB · P1', phase: 'P1', status: 'PLANNED',
+    enLabel: 'PERP BASIS ARB · P1', phase: 'P1', status: 'MONITOR',
     capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
     desc: '做多便宜的合约,做空贵的合约,等基差收敛。',
     thesis: '不同交易所同一标的的永续合约因流动性、用户结构、资金费率差异短期会有 basis,通过 long-cheap / short-expensive 锁定。',

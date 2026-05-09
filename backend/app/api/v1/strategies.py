@@ -11,6 +11,8 @@ from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
     FundingRateOpportunitiesResponse,
     FundingRateOpportunityOut,
+    PerpBasisOpportunitiesResponse,
+    PerpBasisOpportunityOut,
     SpotPerpConfigPatchRequest,
     SpotPerpConfigResponse,
     SpotPerpOpportunitiesResponse,
@@ -164,6 +166,41 @@ async def funding_rate_opportunities(
         scan_threshold_apr_pct=str(cfg.effective_scan_threshold),
         pre_funding_window_minutes=pre_window,
         data=out,
+    )
+
+
+# ---------------------------------------------------------------------------
+# #02 perp-basis: 跨所 funding 差套利 (Phase A monitor only)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/perp-basis/opportunities",
+    response_model=PerpBasisOpportunitiesResponse,
+)
+async def perp_basis_opportunities(
+    _: CurrentUser, request: Request,
+) -> PerpBasisOpportunitiesResponse:
+    """跨所 perp funding diff 实时机会（每 30s 刷新）。
+
+    数据源：MarketDataHub funding_rates 缓存（不重复打 exchange）。
+    """
+    runner = getattr(request.app.state, "perp_basis_runner", None)
+    if runner is None:
+        return PerpBasisOpportunitiesResponse(
+            running=False, last_scan_at=None,
+            min_diff_apr_pct="0", exchange_pair_count=0, data=[],
+        )
+    cfg = runner._scanner._config
+    return PerpBasisOpportunitiesResponse(
+        running=runner.is_running,
+        last_scan_at=runner.last_scan_at,
+        min_diff_apr_pct=str(cfg.min_diff_apr_pct),
+        exchange_pair_count=len(cfg.exchange_pairs),
+        data=[
+            PerpBasisOpportunityOut(**opp.to_dict())
+            for opp in runner.latest_opportunities
+        ],
     )
 
 
