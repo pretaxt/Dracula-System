@@ -1,10 +1,11 @@
-# 策略 #02 — 跨所基差套利 (perp-basis, Phase A: monitor only)
+# 策略 #02 — 跨所基差套利 (perp-basis)
 # 跨所同标的 funding rate 差 → 高 funding 端 SHORT + 低 funding 端 LONG
 #
 # 阶段路线:
-#   A (当前): scanner + UI 监控（不开仓）
+#   A: scanner + UI 监控
 #   B: 回测引擎接入
-#   C: paper_trading + 实盘小额验证
+#   C (当前): paper_trading 跨所双 broker delta-neutral
+#   D: 实盘小额验证
 
 instance_name: perp_basis_main
 strategy_type: perp_basis
@@ -21,6 +22,7 @@ entry:
 exit:
   exit_diff_apr_pct: 1.0           # 收敛平仓
   max_hold_hours: 240              # 10 天兜底
+  min_hold_hours: 4                # 最少持仓覆盖至少一个 funding 结算（防小波动早退）
   margin_warn_pct: 80              # 任一侧 margin 占用 ≥ 80% 触发 stop
 
 position:
@@ -58,3 +60,15 @@ position:
     - SEI
     - LDO
     - TIA
+
+# 风险控制（#02 独有 5 项）
+risk:
+  stop_price_divergence_pct: 5.0      # |long_price - short_price| / mid > 5% 强平（防交易所故障/数据脏点）
+  max_abs_apr_pct: 500.0              # 单腿 |APR| 异常上限（>500% 通常是数据脏点或退市币）
+  health_safe_diff_apr_max: 200.0     # diff_apr ≤ 200% → safe tier
+  health_risky_diff_apr_max: 500.0    # 200% < diff_apr ≤ 500% → risky tier；>500% → dirty tier
+
+# Paper Trading（Phase C）
+paper_trading:
+  enabled: true
+  scan_interval_seconds: 60           # paper tick 节奏（独立于 scanner）

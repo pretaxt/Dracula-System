@@ -295,6 +295,124 @@ export default function PositionDetailPage({ params }: { params: { uuid: string 
         )}
       </div>
 
+      {/* #02 跨所双腿实时表（仅 perp_basis 有 legs[] 双腿时显示）*/}
+      {isPerpBasis && p.legs && p.legs.length > 0 && (
+        <CardElevated style={{ padding: 20 }}>
+          <SectionHeader
+            title="跨所双腿实时状态"
+            subtitle="CROSS-EXCHANGE LEGS · LIVE FUNDING & PRICE"
+            right={
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                {t('每 15s 刷新')}
+              </span>
+            }
+          />
+          <div style={{ overflowX: 'auto', marginTop: 12 }}>
+            <table style={{
+              width: '100%', borderCollapse: 'separate', borderSpacing: 0,
+              fontFamily: 'var(--font-mono)', fontSize: 13,
+            }}>
+              <thead>
+                <tr>
+                  {[t('方向'), t('交易所'), t('数量'), t('入场价'), t('当前价'),
+                    t('当前 Funding'), t('当前 APR'), t('下次结算'), t('周期')].map((h, i) => (
+                    <th key={i} style={{
+                      textAlign: i === 0 || i === 1 ? 'left' : 'right',
+                      padding: '8px 10px',
+                      color: 'var(--text-tertiary)',
+                      fontSize: 11,
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                      borderBottom: '1px solid var(--border-default)',
+                      background: 'var(--bg-deepest)',
+                      fontWeight: 500,
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {p.legs.map((leg, idx) => {
+                  const sideUpper = (leg.side || '').toLowerCase()
+                  const isLong = sideUpper === 'long' || sideUpper === 'buy'
+                  const sideLabel = isLong ? 'LONG' : 'SHORT'
+                  const sideColor = isLong ? 'var(--accent-emerald)' : 'var(--accent-blood)'
+                  const aprNum = leg.current_apr_pct ? parseFloat(leg.current_apr_pct) : null
+                  const aprColor = aprNum == null
+                    ? 'var(--text-tertiary)'
+                    : isLong
+                      ? (aprNum < 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)')
+                      : (aprNum > 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)')
+                  const nextDelta = leg.next_funding_time_ms
+                    ? Math.max(0, leg.next_funding_time_ms - Date.now())
+                    : null
+                  const nextStr = nextDelta == null
+                    ? '—'
+                    : nextDelta < 60_000
+                      ? `${Math.floor(nextDelta / 1000)}s`
+                      : nextDelta < 3600_000
+                        ? `${Math.floor(nextDelta / 60_000)}m`
+                        : `${(nextDelta / 3600_000).toFixed(1)}h`
+                  return (
+                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td style={{ padding: '10px', color: sideColor, fontWeight: 600 }}>{sideLabel}</td>
+                      <td style={{ padding: '10px', color: 'var(--text-primary)' }}>{leg.exchange.toUpperCase()}</td>
+                      <td style={{ padding: '10px', textAlign: 'right' }}>{leg.size}</td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-tertiary)' }}>{leg.entry_price}</td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-primary)' }}>{leg.current_price ?? '—'}</td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
+                        {leg.current_funding_rate
+                          ? `${(parseFloat(leg.current_funding_rate) * 100).toFixed(4)}%`
+                          : '—'}
+                      </td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: aprColor, fontWeight: 600 }}>
+                        {leg.current_apr_pct ? `${parseFloat(leg.current_apr_pct).toFixed(2)}%` : '—'}
+                      </td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-tertiary)' }}>{nextStr}</td>
+                      <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
+                        {leg.funding_interval_hours ? `${leg.funding_interval_hours}h` : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* 派生指标行 */}
+          <div style={{
+            marginTop: 16, paddingTop: 12,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16,
+          }}>
+            <Row
+              label="入场 diff APR"
+              value={entryBasis != null ? `${entryBasis >= 0 ? '+' : ''}${entryBasis.toFixed(2)}%` : '—'}
+            />
+            <Row
+              label="当前 diff APR"
+              value={p.current_diff_apr_pct
+                ? `${parseFloat(p.current_diff_apr_pct) >= 0 ? '+' : ''}${parseFloat(p.current_diff_apr_pct).toFixed(2)}%`
+                : '—'}
+              tone={
+                p.current_diff_apr_pct && entryBasis != null
+                  ? (parseFloat(p.current_diff_apr_pct) >= entryBasis ? 'pos' : 'neg')
+                  : undefined
+              }
+            />
+            <Row
+              label="价格分歧"
+              value={p.current_price_divergence_pct
+                ? `${parseFloat(p.current_price_divergence_pct).toFixed(4)}%`
+                : '—'}
+              tone={
+                p.current_price_divergence_pct && parseFloat(p.current_price_divergence_pct) > 1
+                  ? 'neg'
+                  : undefined
+              }
+            />
+          </div>
+        </CardElevated>
+      )}
+
       {/* 时间线 */}
       <CardElevated style={{ padding: 20 }}>
         <SectionHeader title="时间线" subtitle="TIMELINE" />

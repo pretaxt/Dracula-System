@@ -27,6 +27,22 @@ def _decode_position_notes(notes: str) -> tuple[str, dict | None]:
         return head, None
 
 
+class LegOut(BaseModel):
+    """单条 leg 静态 + 实时数据快照（用于持仓详情页 leg-level 视图）。"""
+    exchange: str
+    side: str                          # "long" | "short" | "buy" | "sell"
+    instrument_type: str               # "perpetual" | "spot"
+    symbol: str
+    size: str
+    entry_price: str
+    # --- 实时数据（来自 MarketDataHub，可能为 None 表示未缓存）---
+    current_price: str | None = None
+    current_funding_rate: str | None = None        # 例如 "0.0001" = 0.01%
+    current_apr_pct: str | None = None             # 折算年化（rate × periods/year × 100）
+    next_funding_time_ms: int | None = None        # 下次结算 unix ms
+    funding_interval_hours: int | None = None      # 8 / 4 / 1
+
+
 class PositionOut(BaseModel):
     uuid: str
     symbol: str
@@ -43,6 +59,10 @@ class PositionOut(BaseModel):
     exit_reason: str | None
     days_held: str
     meta: dict[str, Any] | None = None  # spot_perp 解码后的 entry/close 元数据
+    legs: list[LegOut] = []             # 跨所策略（#02 / #04）的双腿明细
+    # --- 跨所策略派生指标（仅 #02 perp_basis 有意义，其余为 None）---
+    current_diff_apr_pct: str | None = None     # SHORT.apr - LONG.apr 实时差
+    current_price_divergence_pct: str | None = None  # |long_px - short_px| / mid * 100
 
     @classmethod
     def from_record(cls, rec, days_held: Decimal) -> "PositionOut":

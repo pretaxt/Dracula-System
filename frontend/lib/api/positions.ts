@@ -21,6 +21,20 @@ export type PositionMeta = {
   [k: string]: string | undefined
 }
 
+export type PositionLeg = {
+  exchange: string
+  side: string                          // 'long' | 'short' | 'buy' | 'sell'
+  instrument_type: string               // 'perpetual' | 'spot'
+  symbol: string
+  size: string
+  entry_price: string
+  current_price?: string | null
+  current_funding_rate?: string | null  // e.g. '0.0001' = 0.01%
+  current_apr_pct?: string | null       // 折算年化 (rate × periods/year × 100)
+  next_funding_time_ms?: number | null
+  funding_interval_hours?: number | null
+}
+
 export type Position = {
   uuid: string
   symbol: string
@@ -37,6 +51,9 @@ export type Position = {
   exit_reason: string | null
   days_held: string
   meta?: PositionMeta | null
+  legs?: PositionLeg[]
+  current_diff_apr_pct?: string | null         // #02 实时 short.apr - long.apr
+  current_price_divergence_pct?: string | null // #02 跨所价格分歧 %
 }
 
 export type PositionListResponse = {
