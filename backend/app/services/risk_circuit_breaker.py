@@ -186,6 +186,17 @@ def _evaluate(summary: dict[str, Any], strategy_label: str) -> BreakerDecision:
     ex_conc = _to_decimal("max_exchange_concentration_pct")
     sym_conc = _to_decimal("max_symbol_concentration_pct")
 
+    # 边缘 case：账户只在单一交易所有余额时，ex_concentration 必然 100%
+    # 这不是风险（结构性事实），跳过 ex_conc 检查
+    per_ex = summary.get("equity_by_exchange") or {}
+    try:
+        active_exchanges = sum(
+            1 for v in per_ex.values() if Decimal(str(v or 0)) > 0
+        )
+    except Exception:
+        active_exchanges = 0
+    skip_ex_conc = active_exchanges < 2
+
     # 红线触发顺序：daily DD > weekly DD > margin > 集中度
     if daily_dd <= DAILY_DD_HALT_PCT:
         msg = f"daily_dd {daily_dd}% <= {DAILY_DD_HALT_PCT}%"
@@ -202,7 +213,7 @@ def _evaluate(summary: dict[str, Any], strategy_label: str) -> BreakerDecision:
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("margin", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="margin")
-    if ex_conc >= MAX_EXCHANGE_CONCENTRATION_PCT:
+    if not skip_ex_conc and ex_conc >= MAX_EXCHANGE_CONCENTRATION_PCT:
         msg = f"exchange_concentration {ex_conc}% >= {MAX_EXCHANGE_CONCENTRATION_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("ex_conc", strategy_label, msg)
