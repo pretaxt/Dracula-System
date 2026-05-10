@@ -552,14 +552,16 @@ class BalanceReconcilerService:
 
         Why: market 单应即时成交；limit 单超时未填可能是网络问题或价格远离市场，
         长期占用资金 / 配额。撤掉 + 写 risk_event。
+
+        P1-7: 各 exchange 串行 → 并发，5 家 ~1.5s → ~300ms。
         """
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         max_age_ms = _STALE_ORDER_MAX_AGE_S * 1000
 
-        for ex_name, adapter in self._adapters.items():
+        async def _scan_one_exchange(ex_name: str, adapter: Any) -> None:
             try:
                 if not hasattr(adapter, "fetch_open_orders"):
-                    continue
+                    return
                 orders = await adapter.fetch_open_orders()
                 stale_orders = []
                 for o in (orders or []):
@@ -567,7 +569,7 @@ class BalanceReconcilerService:
                     if ts > 0 and (now_ms - ts) > max_age_ms:
                         stale_orders.append(o)
                 if not stale_orders:
-                    continue
+                    return
                 for o in stale_orders:
                     try:
                         cancelled = await adapter.cancel_order(
@@ -605,6 +607,12 @@ class BalanceReconcilerService:
                         )
             except Exception as e:
                 logger.debug("stale_order_scan_failed", exchange=ex_name, error=str(e))
+
+        # 并发跑所有 exchange
+        await asyncio.gather(
+            *(_scan_one_exchange(ex_name, adapter) for ex_name, adapter in self._adapters.items()),
+            return_exceptions=True,
+        )
 
     def _compute_live_pnl(self, open_records: list, legs_by_pos: dict) -> None:
         """R7: 用 MarketDataHub ticker 计算每个 OPEN position 的 mark-to-market PnL。

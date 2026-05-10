@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.exchanges.base import ExchangeAdapter
 from app.exchanges.errors import ExchangeError
@@ -173,10 +173,18 @@ class FundingRateScanner:
         adapters: Dict[str, ExchangeAdapter],
         symbols: List[Symbol],
         config: Optional[ScannerConfig] = None,
+        market_data_hub: Any = None,
     ) -> None:
         self._adapters = adapters
         self._symbols = symbols
         self._config = config or ScannerConfig()
+        # P0-α 复用 hub funding cache：避免 3565 次 per-symbol fetch_funding_rate
+        # （hub 已 60s bulk fetch 一次全量，scanner 直接 hit cache 节省 ~6 分钟扫描时间）
+        self._hub = market_data_hub
+        # P0-α per-exchange 并发限制：防止 3565 任务同时打 limiter 雪崩
+        self._exchange_sems: Dict[str, asyncio.Semaphore] = {
+            ex: asyncio.Semaphore(50) for ex in adapters.keys()
+        }
 
     async def current_rate(
         self, exchange: str, symbol: Symbol
@@ -214,9 +222,26 @@ class FundingRateScanner:
             return None
 
     async def scan(self) -> List[FundingRateOpportunity]:
-        """并发扫描所有交易所 × 所有币种,返回通过过滤的机会列表"""
+        """并发扫描所有交易所 × 所有币种,返回通过过滤的机会列表
+
+        P0-α: 每任务 30s timeout（防单慢请求拖死整个 gather）
+        + per-exchange Semaphore(50) 限并发（防 3565 任务挤爆单家 limiter）
+        + 复用 MarketDataHub funding cache（节省 60-70% HTTP）
+        """
+        async def _scan_with_timeout(ex: str, ad: ExchangeAdapter, sym: Symbol) -> Optional[FundingRateOpportunity]:
+            try:
+                return await asyncio.wait_for(
+                    self._scan_one(ex, ad, sym), timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                logger.debug("scan_one_timeout", exchange=ex, symbol=str(sym))
+                return None
+            except Exception as e:
+                logger.debug("scan_one_failed", exchange=ex, symbol=str(sym), error=str(e)[:100])
+                return None
+
         tasks = [
-            self._scan_one(exchange_name, adapter, symbol)
+            _scan_with_timeout(exchange_name, adapter, symbol)
             for exchange_name, adapter in self._adapters.items()
             for symbol in self._symbols
             if InstrumentType.PERPETUAL in adapter.supported_instruments
@@ -254,12 +279,31 @@ class FundingRateScanner:
         adapter: ExchangeAdapter,
         symbol: Symbol,
     ) -> Optional[FundingRateOpportunity]:
-        """扫描单个 (交易所, 币种) 组合,返回机会或 None"""
+        """扫描单个 (交易所, 币种) 组合,返回机会或 None
+
+        P0-α 优化路径：先查 MarketDataHub funding cache（hit 则免 HTTP），
+        miss 才走 adapter.fetch_funding_rate 兜底。
+        """
         log = logger.bind(exchange=exchange_name, symbol=str(symbol))
+        sem = self._exchange_sems.get(exchange_name)
 
         try:
-            # Step 1: 拉取资金费率
-            funding = await adapter.fetch_funding_rate(symbol)
+            # Step 1: 拉取资金费率（hub-first，避免 3565 次重复 HTTP）
+            funding: Optional[FundingRate] = None
+            if self._hub is not None:
+                try:
+                    fr_entry = self._hub.get_funding_rate(exchange_name, symbol)
+                    if fr_entry is not None:
+                        funding = fr_entry.rate
+                except Exception:
+                    pass
+            if funding is None:
+                # cache miss → fallback HTTP，受 per-exchange Semaphore 限并发
+                if sem is not None:
+                    async with sem:
+                        funding = await adapter.fetch_funding_rate(symbol)
+                else:
+                    funding = await adapter.fetch_funding_rate(symbol)
 
             if not funding.is_positive:
                 log.debug("funding_rate_not_positive", rate=float(funding.rate))
@@ -291,11 +335,18 @@ class FundingRateScanner:
                     log.debug("volume_fetch_failed")
                     return None
 
-            # Step 2: 并发拉取现货 + 永续订单簿
-            spot_ob, perp_ob = await asyncio.gather(
-                adapter.fetch_orderbook(symbol, InstrumentType.SPOT, depth=10),
-                adapter.fetch_orderbook(symbol, InstrumentType.PERPETUAL, depth=10),
-            )
+            # Step 2: 并发拉取现货 + 永续订单簿（受 per-exchange Semaphore 限并发）
+            if sem is not None:
+                async with sem:
+                    spot_ob, perp_ob = await asyncio.gather(
+                        adapter.fetch_orderbook(symbol, InstrumentType.SPOT, depth=10),
+                        adapter.fetch_orderbook(symbol, InstrumentType.PERPETUAL, depth=10),
+                    )
+            else:
+                spot_ob, perp_ob = await asyncio.gather(
+                    adapter.fetch_orderbook(symbol, InstrumentType.SPOT, depth=10),
+                    adapter.fetch_orderbook(symbol, InstrumentType.PERPETUAL, depth=10),
+                )
 
             # 检查价差
             spot_spread = spot_ob.spread_bps()

@@ -87,6 +87,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 120s    # P2-4: lifespan 启动慢（5 CEX symbol_universe 拉取 30s+），
+                            # 之前默认 0s 导致首次健康检查在启动期间失败 → 反复重启
 
   # ----------------------------------------------------------
   # 前端 (Next.js 14)

@@ -90,6 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     logger.info("dracula_starting", environment=settings.environment)
 
+    # P0-β TaskSupervisor — 监控所有 long-running task，crash 后告警 + /health 反映
+    from app.core.task_supervisor import TaskSupervisor  # noqa: PLC0415
+    task_supervisor = TaskSupervisor()
+    app.state.task_supervisor = task_supervisor
+
     # --- Load funding-rate strategy config ---
     try:
         with open(_STRATEGY_CONFIG_PATH) as f:
@@ -228,6 +233,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             window_only_minutes=fr_window_min,
         )
         runner_task = asyncio.create_task(runner.run_forever(), name="funding_rate_runner")
+        task_supervisor.register("funding_rate_runner", runner_task)
         logger.info("funding_rate_runner_task_created")
 
         if strategy_cfg.get("enabled", False):
@@ -245,6 +251,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             paper_task = asyncio.create_task(
                 paper_session.run_forever(), name="paper_trading_session"
             )
+            task_supervisor.register("paper_trading_session", paper_task)
             logger.info(
                 "paper_trading_session_started",
                 instance=strategy_cfg.get("instance_name", "funding_rate_main"),
@@ -541,6 +548,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             spot_perp_task = asyncio.create_task(
                 spot_perp_runner.run_forever(), name="spot_perp_runner"
             )
+            task_supervisor.register("spot_perp_runner", spot_perp_task)
             logger.info("spot_perp_runner_task_created")
 
             # 实盘 broker 路由（同 funding_rate）
@@ -578,6 +586,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             spot_perp_paper_task = asyncio.create_task(
                 spot_perp_paper.run_forever(), name="spot_perp_paper_session"
             )
+            task_supervisor.register("spot_perp_paper_session", spot_perp_paper_task)
             logger.info(
                 "spot_perp_paper_session_task_created",
                 live=_sp_live,
@@ -620,6 +629,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("market_data_hub_init_failed")
     app.state.market_data_hub = market_data_hub
 
+    # P0-α: 把 hub 注入 funding_rate scanner（之前 runner 在 hub 创建前实例化，
+    # 这里做 late-bind，让 scanner 复用 hub 的 bulk funding cache，从 5-6 分钟
+    # 全量扫描降到 30-90 秒）
+    if runner is not None and market_data_hub is not None:
+        try:
+            runner._scanner._hub = market_data_hub
+            logger.info("funding_rate_scanner_hub_attached")
+        except Exception:
+            logger.exception("funding_rate_scanner_hub_attach_failed")
+
     # --- BalanceReconcilerService (实时余额 + 持仓对账，单腿告警) ---
     balance_reconciler = None
     balance_reconciler_task = None
@@ -640,6 +659,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 balance_reconciler_task = asyncio.create_task(
                     balance_reconciler.run_forever(), name="balance_reconciler",
                 )
+                task_supervisor.register("balance_reconciler", balance_reconciler_task)
                 logger.info("balance_reconciler_initialized",
                             authed_exchanges=list(authed_adapters.keys()))
             else:
@@ -722,6 +742,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             perp_basis_task = asyncio.create_task(
                 perp_basis_runner.run_forever(), name="perp_basis_runner",
             )
+            task_supervisor.register("perp_basis_runner", perp_basis_task)
             logger.info(
                 "perp_basis_runner_initialized",
                 exchanges=len(_pb_exchanges),
@@ -761,6 +782,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     perp_basis_paper_task = asyncio.create_task(
                         perp_basis_paper.run_forever(), name="perp_basis_paper",
                     )
+                    task_supervisor.register("perp_basis_paper", perp_basis_paper_task)
                     logger.info("perp_basis_paper_initialized")
         except Exception:
             logger.exception("perp_basis_paper_init_failed")
@@ -904,6 +926,31 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # P1-8: 统一异常处理器 — 500 不带 trace（防内部信息泄漏）
+    from fastapi.responses import JSONResponse as _JSONResponse  # noqa: PLC0415
+    from starlette.exceptions import HTTPException as _StarletteHTTPException  # noqa: PLC0415
+
+    @_app.exception_handler(_StarletteHTTPException)
+    async def _http_exception_handler(_req, exc: _StarletteHTTPException):
+        """让 HTTPException 的 detail 透传，但 500 单独走 generic handler。"""
+        return _JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
+    @_app.exception_handler(Exception)
+    async def _generic_exception_handler(req, exc: Exception):
+        """未捕获异常 → 500 + 固定 message + log 真实异常（不泄漏 trace）。"""
+        logger.exception(
+            "unhandled_request_exception",
+            path=str(getattr(req, "url", "?")),
+            error=f"{type(exc).__name__}: {str(exc)[:200]}",
+        )
+        return _JSONResponse(
+            status_code=500,
+            content={"detail": "internal server error"},
+        )
 
     # 轻量级 metrics 中间件：纯 ASGI 形式（Starlette 文档推荐方式，绕过
     # BaseHTTPMiddleware/装饰器 在某些 lifespan 工厂场景的失效问题）

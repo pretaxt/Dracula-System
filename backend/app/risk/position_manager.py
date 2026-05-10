@@ -6,6 +6,7 @@
 - 内存字典 ``_positions`` 是唯一的读取来源（SSOT）
 - 所有写操作先更新内存，再异步写 DB；DB 失败不回滚内存（允许短暂不一致）
 - ``load_open_positions()`` 在服务启动时从 DB 恢复内存状态
+- P0-γ: per-position lock 防止并发 close 导致双重平仓 / 双重 DB 写
 
 用法::
 
@@ -18,9 +19,14 @@
     pos.add_leg(leg)
     pos.mark_open()
     await manager.save(pos)
+
+    # 关键 close path：
+    async with manager.lock_for(pos.id):
+        await executor.close_position(pos.id, reason=...)
 """
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import Sequence
 
@@ -39,6 +45,25 @@ class PositionManager:
         # key: position.id (UUID 字符串)
         self._positions: dict[str, Position] = {}
         self._strategy_type = strategy_type
+        # P0-γ: per-position asyncio.Lock，防止并发 close 双重平仓
+        # asyncio 单线程不会数据竞争，但 close_position 内部多个 await 之间
+        # 状态可能被外部 modify。lock 序列化关键路径。
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock_for(self, position_id: str) -> asyncio.Lock:
+        """获取该仓位的串行化锁（lazy 创建）。
+
+        典型用法：
+            async with manager.lock_for(pos.id):
+                await executor.close_position(pos.id, ...)
+        """
+        if position_id not in self._locks:
+            self._locks[position_id] = asyncio.Lock()
+        return self._locks[position_id]
+
+    def _release_lock(self, position_id: str) -> None:
+        """完全清理该 position 的 lock（仅在 position 移除时调用）。"""
+        self._locks.pop(position_id, None)
 
     # ------------------------------------------------------------------
     # 查询
@@ -138,6 +163,7 @@ class PositionManager:
         """
         if position_id in self._positions:
             del self._positions[position_id]
+            self._release_lock(position_id)
             logger.info("position_discarded", position_id=position_id)
             return True
         return False

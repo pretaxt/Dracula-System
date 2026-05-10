@@ -482,11 +482,18 @@ class PerpBasisPaperSession:
                     # next_funding_time 是 *下一次* 结算时刻 — 当 now > 该时刻表示已结算
                     # 我们追踪的是"已结算到何时"
                     last_key = (pos.id, leg.side.value)
-                    last = self._last_settled_funding_ms.get(last_key, 0)
                     # 使用 funding interval 推算"刚刚发生的"结算时间戳
                     interval_h = funding_obj.funding_interval_hours or 8
                     interval_ms = interval_h * 3600 * 1000
                     last_settled_ts = fund_ts - interval_ms
+
+                    # P1-3 修复：restart 后内存 dict 空，首次见此 leg 仅 baseline 不结算
+                    # 防 restore 后第一个 tick 虚增一笔 funding
+                    if last_key not in self._last_settled_funding_ms:
+                        self._last_settled_funding_ms[last_key] = last_settled_ts
+                        continue
+
+                    last = self._last_settled_funding_ms[last_key]
                     if last_settled_ts <= last:
                         continue
                     # 这是新的一次结算

@@ -109,7 +109,17 @@ async def update_exchange_credentials(
     try:
         save_credentials(exchange, patch)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        # P1-8: 旧 detail=str(e) 可能泄漏内部 trace / SQL / API key 片段
+        # 改用固定 message，详细异常仅写日志
+        from app.core.logging import get_logger as _get_logger  # noqa: PLC0415
+        _get_logger(__name__).warning(
+            "save_credentials_validation_failed",
+            exchange=exchange, error=str(e)[:200],
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"凭据验证失败（{exchange}）；请检查格式与权限",
+        ) from e
 
     # 热重载 adapter + broker（失败仅 warning，重启容器仍能让文件凭据生效）
     try:

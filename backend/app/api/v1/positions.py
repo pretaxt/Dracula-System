@@ -175,8 +175,20 @@ async def close_position(
         sess = getattr(state, "paper_session", None)
 
     if sess is not None and hasattr(sess, "close_position"):
-        await sess.close_position(uuid, reason=body.reason)
-        msg = "close request submitted"
+        # P0-γ: 用 PositionManager.lock_for 序列化并发 close（防止双重平仓 / 双重 DB 写）
+        manager = getattr(sess, "_manager", None)
+        if manager is not None and hasattr(manager, "lock_for"):
+            async with manager.lock_for(uuid):
+                # double-check 锁内状态（可能其他请求已平仓）
+                pos = manager.get(uuid) if hasattr(manager, "get") else None
+                if pos is not None and getattr(pos, "is_open", False):
+                    await sess.close_position(uuid, reason=body.reason)
+                    msg = "close request submitted"
+                else:
+                    msg = "position already closed (raced)"
+        else:
+            await sess.close_position(uuid, reason=body.reason)
+            msg = "close request submitted"
     else:
         msg = "paper session not running; DB record unchanged"
 

@@ -643,7 +643,14 @@ class PaperTradingSession:
                 continue
             # next_funding_time 是「下次」结算时刻 — 上次结算 = next - interval
             last_settled_ms = next_ms - interval_ms
-            already = self._last_settled_funding_ms.get(pos.id, 0)
+
+            # P1-3 修复：restart 后内存 dict 空（B1 init 只在开仓路径），
+            # 直接进 settle 会再虚增一笔。这里若是首次见此 pos.id 仅 baseline 不记账。
+            if pos.id not in self._last_settled_funding_ms:
+                self._last_settled_funding_ms[pos.id] = last_settled_ms
+                continue  # restart 后首次 tick：建立 baseline，不重复结算
+
+            already = self._last_settled_funding_ms[pos.id]
             if last_settled_ms <= already:
                 continue  # 还没到新 settle
 

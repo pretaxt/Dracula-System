@@ -16,6 +16,7 @@ B3 修复（依据 risk-manager + code-reviewer 双审）:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -89,25 +90,17 @@ async def check_circuit_breakers(
     if state is None:
         return BreakerDecision(allow=True)
 
-    reconciler = getattr(state, "balance_reconciler", None)
-    adapters = getattr(state, "adapters", None)
-
-    try:
-        from app.services.dashboard_service import get_summary  # noqa: PLC0415
-        from app.core.database import get_session  # noqa: PLC0415
-        async with get_session() as session:
-            summary = await get_summary(
-                session, adapters=adapters, reconciler=reconciler,
-            )
-    except Exception as exc:
+    # P1-2: 通过 10s TTL cache 读 summary（三策略 + 前端轮询共享，免重复 11 query × N）
+    summary = await _get_cached_summary(state)
+    if summary is None:
         # B3-2 fail-closed：DB 故障即停手。监控故障不该等同于"绿灯继续开仓"。
         logger.error(
             "circuit_breaker_data_unavailable_fail_closed",
-            strategy=strategy_label, error=str(exc)[:120],
+            strategy=strategy_label,
         )
         return BreakerDecision(
             allow=False,
-            reason=f"data_unavailable: {str(exc)[:80]}",
+            reason="data_unavailable",
             halt_metric="data_unavailable",
         )
 
@@ -118,6 +111,65 @@ async def check_circuit_breakers(
     # B3-3 binance USDM 真实 MMR 监控（fail-closed 兜底）
     mmr_decision = await _check_binance_mmr(adapters, strategy_label)
     return mmr_decision if mmr_decision is not None else decision
+
+
+# P1-1: halt 告警去重 — 同 metric 5min 内不重复发 Telegram
+_recent_alerts: dict[str, datetime] = {}
+_ALERT_DEDUP_S = 300
+
+# P1-2: get_summary 10s TTL 缓存 — 三策略 + 前端轮询共享
+# 旧：每个 paper tick 都跑 11 次 DB query × 3 策略 × 60s = 33 query/min
+# 新：10s TTL → 6 query/min (假设每 10s 一次唤醒，共享 cache)
+_summary_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_SUMMARY_CACHE_TTL_S = 10.0
+
+
+async def _get_cached_summary(state: Any) -> dict[str, Any] | None:
+    """读取共享 summary cache（10s TTL）；miss 则获取并缓存。"""
+    import time as _time  # noqa: PLC0415
+    now = _time.monotonic()
+    if (
+        _summary_cache["data"] is not None
+        and (now - _summary_cache["ts"]) < _SUMMARY_CACHE_TTL_S
+    ):
+        return _summary_cache["data"]  # type: ignore[return-value]
+
+    reconciler = getattr(state, "balance_reconciler", None) if state else None
+    adapters = getattr(state, "adapters", None) if state else None
+    try:
+        from app.services.dashboard_service import get_summary  # noqa: PLC0415
+        from app.core.database import get_session  # noqa: PLC0415
+        async with get_session() as session:
+            data = await get_summary(
+                session, adapters=adapters, reconciler=reconciler,
+            )
+        _summary_cache["data"] = data
+        _summary_cache["ts"] = now
+        return data
+    except Exception as exc:
+        logger.error("summary_fetch_failed", error=str(exc)[:120])
+        return None
+
+
+def _maybe_telegram_critical(metric: str, strategy: str, reason: str) -> None:
+    """halt 触发 → Telegram critical 告警（去重避免刷屏）。"""
+    from datetime import datetime as _dt, timezone as _tz  # noqa: PLC0415
+    now = _dt.now(_tz.utc)
+    last = _recent_alerts.get(metric)
+    if last is not None and (now - last).total_seconds() < _ALERT_DEDUP_S:
+        return  # 去重窗口内不重复发
+    _recent_alerts[metric] = now
+    try:
+        from app.notifications import notify_reconcile_alert  # noqa: PLC0415
+        notify_reconcile_alert(
+            alert_type=f"circuit_breaker_{metric}",
+            severity="critical",
+            exchange="*",
+            symbol=strategy,
+            explanation=f"账户级硬红线触发熔断：{reason}（已阻断所有新开仓）",
+        )
+    except Exception:
+        logger.debug("circuit_breaker_telegram_failed", metric=metric)
 
 
 def _evaluate(summary: dict[str, Any], strategy_label: str) -> BreakerDecision:
@@ -137,23 +189,28 @@ def _evaluate(summary: dict[str, Any], strategy_label: str) -> BreakerDecision:
     # 红线触发顺序：daily DD > weekly DD > margin > 集中度
     if daily_dd <= DAILY_DD_HALT_PCT:
         msg = f"daily_dd {daily_dd}% <= {DAILY_DD_HALT_PCT}%"
-        logger.warning("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        _maybe_telegram_critical("daily_dd", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="daily_dd")
     if weekly_dd <= WEEKLY_DD_HALT_PCT:
         msg = f"weekly_dd {weekly_dd}% <= {WEEKLY_DD_HALT_PCT}%"
-        logger.warning("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        _maybe_telegram_critical("weekly_dd", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="weekly_dd")
     if margin >= MIN_MARGIN_USAGE_PCT:
         msg = f"margin_usage {margin}% >= {MIN_MARGIN_USAGE_PCT}%"
-        logger.warning("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        _maybe_telegram_critical("margin", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="margin")
     if ex_conc >= MAX_EXCHANGE_CONCENTRATION_PCT:
         msg = f"exchange_concentration {ex_conc}% >= {MAX_EXCHANGE_CONCENTRATION_PCT}%"
-        logger.warning("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        _maybe_telegram_critical("ex_conc", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="ex_conc")
     if sym_conc >= MAX_SYMBOL_CONCENTRATION_PCT:
         msg = f"symbol_concentration {sym_conc}% >= {MAX_SYMBOL_CONCENTRATION_PCT}%"
-        logger.warning("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
+        _maybe_telegram_critical("sym_conc", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="sym_conc")
 
     return BreakerDecision(allow=True)
@@ -198,6 +255,7 @@ async def _check_binance_mmr(
                 "circuit_breaker_halt_binance_mmr",
                 strategy=strategy_label, mmr_pct=str(mmr_pct), reason=msg,
             )
+            _maybe_telegram_critical("binance_mmr", strategy_label, msg)
             return BreakerDecision(allow=False, reason=msg, halt_metric="binance_mmr")
     except Exception as exc:
         logger.warning(

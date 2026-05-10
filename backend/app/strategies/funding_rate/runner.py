@@ -45,6 +45,7 @@ class FundingRateRunner:
         config: ScannerConfig,
         scan_interval_seconds: float = 60.0,
         window_only_minutes: float = 0.0,
+        market_data_hub: object | None = None,
     ) -> None:
         """funding-rate 扫描循环。
 
@@ -53,13 +54,14 @@ class FundingRateRunner:
         window_only_minutes:
             仅在任意已知标的的 funding 结算前 N 分钟内才执行扫描，
             0 = 禁用（24h 不停扫，旧行为）。
-            用每标的 ``next_funding_time`` 真实判断，不假设固定周期。
-            冷启动（cache 空）时强制扫描一次以填 cache。
+        market_data_hub:
+            P0-α scanner 复用 hub funding rate cache（节省 60-70% HTTP 请求）。
         """
         self._scanner = FundingRateScanner(
             adapters=adapters,
             symbols=symbols,
             config=config,
+            market_data_hub=market_data_hub,
         )
         self._interval = scan_interval_seconds
         self._window_minutes = float(window_only_minutes or 0)
