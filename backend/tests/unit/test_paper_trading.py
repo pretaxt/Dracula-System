@@ -211,32 +211,53 @@ class TestRiskBlocking:
 
 
 class TestFundingSettlement:
-    @pytest.mark.asyncio
-    async def test_no_settlement_before_8_hours(self):
-        session = _make_session(opportunities=[_make_opportunity()])
-        session._last_funding_settled = datetime.now(UTC)  # 刚结算
-        await session.run_once()
-        total = sum(
-            p.funding_received for p in session._manager.all_positions
-        )
-        assert total == Decimal("0")
+    """P0-1 重构后：funding settlement 改为 per-position，按 opportunity 提供的
+    next_funding_time 推进判定（不再用全局 _last_funding_settled timestamp）。"""
 
     @pytest.mark.asyncio
-    async def test_settlement_after_8_hours(self):
-        session = _make_session(opportunities=[_make_opportunity(rate="0.0003")])
+    async def test_no_settlement_when_opportunity_funding_not_advanced(self):
+        """同一 opportunity 重复出现不会重复结算（last_settled_ms 已记录）。"""
+        # 第一次 run_once 开仓 + 结算一次
+        session = _make_session(opportunities=[_make_opportunity()])
         await session.run_once()
-        session._last_funding_settled = datetime.now(UTC) - timedelta(hours=9)
+        # 第二次 run_once：opportunity 的 next_funding_time 没推进 → 跳过
+        baseline_total = sum(
+            p.funding_received for p in session._manager.all_positions
+        )
         await session.run_once()
         total = sum(
             p.funding_received for p in session._manager.all_positions
         )
-        assert total > Decimal("0")
+        assert total == baseline_total  # 没新增 funding
+
+    @pytest.mark.asyncio
+    async def test_settlement_after_funding_advanced(self):
+        """opportunity.next_funding_time 推进了一个 interval → 触发新结算。"""
+        opp1 = _make_opportunity(rate="0.0003")
+        session = _make_session(opportunities=[opp1])
+        await session.run_once()
+        baseline_total = sum(
+            p.funding_received for p in session._manager.all_positions
+        )
+        # 推进 next_funding_time 一个 interval (8h)
+        new_next_ms = opp1.funding_rate.next_funding_time + 8 * 3600 * 1000
+        opp2 = _make_opportunity(rate="0.0003", next_funding_time=new_next_ms)
+        session._scanner.scan = AsyncMock(return_value=[opp2])
+        await session.run_once()
+        total = sum(
+            p.funding_received for p in session._manager.all_positions
+        )
+        assert total > baseline_total
 
     @pytest.mark.asyncio
     async def test_negative_rate_skipped(self):
-        session = _make_session(opportunities=[_make_opportunity(rate="-0.0003")])
+        """rate <= 0 始终不结算（与 next_funding_time 推进无关）。"""
+        opp1 = _make_opportunity(rate="-0.0003")
+        session = _make_session(opportunities=[opp1])
         await session.run_once()
-        session._last_funding_settled = datetime.now(UTC) - timedelta(hours=9)
+        new_next_ms = opp1.funding_rate.next_funding_time + 8 * 3600 * 1000
+        opp2 = _make_opportunity(rate="-0.0003", next_funding_time=new_next_ms)
+        session._scanner.scan = AsyncMock(return_value=[opp2])
         await session.run_once()
         total = sum(
             p.funding_received for p in session._manager.all_positions
@@ -244,13 +265,24 @@ class TestFundingSettlement:
         assert total == Decimal("0")
 
     @pytest.mark.asyncio
-    async def test_last_settled_updated_after_settlement(self):
-        session = _make_session(opportunities=[_make_opportunity()])
+    async def test_last_settled_ms_advances_after_settlement(self):
+        """每次新结算，per-position last_settled_funding_ms 都应推进。"""
+        opp1 = _make_opportunity()
+        session = _make_session(opportunities=[opp1])
         await session.run_once()
-        cutoff = datetime.now(UTC) - timedelta(minutes=1)
-        session._last_funding_settled = cutoff - timedelta(hours=8)
+        # 拿到任一仓位
+        positions = list(session._manager.open_positions)
+        assert len(positions) == 1
+        pos_id = positions[0].id
+        first_settle_ms = session._last_settled_funding_ms.get(pos_id, 0)
+        assert first_settle_ms > 0
+        # 推进 next_funding_time 一个 interval 触发新结算
+        new_next_ms = opp1.funding_rate.next_funding_time + 8 * 3600 * 1000
+        opp2 = _make_opportunity(next_funding_time=new_next_ms)
+        session._scanner.scan = AsyncMock(return_value=[opp2])
         await session.run_once()
-        assert session._last_funding_settled > cutoff
+        second_settle_ms = session._last_settled_funding_ms.get(pos_id, 0)
+        assert second_settle_ms > first_settle_ms
 
 
 # ---------------------------------------------------------------------------

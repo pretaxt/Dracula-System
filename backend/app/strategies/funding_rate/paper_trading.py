@@ -690,7 +690,8 @@ class PaperTradingSession:
     @staticmethod
     def _violations_to_reason(violations: list) -> ExitReason:
         rules = {v.rule for v in violations}
-        if "stop_loss_pct" in rules:
+        # P1-6 新增 total_pnl_stop_loss 兜底，与 stop_loss_pct 同样映射 STOP_LOSS
+        if "stop_loss_pct" in rules or "total_pnl_stop_loss" in rules:
             return ExitReason.STOP_LOSS
         if "max_hold_hours" in rules:
             return ExitReason.MAX_HOLD_TIME

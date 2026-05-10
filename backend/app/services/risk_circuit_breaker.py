@@ -43,10 +43,10 @@ async def check_circuit_breakers(strategy_label: str = "") -> BreakerDecision:
     监控系统挂了不应连带停所有策略。但记 warning 让 oncall 关注。
     """
     try:
-        from app.services.dashboard_service import compute_summary  # noqa: PLC0415
+        from app.services.dashboard_service import get_summary  # noqa: PLC0415
         from app.core.database import get_session  # noqa: PLC0415
         async with get_session() as session:
-            summary = await compute_summary(session)
+            summary = await get_summary(session)
     except Exception as exc:
         logger.warning(
             "circuit_breaker_compute_failed_fail_open",

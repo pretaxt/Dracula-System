@@ -231,7 +231,8 @@ class BacktestEngine:
     def _violation_to_reason(violations: list) -> ExitReason:
         """将风控违规类型映射为平仓原因。"""
         rules = {v.rule for v in violations}
-        if "stop_loss_pct" in rules:
+        # P1-6 新增 total_pnl_stop_loss（含 funding+fees 兜底），与价格止损同样映射 STOP_LOSS
+        if "stop_loss_pct" in rules or "total_pnl_stop_loss" in rules:
             return ExitReason.STOP_LOSS
         if "max_hold_hours" in rules:
             return ExitReason.MAX_HOLD_TIME
