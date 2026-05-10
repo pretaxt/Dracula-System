@@ -313,68 +313,110 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ),
         )
 
-    # --- OKX polling-based liquidation watcher (no native WS user data stream) ---
-    okx_polling_watcher = None
-    okx_adapter = adapters.get("okx") if adapters else None
-    if (
-        settings.liquidation_watcher_enabled
-        and okx_adapter is not None
-        and getattr(okx_adapter, "_api_key", "")
-        and paper_session is not None
-    ):
+    # --- 跨所 polling-based liquidation watcher (P1-9: 覆盖所有 perp 交易所) ---
+    # 不依赖 WS 私有数据流的兜底网；每 30s 全所 fetch_positions vs 期望持仓集对账
+    # 期望集合并自所有 paper session（#01 funding_rate + #02 perp_basis + #04 spot_perp）
+    polling_watchers: list = []
+    if settings.liquidation_watcher_enabled and adapters:
         from app.exchanges.models import InstrumentType  # noqa: PLC0415
         from app.notifications import notify_perp_liquidated  # noqa: PLC0415
         from app.risk.models import ExitReason  # noqa: PLC0415
         from app.safety import PollingLiquidationWatcher  # noqa: PLC0415
 
-        _captured = paper_session
+        # binance 已有 WS-based watcher，跳过避免重复
+        _polling_targets = ["okx", "bybit", "htx", "bitget"]
 
-        def _okx_expected_positions() -> set[tuple[str, str]]:
-            """从 PositionManager 拿当前 OKX perp 腿期望集。"""
-            out: set[tuple[str, str]] = set()
-            for pos in _captured._manager.open_positions:
-                for leg in pos.legs:
-                    if (leg.instrument_type == InstrumentType.PERPETUAL
-                            and leg.exchange == "okx"
-                            and leg.size > 0):
-                        out.add((str(leg.symbol), leg.side.value))
-            return out
+        def _build_expected_getter(target_ex: str):
+            """每个交易所一个独立 getter，闭包捕获 target_ex。"""
+            def _get_expected() -> set[tuple[str, str]]:
+                out: set[tuple[str, str]] = set()
+                # #01 funding_rate
+                fr = getattr(app.state, "paper_session", None)
+                if fr is not None:
+                    for pos in fr._manager.open_positions:
+                        for leg in pos.legs:
+                            if (leg.instrument_type == InstrumentType.PERPETUAL
+                                    and leg.exchange == target_ex
+                                    and leg.size > 0):
+                                out.add((str(leg.symbol), leg.side.value))
+                # #02 perp_basis
+                pb = getattr(app.state, "perp_basis_paper", None)
+                if pb is not None:
+                    for pos in pb._manager.open_positions:
+                        for leg in pos.legs:
+                            if (leg.instrument_type == InstrumentType.PERPETUAL
+                                    and leg.exchange == target_ex
+                                    and leg.size > 0):
+                                out.add((str(leg.symbol), leg.side.value))
+                # #04 spot_perp 在 DB 里跟踪 perp 腿（PositionLegRecord），polling 跨所
+                # 暂不查询，避免与 reconciler 重复 + 增加 DB 负担。
+                # spot_perp 主要在 binance 上跑（已有 WS watcher）
+                return out
+            return _get_expected
 
-        async def _okx_on_liquidation(symbol, raw_event: dict) -> None:
-            positions = _captured._manager.get_by_symbol(symbol) or []
-            relevant = [
-                p for p in positions
-                if any(l.exchange == "okx" for l in p.legs)
-            ]
-            if not relevant:
-                logger.warning("okx_polling_no_matching_position", symbol=str(symbol))
-                notify_perp_liquidated(
-                    str(symbol), raw_event.get("side", "?"), "?", "?",
-                )
-                return
-            for pos in relevant:
-                try:
-                    await _captured._executor.close_position(
-                        pos.id, reason=ExitReason.PERP_LIQ_RISK,
+        def _build_on_liquidation(target_ex: str):
+            """每个交易所一个独立回调。"""
+            async def _on_liq(symbol, raw_event: dict) -> None:
+                handled_any = False
+                for sess_attr in ("paper_session", "perp_basis_paper"):
+                    sess = getattr(app.state, sess_attr, None)
+                    if sess is None:
+                        continue
+                    positions = sess._manager.get_by_symbol(symbol) or []
+                    relevant = [
+                        p for p in positions
+                        if any(l.exchange == target_ex for l in p.legs)
+                    ]
+                    for pos in relevant:
+                        try:
+                            close_fn = getattr(sess, "close_position", None)
+                            if close_fn:
+                                await close_fn(pos.id, reason="perp_liq_risk")
+                            elif sess_attr == "paper_session":
+                                await sess._executor.close_position(
+                                    pos.id, reason=ExitReason.PERP_LIQ_RISK,
+                                )
+                            logger.info(
+                                "polling_liquidation_handled",
+                                exchange=target_ex,
+                                strategy=sess_attr, symbol=str(symbol),
+                                position_id=pos.id[:8],
+                            )
+                            handled_any = True
+                        except Exception:
+                            logger.exception(
+                                "polling_close_failed",
+                                exchange=target_ex,
+                                strategy=sess_attr, symbol=str(symbol),
+                            )
+                if not handled_any:
+                    logger.warning(
+                        "polling_no_matching_position",
+                        exchange=target_ex, symbol=str(symbol),
                     )
-                    logger.info("okx_polling_liquidation_handled",
-                                symbol=str(symbol), position_id=pos.id[:8])
-                except Exception:
-                    logger.exception("okx_polling_close_failed",
-                                     symbol=str(symbol), position_id=pos.id[:8])
-            notify_perp_liquidated(str(symbol), raw_event.get("side", "?"), "?", "?")
+                notify_perp_liquidated(str(symbol), raw_event.get("side", "?"), "?", "?")
+            return _on_liq
 
-        okx_polling_watcher = PollingLiquidationWatcher(
-            adapter=okx_adapter,
-            exchange_name="okx",
-            on_liquidation=_okx_on_liquidation,
-            get_expected_positions=_okx_expected_positions,
-            interval_seconds=30.0,
-        )
-        await okx_polling_watcher.start()
-        logger.info("okx_polling_liquidation_watcher_enabled")
-    else:
-        logger.info("okx_polling_liquidation_watcher_disabled")
+        for ex_name in _polling_targets:
+            ad = adapters.get(ex_name)
+            if ad is None or not getattr(ad, "_api_key", ""):
+                logger.info("polling_watcher_skipped", exchange=ex_name, reason="no_api_key")
+                continue
+            try:
+                w = PollingLiquidationWatcher(
+                    adapter=ad,
+                    exchange_name=ex_name,
+                    on_liquidation=_build_on_liquidation(ex_name),
+                    get_expected_positions=_build_expected_getter(ex_name),
+                    interval_seconds=30.0,
+                )
+                await w.start()
+                polling_watchers.append(w)
+                logger.info("polling_liquidation_watcher_enabled", exchange=ex_name)
+            except Exception:
+                logger.exception("polling_watcher_init_failed", exchange=ex_name)
+
+    app.state.polling_liquidation_watchers = polling_watchers
 
     # --- Start spot-perp basis scanner (B.1) + paper trading (B.2) ---
     spot_perp_runner = None
@@ -496,7 +538,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.spot_perp_paper = spot_perp_paper
     app.state.spot_perp_paper_task = spot_perp_paper_task
     app.state.liquidation_watcher = liquidation_watcher
-    app.state.okx_polling_watcher = okx_polling_watcher
+    # 兼容字段：app.state.okx_polling_watcher 旧引用（reconciliation 等可能读）
+    app.state.okx_polling_watcher = next(
+        (w for w in polling_watchers if w._exchange_name == "okx"), None,
+    )
 
     # --- Market Data Hub (跨策略共享行情，去重 API 调用) ---
     market_data_hub = None
@@ -628,9 +673,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 from app.strategies.perp_basis.session_factory import (  # noqa: PLC0415
                     build_perp_basis_paper_session,
                 )
+                _pb_live_mode = settings.trading_mode.lower() == "live"
                 perp_basis_paper = build_perp_basis_paper_session(
                     cfg=_pb_yaml, adapters=adapters, scanner=pb_scanner,
                     market_data_hub=market_data_hub,
+                    live_mode=_pb_live_mode,
+                )
+                logger.info(
+                    "perp_basis_paper_mode",
+                    live=_pb_live_mode,
+                    broker_count=len(perp_basis_paper._brokers) if perp_basis_paper else 0,
                 )
                 if perp_basis_paper is not None:
                     await perp_basis_paper.restore()
@@ -705,8 +757,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("telegram_bot_stop_failed")
     if liquidation_watcher is not None:
         await liquidation_watcher.stop()
-    if okx_polling_watcher is not None:
-        await okx_polling_watcher.stop()
+    for _w in polling_watchers:
+        try:
+            await _w.stop()
+        except Exception:
+            pass
     if paper_session is not None:
         await paper_session.stop()
     if paper_task is not None:

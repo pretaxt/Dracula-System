@@ -52,8 +52,18 @@ EXIT_PCT = Decimal("0.03")        # |basis_pct| <= 0.03% 收敛平仓
 MAX_HOLD_HOURS = Decimal("12")    # 12 小时强制平仓
 MAX_CONCURRENT = 3
 NOTIONAL_PER_POSITION = Decimal("50")
-ROUND_TRIP_FEE_USD = Decimal("0.50")  # 现货+永续两腿往返费，paper 简化
+DEFAULT_TAKER_FEE_RATE = Decimal("0.0004")   # taker 0.04%（与三策略对齐）
+_OPEN_AND_CLOSE_LEG_COUNT = Decimal("4")     # spot+perp 开 2 腿 + 平 2 腿 = 4
 _FUNDING_REFRESH_EVERY_N_TICKS = 5    # 实时 funding 累计每 N 个 tick 刷新（5*60s=5 分钟）
+
+
+def _compute_round_trip_fee(notional_usd: Decimal, fee_rate: Decimal) -> Decimal:
+    """往返 4 腿手续费 = notional × fee_rate × 4。
+
+    旧实现硬编码 ROUND_TRIP_FEE_USD=$0.50（在 $50 notional 上 = 1.0% 往返费），
+    会让 paper PnL 系统性失真：entry 0.30%-0.50% 永远算成净亏。
+    """
+    return notional_usd * fee_rate * _OPEN_AND_CLOSE_LEG_COUNT
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +88,7 @@ class SpotPerpStrategyConfig:
     # discount 方向有 borrow + 付 funding 双层成本，应设比 premium 更高门槛。
     entry_pct_premium: Decimal = Decimal("0")
     entry_pct_discount: Decimal = Decimal("0")
-    round_trip_fee_usd: Decimal = ROUND_TRIP_FEE_USD
+    fee_rate: Decimal = DEFAULT_TAKER_FEE_RATE
     direction_filter: str = "premium"  # "premium" | "discount" | "both"
     candidate_symbols: list[str] = field(default_factory=list)
     exchanges: list[str] = field(default_factory=list)
@@ -148,7 +158,7 @@ class SpotPerpStrategyConfig:
             scan_threshold_pct=Decimal(str(overrides.get("scan_threshold_pct", self.scan_threshold_pct))),
             candidate_symbols=list(overrides.get("candidate_symbols", self.candidate_symbols)),
             exchanges=list(overrides.get("exchanges", self.exchanges)),
-            round_trip_fee_usd=self.round_trip_fee_usd,
+            fee_rate=self.fee_rate,
         )
         return new
 
@@ -449,6 +459,18 @@ class SpotPerpPaperSession:
 
         slots = self._cfg.max_concurrent - (len(open_rows) - closed_count)
         opened_count = 0
+
+        # P0-3 全局风控熔断 — 账户级硬红线触发即阻断所有新开仓
+        if slots > 0:
+            from app.services.risk_circuit_breaker import check_circuit_breakers  # noqa: PLC0415
+            breaker = await check_circuit_breakers(strategy_label="spot_perp")
+            if not breaker.allow:
+                logger.warning(
+                    "spot_perp_open_blocked_by_circuit_breaker",
+                    reason=breaker.reason, metric=breaker.halt_metric,
+                )
+                slots = 0
+
         if slots > 0:
             for opp in opps:
                 if slots <= 0:
@@ -504,7 +526,7 @@ class SpotPerpPaperSession:
                     funding_received=Decimal("0"),
                     fees_paid=(
                         Decimal(str(meta.get("fees", "0"))) if meta
-                        else self._cfg.round_trip_fee_usd
+                        else _compute_round_trip_fee(self._notional, self._cfg.fee_rate)
                     ),
                     opened_at=now,
                     closed_at=None,

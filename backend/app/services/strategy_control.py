@@ -179,6 +179,7 @@ async def start_perp_basis_paper(app_state) -> bool:
     async with _lock:
         if is_perp_basis_paper_running(app_state):
             return False
+        from app.core.config import get_settings  # noqa: PLC0415
         from app.strategies.perp_basis.session_factory import (  # noqa: PLC0415
             build_perp_basis_paper_session,
         )
@@ -193,9 +194,11 @@ async def start_perp_basis_paper(app_state) -> bool:
                 cfg = _yaml.safe_load(f) or {}
         except FileNotFoundError:
             cfg = {}
+        live_mode = get_settings().trading_mode.lower() == "live"
         session = build_perp_basis_paper_session(
             cfg=cfg, adapters=adapters, scanner=scanner,
             market_data_hub=getattr(app_state, "market_data_hub", None),
+            live_mode=live_mode,
         )
         if session is None:
             return False

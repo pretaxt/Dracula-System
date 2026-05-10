@@ -222,18 +222,38 @@ class RiskGuard:
 
         violations: list[RiskViolation] = []
 
-        # 1. 止损：总盈亏为负且超过名义价值的 stop_loss_pct
+        # 1a. 价格腿独立止损（P1-6）：剥离 funding 累计，独立判断 mark-to-market 价格风险
+        # 旧实现 total_pnl 包含 funding 收益，会"麻醉"价格止损 — funding +$3 可遮蔽 -$5 价格亏损
+        # 新逻辑：价格 PnL = realized + unrealized（不含 funding），独立超 stop_loss_pct 即触发
+        if position.notional_usd > 0:
+            price_pnl = position.realized_pnl + position.unrealized_pnl
+            if price_pnl < 0:
+                price_loss_pct = (-price_pnl / position.notional_usd) * Decimal("100")
+                if price_loss_pct > self.limits.stop_loss_pct:
+                    violations.append(RiskViolation(
+                        rule="stop_loss_pct",
+                        message=(
+                            f"仓位 {position.id[:8]} 价格腿亏损 {price_loss_pct:.2f}% "
+                            f"超过止损线 {self.limits.stop_loss_pct:.2f}%（funding 不参与遮蔽）"
+                        ),
+                        current_value=price_loss_pct,
+                        limit_value=self.limits.stop_loss_pct,
+                    ))
+
+        # 1b. 总 PnL 兜底（funding + 价格 + 费用）— 仍保留作为最终止损
+        # 阈值放宽到 stop_loss_pct × 1.5，避免与 1a 重复触发但还能兜住极端总亏
         if position.notional_usd > 0:
             loss_pct = (-position.total_pnl / position.notional_usd) * Decimal("100")
-            if loss_pct > self.limits.stop_loss_pct:
+            total_stop_pct = self.limits.stop_loss_pct * Decimal("1.5")
+            if loss_pct > total_stop_pct:
                 violations.append(RiskViolation(
-                    rule="stop_loss_pct",
+                    rule="total_pnl_stop_loss",
                     message=(
-                        f"仓位 {position.id[:8]} 亏损 {loss_pct:.2f}% "
-                        f"超过止损线 {self.limits.stop_loss_pct:.2f}%"
+                        f"仓位 {position.id[:8]} 总亏损 {loss_pct:.2f}% "
+                        f"超过总止损线 {total_stop_pct:.2f}%"
                     ),
                     current_value=loss_pct,
-                    limit_value=self.limits.stop_loss_pct,
+                    limit_value=total_stop_pct,
                 ))
 
         # 2. 最长持仓时间（支持传入模拟时间，用于回测）

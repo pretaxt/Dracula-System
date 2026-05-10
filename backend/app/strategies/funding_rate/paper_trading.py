@@ -46,8 +46,6 @@ from app.strategies.funding_rate.scanner import FundingRateOpportunity, FundingR
 
 logger = get_logger(__name__)
 
-_FUNDING_INTERVAL_HOURS = 8
-
 # 当 broker 拒绝某 (exchange, symbol) 因 API 白名单问题时，
 # 在以下时长内不再尝试，避免 -2010 错误反复污染 max_positions 配额
 _WHITELIST_DENY_TTL = timedelta(hours=24)
@@ -106,6 +104,7 @@ class PaperTradingSession:
         min_apr_for_hold_pct: Decimal = Decimal("0"),
         profit_target_pct: Decimal = Decimal("0"),
         perp_margin_loss_threshold_pct: Decimal = Decimal("0"),
+        trailing_drawdown_pct: Decimal = Decimal("3.0"),
     ) -> None:
         self._scanner = scanner
         self._executor = executor
@@ -114,10 +113,15 @@ class PaperTradingSession:
         self._interval = scan_interval_seconds
         self._pre_funding_window_min = pre_funding_window_minutes
         self._min_apr_for_hold = min_apr_for_hold_pct  # 0 = 不检查
-        self._profit_target_pct = profit_target_pct    # 0 = 不检查
+        self._profit_target_pct = profit_target_pct    # 0 = 不检查（>0 启用 trailing 触发器）
+        self._trailing_drawdown_pct = trailing_drawdown_pct  # P2-20 trailing 回撤幅度（pct of notional）
         self._perp_margin_loss_threshold = perp_margin_loss_threshold_pct  # 0 = 不检查
         self._running = False
-        self._last_funding_settled: datetime = datetime.now(UTC)
+        # P2-20 trailing profit: pos.id → 历史最高 profit_pct（仅在到达 profit_target 后启用）
+        self._peak_profit_pct: dict[str, Decimal] = {}
+        # 旧全局 _last_funding_settled 已移除（错位 bug：全局 8h 硬编码遗漏 OKX 4h 等）
+        # 改为 per-position 追踪：pos.id → 上一次已结算 funding 的 unix ms timestamp
+        self._last_settled_funding_ms: dict[str, int] = {}
         self._tick_count: int = 0
         # (exchange, symbol_str) → 拉黑到期时间。在此之前跳过该候选。
         self._whitelist_denied: dict[tuple[str, str], datetime] = {}
@@ -278,11 +282,24 @@ class PaperTradingSession:
         """对每个机会尝试开仓。
 
         过滤顺序：
+        -1. 全局熔断检查（账户 daily/weekly DD / margin / 集中度）
         0. APR < scanner.min_apr_pct 跳过（现算，避免 PATCH 后 cached opp 过期）
         1. 资金费结算前 N 分钟窗口内才允许开仓（默认 15min）
         2. 已有同标的持仓则跳过
         3. RiskLimitError 和 ValueError 静默跳过
         """
+        # P0-3 全局风控熔断 — 账户级硬红线触发即阻断所有新开仓
+        from app.services.risk_circuit_breaker import check_circuit_breakers  # noqa: PLC0415
+        breaker = await check_circuit_breakers(strategy_label="funding_rate")
+        if not breaker.allow:
+            logger.warning(
+                "paper_open_blocked_by_circuit_breaker",
+                strategy="funding_rate",
+                reason=breaker.reason,
+                metric=breaker.halt_metric,
+            )
+            return
+
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         window_ms = int(self._pre_funding_window_min * 60 * 1000)
         # 现算 min_apr — 防御式读取（测试 mock 可能没 _config，回退 0 = 全过）
@@ -304,6 +321,17 @@ class PaperTradingSession:
                     symbol=str(opp.symbol),
                     exchange=opp.exchange,
                     available=sorted(tradeable),
+                )
+                continue
+            # P2-16 一阶差分过滤：拒绝衰减信号 — 当前 APR 必须 ≥ 0.7 × 近 3 期峰值
+            # 防接刀：funding 已从高位（如 80%）回落到 30% 但未触底，继续走低
+            recent_max = getattr(opp, "recent_max_apr_pct", Decimal("0"))
+            if recent_max > 0 and opp.apr_pct < recent_max * Decimal("0.7"):
+                logger.debug(
+                    "paper_open_skipped_funding_decay",
+                    symbol=str(opp.symbol),
+                    current_apr=str(opp.apr_pct),
+                    recent_max_apr=str(recent_max),
                 )
                 continue
             time_to_funding_ms = opp.funding_rate.next_funding_time - now_ms
@@ -392,17 +420,31 @@ class PaperTradingSession:
         止损 / 最长持仓由 RiskGuard 在 `_monitor_and_close` 中处理。
         """
         for pos in list(self._manager.open_positions):
-            # 1. 净收益止盈检查（不依赖外部数据，先做）
+            # 1. P2-20 trailing profit：peak 触达 profit_target 后启用回撤监控
+            #    旧固定 profit_target 是绝对止盈（赚到 8% 后回撤到 0% 仍未平），
+            #    新逻辑：peak ≥ profit_target 后，current 回撤至 (peak - trailing_drawdown) 即锁利平仓
             if self._profit_target_pct > 0 and pos.notional_usd > 0:
                 net_pnl = pos.funding_received - pos.fees_paid + pos.realized_pnl
                 profit_pct = net_pnl / pos.notional_usd * Decimal("100")
-                if profit_pct >= self._profit_target_pct:
-                    await self._close_with_reason(
-                        pos, ExitReason.STRATEGY,
-                        log_event="paper_profit_target_exit",
-                        log_extra={"profit_pct": float(profit_pct)},
-                    )
-                    continue
+                # 维护 per-position peak
+                old_peak = self._peak_profit_pct.get(pos.id, profit_pct)
+                peak = max(old_peak, profit_pct)
+                self._peak_profit_pct[pos.id] = peak
+                # 仅当 peak 已到达 profit_target 时启用 trailing exit
+                if peak >= self._profit_target_pct:
+                    drawdown = peak - profit_pct
+                    if drawdown >= self._trailing_drawdown_pct:
+                        await self._close_with_reason(
+                            pos, ExitReason.STRATEGY,
+                            log_event="paper_trailing_profit_exit",
+                            log_extra={
+                                "peak_pct": float(peak),
+                                "current_pct": float(profit_pct),
+                                "drawdown_pct": float(drawdown),
+                            },
+                        )
+                        self._peak_profit_pct.pop(pos.id, None)
+                        continue
 
             # 2. 拉取最新资金费率
             exchange = pos.legs[0].exchange if pos.legs else ""
@@ -545,14 +587,15 @@ class PaperTradingSession:
         opportunities: Sequence[FundingRateOpportunity],
         now: datetime,
     ) -> None:
-        """若距上次结算已满 8 小时，对开仓位模拟资金费入账。"""
-        hours_since = (now - self._last_funding_settled).total_seconds() / 3600
-        if hours_since < _FUNDING_INTERVAL_HOURS:
-            return
+        """对开仓位 per-position 模拟资金费入账（按各 funding interval）。
 
-        # (exchange, symbol_str) → (funding_rate, perp_bid_price)
-        rate_map: dict[tuple[str, str], Decimal] = {
-            (opp.exchange, str(opp.symbol)): opp.funding_rate.rate
+        每个 position 跟踪 ``_last_settled_funding_ms`` — 仅当 opportunity 提供的
+        ``next_funding_time`` 推进了一个 interval（即新 settle 已发生）时入账。
+        修正旧全局 8h 硬编码 bug（OKX 4h / 部分 1h 标的少结算）。
+        """
+        # (exchange, symbol_str) → FundingRate（含 rate / next_funding_time / interval_hours）
+        fr_map: dict[tuple[str, str], "FundingRate"] = {
+            (opp.exchange, str(opp.symbol)): opp.funding_rate
             for opp in opportunities
         }
         price_map: dict[tuple[str, str], Decimal] = {
@@ -565,26 +608,40 @@ class PaperTradingSession:
         }
 
         total_settled = Decimal("0")
+        settled_count = 0
         for pos in self._manager.open_positions:
             exchange = pos.legs[0].exchange if pos.legs else ""
             key = (exchange, str(pos.symbol))
-            rate = rate_map.get(key, Decimal("0"))
+            fr = fr_map.get(key)
             perp_price = price_map.get(key, Decimal("0"))
-            if rate <= 0 or perp_price <= 0:
+            if fr is None or fr.rate <= 0 or perp_price <= 0:
                 continue
             perp_leg = next((l for l in pos.legs if l.side == Side.SELL), None)
             if perp_leg is None:
                 continue
-            funding = perp_leg.size * perp_price * rate
-            self._manager.record_funding(pos.id, funding)
-            total_settled += funding
 
-        self._last_funding_settled = now
-        if total_settled > 0:
+            interval_h = fr.funding_interval_hours or 8
+            interval_ms = interval_h * 3600 * 1000
+            next_ms = int(fr.next_funding_time or 0)
+            if next_ms <= 0:
+                continue
+            # next_funding_time 是「下次」结算时刻 — 上次结算 = next - interval
+            last_settled_ms = next_ms - interval_ms
+            already = self._last_settled_funding_ms.get(pos.id, 0)
+            if last_settled_ms <= already:
+                continue  # 还没到新 settle
+
+            funding = perp_leg.size * perp_price * fr.rate
+            self._manager.record_funding(pos.id, funding)
+            self._last_settled_funding_ms[pos.id] = last_settled_ms
+            total_settled += funding
+            settled_count += 1
+
+        if settled_count > 0:
             logger.info(
                 "paper_funding_settled",
                 total_usd=str(total_settled.quantize(Decimal("0.0001"))),
-                settled_positions=len(self._manager.open_positions),
+                settled_positions=settled_count,
             )
 
     # ------------------------------------------------------------------

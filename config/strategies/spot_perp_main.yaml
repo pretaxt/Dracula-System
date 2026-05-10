@@ -17,13 +17,13 @@ strategy_type: spot_perp
 enabled: true
 
 entry:
-  min_basis_pct: 0.50           # 入场阈值（D.2.b 实战调优 0.25→0.50：留滑点 0.20% + 手续费 0.16% + 利润 0.14%）
+  min_basis_pct: 0.30           # P2-13 入场阈值下调（fee 0.16% + slippage 0.05% + profit 0.09%）
   # c — 方向独立阈值（>0 时覆盖 min_basis_pct；0 或省略则回退）
-  # discount 方向有 borrow 利息 + 付 funding 双层成本，建议 ≥ premium 阈值 + 0.20%
-  min_basis_pct_premium: 0      # 0 = 用 min_basis_pct
-  min_basis_pct_discount: 0     # 0 = 用 min_basis_pct（建议设 0.50+）
+  # discount 方向有 borrow 利息 + 付 funding 双层成本，必须 ≥ premium 阈值 + 0.20%
+  min_basis_pct_premium: 0.30   # P2-13 premium 方向覆盖 fee+slippage+profit
+  min_basis_pct_discount: 0.70  # P0-4 discount 方向防 borrow 0.01-0.03%/8h × 12h + funding 双成本
   scan_threshold_pct: 0.10      # scanner 候选门槛（API 暴露所有 ≥0.10% 的机会，不一定开仓）
-  min_orderbook_depth_usd: 5000
+  min_orderbook_depth_usd: 20000  # P2-19 long-tail spot 深度 cushion（5K→20K 防滑点放大）
   # b — 入场时机过滤（防接飞刀）：要求 |basis| 已从近 N 分钟峰值回落 ≥ M%
   # 例：peak_window=10min, dropoff=0.05% → |basis| 必须先到过 0.35% 然后回落到 0.30% 才开（entry=0.30%）
   # 0 = 禁用（旧行为：见到阈值即入场）
@@ -32,11 +32,11 @@ entry:
 
 exit:
   basis_convergence_pct: 0.10   # 收敛平仓阈值（D.2.b 实战调优 0.03→0.10 防噪音）
-  max_hold_hours: 12.0          # 持仓超时强平
+  # P1-8 R:R 平衡：entry 0.30% → exit 0.10%（profit 0.20%）→ stop 0.20%（R:R = 1:1）
+  # 旧 0.50% 单笔最大亏 -0.66%，对称化后 -0.20% 损失对称 +0.20% 盈利
+  stop_basis_widening_pct: 0.20
+  max_hold_hours: 6.0           # P2-18 12h→6h：basis 大多 5-30min 内收敛；12h 持仓多在等 max_hold 触发
   min_hold_minutes: 5.0         # 最短持仓（防 1-3min 内 scanner 抖动触发噪音平仓）
-  # a — 基差扩大止损：当前基差较入场扩大 ≥ 该值（pct）触发止损，封顶单笔尾部风险
-  # 例 entry +0.30% → current +0.80% widening=0.50% 立止；0 = 禁用
-  stop_basis_widening_pct: 0.50
 
 position:
   max_positions: 3              # 同时持仓上限（含 paper 试样）
@@ -76,7 +76,7 @@ position:
     - TIA
 
 scanning:
-  scan_interval_seconds: 60     # scanner 周期（秒）；P0 策略保持 60s
+  scan_interval_seconds: 30     # P2-18 60→30s：basis 收敛快，30s tick 与 #02 一致
 
 execution:
   fee_rate: 0.0004              # 单边 taker 费率

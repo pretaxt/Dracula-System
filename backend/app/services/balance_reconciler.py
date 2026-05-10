@@ -28,8 +28,69 @@ _DEFAULT_INTERVAL_SECONDS = 30.0
 _QTY_DRIFT_TOLERANCE_PCT = Decimal("5.0")  # 5% 数量差异容忍（fee + slippage 缓冲）
 
 # R2.b auto-unwind cap — 单笔残留持仓 ≤ 此名义价值才自动清，否则等人工
-_AUTO_UNWIND_MAX_NOTIONAL_USD = Decimal("200")
+# P1-7: 静态 $200 cap 与策略 notional 脱节（单笔升到 $500 后所有 unwind 都 skip）。
+# 实际 cap 改为动态：max(2 × max_strategy_notional, 200) — 在 _try_auto_* 里读 yaml/state
+_AUTO_UNWIND_MAX_NOTIONAL_USD = Decimal("200")  # 兜底下限
 _auto_unwind_attempted: set[tuple[str, str]] = set()  # (exchange, symbol) 防重复尝试
+
+
+def _resolve_auto_unwind_cap() -> Decimal:
+    """读取三策略当前 notional_per_position 的最大值 × 2，作为 unwind cap。
+
+    fail-safe: yaml 读取失败时回退 _AUTO_UNWIND_MAX_NOTIONAL_USD ($200)。
+    每次调用都重读，让 PATCH 持久化的 override 立即生效。
+    """
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+        from app.services.runtime_overrides import load_overrides  # noqa: PLC0415
+
+        notionals: list[Decimal] = []
+        # #01 走 risk_limits.max_position_size_usd 兜底（global pool）
+        try:
+            with open("config/strategies/funding_rate_main.yaml") as f:
+                fr_cfg = _yaml.safe_load(f) or {}
+            v = (fr_cfg.get("position", {}) or {}).get("size_usd") \
+                or (fr_cfg.get("risk", {}) or {}).get("max_position_size_usd")
+            if v is not None:
+                notionals.append(Decimal(str(v)))
+        except Exception:
+            pass
+
+        # #02
+        try:
+            with open("config/strategies/perp_basis_main.yaml") as f:
+                pb_cfg = _yaml.safe_load(f) or {}
+            v = (pb_cfg.get("position", {}) or {}).get("notional_per_position")
+            if v is not None:
+                notionals.append(Decimal(str(v)))
+        except Exception:
+            pass
+
+        # #04
+        try:
+            with open("config/strategies/spot_perp_main.yaml") as f:
+                sp_cfg = _yaml.safe_load(f) or {}
+            v = (sp_cfg.get("position", {}) or {}).get("size_usd") \
+                or (sp_cfg.get("position", {}) or {}).get("notional_per_position")
+            if v is not None:
+                notionals.append(Decimal(str(v)))
+        except Exception:
+            pass
+
+        # PATCH override（perp_basis）
+        try:
+            ov = load_overrides() or {}
+            pb_ov = ov.get("perp_basis") or {}
+            if isinstance(pb_ov, dict) and "notional_per_position" in pb_ov:
+                notionals.append(Decimal(str(pb_ov["notional_per_position"])))
+        except Exception:
+            pass
+
+        if notionals:
+            return max(_AUTO_UNWIND_MAX_NOTIONAL_USD, max(notionals) * Decimal("2"))
+    except Exception:
+        pass
+    return _AUTO_UNWIND_MAX_NOTIONAL_USD
 
 # T6/R12 残留挂单清理 — 超过此年龄（秒）仍 NEW/PARTIAL 的 limit 单视为残留，自动撤
 _STALE_ORDER_MAX_AGE_S = 30 * 60  # 30 分钟（market 单不可能这么久仍 open）
@@ -600,12 +661,13 @@ class BalanceReconcilerService:
             side = alert.detail.get("side", "")
             entry = Decimal(str(alert.detail.get("entry_price") or 0))
             notional = contracts * entry
-            if notional > _AUTO_UNWIND_MAX_NOTIONAL_USD:
+            cap = _resolve_auto_unwind_cap()
+            if notional > cap:
                 logger.warning(
                     "auto_unwind_skip_above_cap",
                     symbol=alert.symbol,
                     notional=str(notional),
-                    cap=str(_AUTO_UNWIND_MAX_NOTIONAL_USD),
+                    cap=str(cap),
                 )
                 return False
             perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
@@ -690,13 +752,14 @@ class BalanceReconcilerService:
             notional = abs(entry * size)
         except Exception:
             notional = Decimal("0")
-        if notional > _AUTO_UNWIND_MAX_NOTIONAL_USD:
+        cap = _resolve_auto_unwind_cap()
+        if notional > cap:
             logger.warning(
                 "auto_close_remaining_skip_above_cap",
                 position_uuid=rec.uuid,
                 symbol=s_leg.symbol,
                 notional=str(notional),
-                cap=str(_AUTO_UNWIND_MAX_NOTIONAL_USD),
+                cap=str(cap),
             )
             return False
 

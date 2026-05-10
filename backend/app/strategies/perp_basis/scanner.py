@@ -133,7 +133,9 @@ class PerpBasisScanner:
                 elif diff_apr <= self._config.health_risky_diff_apr_max:
                     health = "risky"
                 else:
-                    health = "dirty"
+                    # P2-17: dirty tier (>500% APR diff) 几乎全是数据脏点（退市/停盘币 stale rate）
+                    # 不再展示在 opportunity 列表里，避免污染 UI 排序与潜在误开仓
+                    continue
                 opps.append(PerpBasisOpportunity(
                     symbol=sym_str,
                     long_exchange=long_ex,

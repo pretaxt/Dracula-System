@@ -16,7 +16,10 @@ scanning:
   max_funding_age_seconds: 180     # hub funding 老于此值则跳过
 
 entry:
-  min_diff_apr_pct: 3.0            # 入场门槛：funding diff APR ≥ 3%（覆盖 4 腿 fee 0.16% × 1095 ≈ 1.75% 年化）
+  # P0-5 入场门槛重新校准：3% 净空间仅 1.25% 易被滑点吃掉、50% override 过严导致 idle
+  # break-even 数学：4 legs × 0.04% taker = 0.16% fee；持 6 个 funding period 时 break-even
+  # 需 diff_apr ≥ 6×1095×0.0016/6 ≈ 12%，留 30% 缓冲 → 推荐 12% 下限
+  min_diff_apr_pct: 12.0
   max_opportunities: 50
 
 exit:
@@ -26,7 +29,7 @@ exit:
   margin_warn_pct: 80              # 任一侧 margin 占用 ≥ 80% 触发 stop
 
 position:
-  max_concurrent: 2
+  max_concurrent: 5                # P2-14 从 2 提到 5：跨所 perp-only delta-neutral 风险低
   notional_per_position: 50        # USD 起步，与 #04 一致
   exchanges: ["binance", "okx", "bitget", "bybit", "htx"]   # 全 5 家两两组合 → 10 pairs
   candidate_symbols:               # 30 主流（与 #04 同源，避免长尾流动性）

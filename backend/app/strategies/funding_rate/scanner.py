@@ -128,6 +128,8 @@ class FundingRateOpportunity:
     perp_orderbook: OrderBook
     history_positive_count: int = 0
     history_total_count: int = 0
+    # P2-16 一阶差分过滤：近 3 期 APR 最大值，paper_trading 判定 current ≥ 0.7 × 该值
+    recent_max_apr_pct: Decimal = Decimal("0")
 
     @property
     def apr_pct(self) -> Decimal:
@@ -327,7 +329,7 @@ class FundingRateScanner:
                 return None
 
             # Step 3: 历史资金费率稳定性检查
-            positive_count, total_count = await self._check_history(
+            positive_count, total_count, recent_max_apr = await self._check_history(
                 adapter, symbol, exchange_name
             )
             if positive_count < self._config.min_positive_periods:
@@ -347,6 +349,7 @@ class FundingRateScanner:
                 perp_orderbook=perp_ob,
                 history_positive_count=positive_count,
                 history_total_count=total_count,
+                recent_max_apr_pct=recent_max_apr,
             )
             log.info(
                 "opportunity_found",
@@ -365,27 +368,35 @@ class FundingRateScanner:
         adapter: ExchangeAdapter,
         symbol: Symbol,
         exchange_name: str,
-    ) -> Tuple[int, int]:
+    ) -> Tuple[int, int, Decimal]:
         """检查历史资金费率稳定性
 
-        返回 (positive_count, total_count)。
-        若适配器不支持历史查询,返回 (lookback_periods, lookback_periods)
-        以避免因数据缺失误过滤机会。
+        返回 (positive_count, total_count, recent_max_apr_pct)。
+        recent_max_apr_pct 是近 3 期最大 APR — paper_trading 用作一阶差分过滤
+        （拒绝当前 APR << 近期峰值的衰减信号）。
+        若适配器不支持历史查询，返回 (lookback, lookback, 0) 不阻止开仓。
         """
         lookback = self._config.lookback_periods
         fetch_history = getattr(adapter, "fetch_funding_rate_history", None)
 
         if fetch_history is None:
-            return lookback, lookback
+            return lookback, lookback, Decimal("0")
 
         try:
             history: List[FundingRate] = await fetch_history(
                 symbol, limit=lookback
             )
             if not history:
-                return lookback, lookback
+                return lookback, lookback, Decimal("0")
             positive = sum(1 for fr in history if fr.is_positive)
-            return positive, len(history)
+            # P2-16 近 3 期 APR 最大值（含当前）— APR = rate × (24/interval) × 365 × 100
+            recent = history[:3]
+            recent_max_apr = max(
+                (fr.rate * Decimal(str(24 / max(fr.funding_interval_hours or 8, 1)))
+                 * Decimal("365") * Decimal("100"))
+                for fr in recent
+            ) if recent else Decimal("0")
+            return positive, len(history), recent_max_apr
         except ExchangeError as e:
             logger.warning(
                 "funding_history_fetch_error",
@@ -393,4 +404,4 @@ class FundingRateScanner:
                 symbol=str(symbol),
                 error=str(e),
             )
-            return lookback, lookback
+            return lookback, lookback, Decimal("0")

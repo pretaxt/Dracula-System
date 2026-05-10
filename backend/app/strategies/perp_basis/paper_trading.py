@@ -152,6 +152,17 @@ class PerpBasisPaperSession:
         slots = self._max_concurrent - len(self._manager.open_positions)
         if slots <= 0 or not opportunities:
             return
+
+        # P0-3 全局风控熔断 — 账户级硬红线触发即阻断所有新开仓
+        from app.services.risk_circuit_breaker import check_circuit_breakers  # noqa: PLC0415
+        breaker = await check_circuit_breakers(strategy_label="perp_basis")
+        if not breaker.allow:
+            logger.warning(
+                "perp_basis_open_blocked_by_circuit_breaker",
+                reason=breaker.reason, metric=breaker.halt_metric,
+            )
+            return
+
         sorted_opps = sorted(
             opportunities, key=lambda o: getattr(o, "diff_apr_pct", 0), reverse=True,
         )
@@ -390,11 +401,16 @@ class PerpBasisPaperSession:
             if held < self._min_hold:
                 continue
 
-            # diff_apr 衰减
+            # diff_apr 衰减（P2-15 自适应阈值）：
+            # 旧固定 exit_diff=1% 在高 entry_diff（如 50%）时 hysteresis 过大；
+            # 新规则：effective_exit = max(exit_diff, 0.2 × entry_diff_apr_pct)
+            # 例：entry 50% → effective_exit = max(1%, 10%) = 10%；entry 12% → max(1%, 2.4%) = 2.4%
             if long_leg and short_leg:
                 key = (str(pos.symbol), long_leg.exchange, short_leg.exchange)
                 cur_diff = diff_by_pair.get(key)
-                if cur_diff is not None and cur_diff <= self._exit_diff:
+                entry_diff = pos.target_apr_pct or Decimal("0")
+                effective_exit = max(self._exit_diff, entry_diff * Decimal("0.2"))
+                if cur_diff is not None and cur_diff <= effective_exit:
                     to_close.append((pos, ExitReason.STRATEGY, "diff_decay"))
 
         for pos, reason, label in to_close:
