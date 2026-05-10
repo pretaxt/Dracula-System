@@ -161,3 +161,67 @@ async def stop_spot_perp(app_state) -> bool:
         app_state.spot_perp_paper = None
         app_state.spot_perp_paper_task = None
         return True
+
+
+# ---------------------------------------------------------------------------
+# #02 perp-basis paper trading 启停（Phase C）
+# ---------------------------------------------------------------------------
+
+
+def is_perp_basis_paper_running(app_state) -> bool:
+    sess = getattr(app_state, "perp_basis_paper", None)
+    task = getattr(app_state, "perp_basis_paper_task", None)
+    return sess is not None and task is not None and not task.done()
+
+
+async def start_perp_basis_paper(app_state) -> bool:
+    """启动 #02 perp-basis paper trading（已运行则幂等返回 False）。"""
+    async with _lock:
+        if is_perp_basis_paper_running(app_state):
+            return False
+        from app.strategies.perp_basis.session_factory import (  # noqa: PLC0415
+            build_perp_basis_paper_session,
+        )
+        import yaml as _yaml  # noqa: PLC0415
+
+        adapters = getattr(app_state, "adapters", {})
+        scanner = getattr(getattr(app_state, "perp_basis_runner", None), "_scanner", None)
+        if scanner is None:
+            return False
+        try:
+            with open("config/strategies/perp_basis_main.yaml") as f:
+                cfg = _yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            cfg = {}
+        session = build_perp_basis_paper_session(
+            cfg=cfg, adapters=adapters, scanner=scanner,
+            market_data_hub=getattr(app_state, "market_data_hub", None),
+        )
+        if session is None:
+            return False
+        await session.restore()
+        task = asyncio.create_task(session.run_forever(), name="perp_basis_paper")
+        app_state.perp_basis_paper = session
+        app_state.perp_basis_paper_task = task
+        return True
+
+
+async def stop_perp_basis_paper(app_state) -> bool:
+    async with _lock:
+        sess = getattr(app_state, "perp_basis_paper", None)
+        if sess is None:
+            return False
+        try:
+            await sess.stop()
+        except Exception:
+            pass
+        task = getattr(app_state, "perp_basis_paper_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        app_state.perp_basis_paper = None
+        app_state.perp_basis_paper_task = None
+        return True

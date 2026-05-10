@@ -119,6 +119,7 @@ class PerpBasisOpportunityOut(BaseModel):
     long_next_funding_ms: int
     short_next_funding_ms: int
     timestamp_ms: int
+    health_tier: str = "safe"        # #02-3: safe / risky / dirty (UI 警示色)
 
 
 class PerpBasisOpportunitiesResponse(BaseModel):
@@ -199,3 +200,51 @@ class SpotPerpConfigPatchRequest(BaseModel):
         if v is not None and v.lower() not in {"premium", "discount", "both"}:
             raise ValueError("direction_filter must be premium|discount|both")
         return v.lower() if v else v
+
+
+# ---------------------------------------------------------------------------
+# #02 perp_basis 配置（GET/PATCH 模式，对齐 #01 funding-rate）
+# ---------------------------------------------------------------------------
+
+
+class PerpBasisConfigResponse(BaseModel):
+    """GET /strategies/perp-basis/config 返回（实时反映 yaml + override）。"""
+
+    enabled: bool = True
+    paper_running: bool = False
+    min_diff_apr_pct: str
+    max_concurrent: int
+    notional_per_position: str
+    max_hold_hours: str
+    min_hold_hours: str
+    exit_diff_apr_pct: str
+    candidate_symbols: list[str]
+    scan_interval_seconds: float
+
+
+class PerpBasisConfigPatchRequest(BaseModel):
+    """PATCH /strategies/perp-basis/config 请求。所有字段可选。"""
+
+    min_diff_apr_pct: str | None = None
+    max_concurrent: int | None = None
+    notional_per_position: str | None = None
+    max_hold_hours: str | None = None
+    min_hold_hours: str | None = None
+    exit_diff_apr_pct: str | None = None
+
+    @field_validator(
+        "min_diff_apr_pct", "notional_per_position",
+        "max_hold_hours", "min_hold_hours", "exit_diff_apr_pct",
+    )
+    @classmethod
+    def validate_non_negative_pb(cls, v: str | None) -> str | None:
+        if v is not None and float(v) < 0:
+            raise ValueError("must be non-negative")
+        return v
+
+    @field_validator("max_concurrent")
+    @classmethod
+    def validate_max_concurrent_pb(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 10):
+            raise ValueError("max_concurrent must be 1..10")
+        return v

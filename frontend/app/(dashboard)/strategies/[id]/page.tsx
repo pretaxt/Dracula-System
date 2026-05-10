@@ -1,12 +1,21 @@
 'use client'
 import Link from 'next/link'
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, AlertTriangle } from 'lucide-react'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, type BadgeTone } from '@/components/ui/Button'
 import { useT } from '@/components/i18n/I18nProvider'
 import { getStrategyById, type StrategyStatus } from '@/lib/strategies/catalog'
-import { getStrategyStatus, getSpotPerpOpportunities, getFundingRateOpportunities, getPerpBasisOpportunities } from '@/lib/api/strategies'
+import {
+  getStrategyStatus,
+  getSpotPerpOpportunities,
+  getFundingRateOpportunities,
+  getPerpBasisOpportunities,
+  getPerpBasisConfig,
+  patchPerpBasisConfig,
+  getPerpBasisExchangeBalance,
+} from '@/lib/api/strategies'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
@@ -16,6 +25,7 @@ const INSTANCE_MAP: Record<string, string> = {
 
 const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
   RUNNING:    'active',
+  PAPER:      'info',
   PLANNED:    'paused',
   MONITOR:    'info',
   DISABLED:   'paused',
@@ -60,6 +70,35 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryFn: getPerpBasisOpportunities,
     refetchInterval: 10_000,
     enabled: params.id === 'perp-basis',
+  })
+  const { data: perpBasisCfg } = useQuery({
+    queryKey: ['perp-basis-cfg'],
+    queryFn: getPerpBasisConfig,
+    refetchInterval: 30_000,
+    enabled: params.id === 'perp-basis',
+  })
+  const { data: perpBasisBal } = useQuery({
+    queryKey: ['perp-basis-bal'],
+    queryFn: getPerpBasisExchangeBalance,
+    refetchInterval: 30_000,
+    enabled: params.id === 'perp-basis',
+  })
+  const queryClient = useQueryClient()
+  const patchPbCfg = useMutation({
+    mutationFn: patchPerpBasisConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['perp-basis-cfg'] })
+      queryClient.invalidateQueries({ queryKey: ['perp-basis-opps'] })
+    },
+  })
+  // PATCH 表单 local state（仅 perp-basis 用）
+  const [pbForm, setPbForm] = useState({
+    min_diff_apr_pct: '',
+    exit_diff_apr_pct: '',
+    max_concurrent: '',
+    notional_per_position: '',
+    max_hold_hours: '',
+    min_hold_hours: '',
   })
   const { data: summary } = useQuery({
     queryKey: ['dashboard'],
@@ -754,7 +793,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               }}>
                 <thead>
                   <tr>
-                    {[t('币对'), t('long 端'), t('short 端'), t('long APR'), t('short APR'), t('差 APR'), t('long 周期'), t('short 周期')].map((h, i) => (
+                    {[t('币对'), t('long 端'), t('short 端'), t('long APR'), t('short APR'), t('差 APR'), t('健康度'), t('周期 L/S')].map((h, i) => (
                       <th key={i} style={{
                         textAlign: i <= 2 ? 'left' : 'right',
                         padding: '10px 12px', color: 'var(--text-tertiary)',
@@ -770,10 +809,18 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 <tbody>
                   {(perpBasisOpps?.data ?? []).map((o) => {
                     const diff = parseFloat(o.diff_apr_pct)
-                    const minDiff = parseFloat(perpBasisOpps?.min_diff_apr_pct || '0')
-                    // 状态分级：≥ 2× 门槛 = 强；≥ 门槛 = 可开仓；< 门槛理论上不应进 list
-                    const strong = diff >= minDiff * 2
-                    const diffColor = strong ? 'var(--accent-emerald)' : 'var(--accent-gold)'
+                    const tier = o.health_tier ?? 'safe'
+                    // 健康度分级配色 — safe 绿 / risky 金 / dirty 红警示
+                    const tierColor = tier === 'dirty'
+                      ? 'var(--accent-blood)'
+                      : tier === 'risky'
+                        ? 'var(--accent-gold)'
+                        : 'var(--accent-emerald)'
+                    const tierLabel = tier === 'dirty'
+                      ? '⚠ dirty'
+                      : tier === 'risky'
+                        ? '⚡ risky'
+                        : '✓ safe'
                     return (
                       <tr key={`${o.symbol}-${o.long_exchange}-${o.short_exchange}`}
                           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
@@ -792,14 +839,14 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                         <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
                           {parseFloat(o.short_apr_pct).toFixed(2)}%
                         </td>
-                        <td style={{ padding: '12px', textAlign: 'right', color: diffColor, fontWeight: 600 }}>
-                          {strong && '★ '}{diff.toFixed(2)}%
+                        <td style={{ padding: '12px', textAlign: 'right', color: tierColor, fontWeight: 600 }}>
+                          {diff.toFixed(2)}%
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: tierColor, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                          {tierLabel}
                         </td>
                         <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
-                          {o.long_funding_interval_hours}h
-                        </td>
-                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-tertiary)' }}>
-                          {o.short_funding_interval_hours}h
+                          {o.long_funding_interval_hours}h / {o.short_funding_interval_hours}h
                         </td>
                       </tr>
                     )
@@ -814,6 +861,169 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
           }}>
             {t('入场门槛 funding diff APR ≥')} {parseFloat(perpBasisOpps?.min_diff_apr_pct || '0').toFixed(1)}%
             ， {perpBasisOpps?.exchange_pair_count ?? 0} {t('个交易所组合 · 30 秒扫描 · 数据来自 MarketDataHub')}
+          </div>
+          <div style={{
+            marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 11,
+            color: 'var(--text-tertiary)', letterSpacing: '0.04em',
+          }}>
+            {t('健康度')}: <span style={{ color: 'var(--accent-emerald)' }}>✓ safe</span> {t('≤200%')} ·
+            {' '}<span style={{ color: 'var(--accent-gold)' }}>⚡ risky</span> {t('200-500%')} ·
+            {' '}<span style={{ color: 'var(--accent-blood)' }}>⚠ dirty</span> {t('>500% (慎入)')}
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #02 perp-basis: per-exchange perp 余额（跨所策略需 ≥2 家就绪）*/}
+      {strategy.id === 'perp-basis' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('交易所资金状态')}
+            subtitle="PER-EXCHANGE PERP MARGIN"
+            right={
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 13,
+                color: perpBasisBal?.ready ? 'var(--accent-emerald)' : 'var(--accent-gold)',
+              }}>
+                {perpBasisBal?.ready ? `● ${t('跨所就绪')}` : `○ ${t('需 ≥2 家配 trading key')}`}
+              </span>
+            }
+          />
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: 12,
+          }}>
+            {(perpBasisBal?.data ?? []).map((b) => (
+              <div key={b.exchange} style={{
+                padding: 16,
+                background: 'var(--bg-deepest)',
+                border: `1px solid ${b.ready ? 'var(--accent-emerald)' : 'var(--border-subtle)'}`,
+                borderRadius: 4,
+              }}>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11,
+                  color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                }}>
+                  {b.exchange}
+                </div>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 22, marginTop: 6,
+                  color: b.ready ? 'var(--accent-emerald)' : 'var(--text-secondary)',
+                }}>
+                  ${parseFloat(b.perp_usdt_total).toFixed(2)}
+                </div>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11, marginTop: 4,
+                  color: 'var(--text-muted)',
+                }}>
+                  {t('可用')} ${parseFloat(b.perp_usdt_free).toFixed(2)} · {b.ready ? t('已就绪') : t('< $10 不足')}
+                </div>
+              </div>
+            ))}
+            {(perpBasisBal?.data ?? []).length === 0 && (
+              <div style={{
+                padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)',
+                fontSize: 14, color: 'var(--text-tertiary)',
+              }}>
+                {t('Reconciler 未就绪 — 等 30 秒首轮余额刷新')}
+              </div>
+            )}
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #02 perp-basis: 配置表单（PATCH 热更新）*/}
+      {strategy.id === 'perp-basis' && perpBasisCfg && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('参数配置（PATCH 热更新）')}
+            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            right={
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 12,
+                color: perpBasisCfg.paper_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+              }}>
+                {perpBasisCfg.paper_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+              </span>
+            }
+          />
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 16,
+          }}>
+            {([
+              { key: 'min_diff_apr_pct',     label: 'funding diff 入场 (%)', cur: perpBasisCfg.min_diff_apr_pct },
+              { key: 'exit_diff_apr_pct',    label: 'diff 衰减退出 (%)',     cur: perpBasisCfg.exit_diff_apr_pct },
+              { key: 'max_hold_hours',       label: '最长持仓 (h)',           cur: perpBasisCfg.max_hold_hours },
+              { key: 'min_hold_hours',       label: '最少持仓 (h)',           cur: perpBasisCfg.min_hold_hours },
+              { key: 'notional_per_position',label: '单笔名义 (USD)',         cur: perpBasisCfg.notional_per_position },
+              { key: 'max_concurrent',       label: '同时持仓上限',           cur: String(perpBasisCfg.max_concurrent) },
+            ] as const).map((f) => (
+              <div key={f.key}>
+                <label style={{
+                  display: 'block', fontFamily: 'var(--font-mono)', fontSize: 11,
+                  color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.08em', marginBottom: 6,
+                }}>
+                  {t(f.label)}
+                </label>
+                <input
+                  type="text"
+                  placeholder={f.cur}
+                  value={(pbForm as Record<string, string>)[f.key]}
+                  onChange={(e) => setPbForm({ ...pbForm, [f.key]: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 10px',
+                    background: 'var(--bg-deepest)', border: '1px solid var(--border-default)',
+                    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 14,
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4,
+                  color: 'var(--text-muted)',
+                }}>
+                  {t('当前')}: {f.cur}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: 20, paddingTop: 16,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          }}>
+            <button
+              onClick={() => {
+                const patch: Record<string, unknown> = {}
+                if (pbForm.min_diff_apr_pct) patch.min_diff_apr_pct = pbForm.min_diff_apr_pct
+                if (pbForm.exit_diff_apr_pct) patch.exit_diff_apr_pct = pbForm.exit_diff_apr_pct
+                if (pbForm.max_hold_hours) patch.max_hold_hours = pbForm.max_hold_hours
+                if (pbForm.min_hold_hours) patch.min_hold_hours = pbForm.min_hold_hours
+                if (pbForm.notional_per_position) patch.notional_per_position = pbForm.notional_per_position
+                if (pbForm.max_concurrent) patch.max_concurrent = parseInt(pbForm.max_concurrent, 10)
+                if (Object.keys(patch).length === 0) return
+                patchPbCfg.mutate(patch)
+                setPbForm({
+                  min_diff_apr_pct: '', exit_diff_apr_pct: '', max_concurrent: '',
+                  notional_per_position: '', max_hold_hours: '', min_hold_hours: '',
+                })
+              }}
+              disabled={patchPbCfg.isPending}
+              style={{
+                padding: '8px 18px', background: 'var(--accent-blood)', color: 'white',
+                border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                opacity: patchPbCfg.isPending ? 0.5 : 1, letterSpacing: '0.06em',
+              }}
+            >
+              {patchPbCfg.isPending ? t('应用中...') : t('应用 PATCH')}
+            </button>
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)',
+            }}>
+              {t('仅填空字段会被更新，下一 tick (≤30s) 生效')}
+            </span>
           </div>
         </CardElevated>
       )}

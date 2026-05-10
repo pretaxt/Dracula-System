@@ -16,6 +16,7 @@ import { STRATEGIES, type StrategyStatus } from '@/lib/strategies/catalog'
 
 const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
   RUNNING:    'active',
+  PAPER:      'info',
   PLANNED:    'paused',
   MONITOR:    'info',
   DISABLED:   'paused',

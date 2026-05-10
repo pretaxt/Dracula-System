@@ -1,8 +1,9 @@
 """单元测试 — execution/order_executor.py"""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -254,6 +255,330 @@ class TestOpenRiskBlocked:
 
         with pytest.raises(RiskLimitError):
             await executor.open_delta_neutral(opp, size_usd=Decimal("500"))
+
+
+class TestPartialCloseRiskEventAndTelegram:
+    """TS_R9 + TS_R10 — PartialCloseError 必须同时写 risk_event + 发 Telegram。"""
+
+    @pytest.mark.asyncio
+    async def test_partial_close_writes_risk_event_and_notifies(self):
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        async def fake_execute(req):
+            if req.instrument_type == InstrumentType.PERPETUAL:
+                from app.execution.paper_broker import OrderResult
+                return OrderResult(
+                    request=req, filled=True, avg_price=req.reference_price,
+                    filled_size=req.size, fees=Decimal("0"),
+                    slippage_bps=Decimal("0"), filled_at=datetime.now(UTC),
+                )
+            raise RuntimeError("spot close fail")
+
+        with patch.object(executor._broker, "execute", new=fake_execute):
+            with patch.object(manager, "save", new=AsyncMock()):
+                with patch("app.services.risk_event_service.write_risk_event", new=AsyncMock()) as mock_re:
+                    with patch("app.notifications.notify_reconcile_alert") as mock_tg:
+                        from app.execution.order_executor import PartialCloseError
+                        with pytest.raises(PartialCloseError):
+                            await executor.close_position(pos.id)
+        # risk_event "partial_close" 必写
+        types = [c.kwargs.get("event_type") for c in mock_re.await_args_list]
+        assert "partial_close" in types
+        # Telegram 通知必发
+        mock_tg.assert_called()
+
+
+class TestPnLUsesFilledSize:
+    """TS_pnl — close 后 PnL 计算用 result.filled_size，处理 X7 cap 后 filled<leg.size。"""
+
+    @pytest.mark.asyncio
+    async def test_pnl_uses_filled_when_capped(self):
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        # close 时 spot SELL 被 cap，filled_size=0.0099 < leg.size=0.01
+        leg_size = pos.legs[0].size  # spot
+        capped_size = leg_size * Decimal("0.99")
+
+        async def fake_execute(req):
+            from app.execution.paper_broker import OrderResult
+            filled = capped_size if req.instrument_type == InstrumentType.SPOT else req.size
+            return OrderResult(
+                request=req, filled=True,
+                avg_price=req.reference_price + Decimal("100"),  # 价格上涨 100
+                filled_size=filled,
+                fees=Decimal("0"), slippage_bps=Decimal("0"),
+                filled_at=datetime.now(UTC),
+            )
+
+        with patch.object(executor._broker, "execute", new=fake_execute):
+            with patch.object(manager, "save", new=AsyncMock()):
+                closed = await executor.close_position(pos.id)
+
+        # spot 用 filled_size (capped) 算 PnL，而非 leg.size
+        # spot BUY: entry, close 时 SELL 价格 +100, 用 capped_size
+        # 期望: realized_pnl 根据 capped_size 算（小于用 leg.size）
+        assert closed.status == PositionStatus.CLOSED
+
+
+class TestPostCloseReconcile:
+    """TS_R13 — close_position 后 fetch_positions 验证真实平掉。"""
+
+    @pytest.mark.asyncio
+    async def test_post_close_alerts_when_perp_residual(self):
+        from app.execution.live_broker import LiveBroker
+        # 构造一个 LiveBroker，broker dict 里
+        adapter = MagicMock()
+        adapter.exchange_id = "binance"
+        spot_client = MagicMock()
+        spot_client.fetch_balance = AsyncMock(return_value={"free": {"USDT": "10000"}, "total": {"USDT": "10000"}})
+        spot_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q}")
+        perp_client = MagicMock()
+        perp_client.fetch_balance = AsyncMock(return_value={"free": {"USDT": "1000"}, "total": {"USDT": "1000"}})
+        perp_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q}")
+        perp_client.set_margin_mode = AsyncMock()
+        perp_client.set_leverage = AsyncMock()
+        # 关键：post-close 时 fetch_positions 仍返回非零持仓
+        perp_client.fetch_positions = AsyncMock(return_value=[
+            {"symbol": "BTC/USDT:USDT", "contracts": 0.01, "side": "short"},
+        ])
+        adapter._clients = {InstrumentType.SPOT: spot_client, InstrumentType.PERPETUAL: perp_client}
+        adapter.top_up_perp_margin = AsyncMock()
+        # open + close 都成功
+        from app.exchanges.models import Order, OrderStatus, OrderType
+        def filled(instrument, side, size="0.01"):
+            return Order(order_id="X", client_order_id="", symbol=BTC,
+                         instrument=instrument, side=side, order_type=OrderType.MARKET,
+                         size=Decimal(size), price=Decimal("0"), filled=Decimal(size),
+                         avg_fill_price=Decimal("60000"), status=OrderStatus.FILLED,
+                         timestamp=1_700_000_000_000, exchange="binance")
+        adapter.place_order = AsyncMock(side_effect=[
+            filled(InstrumentType.SPOT, Side.BUY),
+            filled(InstrumentType.PERPETUAL, Side.SELL),
+            filled(InstrumentType.PERPETUAL, Side.BUY),
+            filled(InstrumentType.SPOT, Side.SELL),
+        ])
+        broker = LiveBroker(adapter=adapter, perp_leverage=Decimal("5"))
+        manager = PositionManager()
+        manager.save = AsyncMock()
+        guard = RiskGuard(limits=_default_limits())
+        executor = OrderExecutor(broker={"binance": broker}, manager=manager, guard=guard)
+        opp = _make_opportunity()
+        pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        # 期望：close 完成 + write_risk_event 被调（perp 残留）
+        with patch("app.services.risk_event_service.write_risk_event", new=AsyncMock()) as mock_we:
+            with patch("app.notifications.notify_reconcile_alert") as mock_notify:
+                await executor.close_position(pos.id)
+        # 至少调一次 risk_event（post_close_reconcile_perp_residual）
+        types = [c.kwargs.get("event_type") for c in mock_we.await_args_list]
+        assert "post_close_reconcile_perp_residual" in types
+
+
+class TestClosePartialFailure:
+    """R4 — 一腿成功一腿失败必须抛 PartialCloseError 让上层接管 reconciliation。
+    严禁静默吞错让单腿暴露在交易所。
+    """
+
+    @pytest.mark.asyncio
+    async def test_perp_close_succeeds_spot_fails_raises_partial(self):
+        from app.execution.order_executor import PartialCloseError
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        call_count = {"n": 0}
+        async def fake_execute(req):
+            call_count["n"] += 1
+            from app.execution.paper_broker import OrderResult
+            # perp 第 1 个被尝试（sorted_legs perp 优先），成功
+            if req.instrument_type == InstrumentType.PERPETUAL:
+                return OrderResult(
+                    request=req, filled=True,
+                    avg_price=req.reference_price, filled_size=req.size,
+                    fees=Decimal("0.1"), slippage_bps=Decimal("0"),
+                    filled_at=datetime.now(UTC),
+                )
+            # spot 抛错 — broker 拒单
+            raise RuntimeError("spot close failed")
+
+        with patch.object(executor._broker, "execute", new=fake_execute):
+            with patch.object(manager, "save", new=AsyncMock()):
+                with pytest.raises(PartialCloseError) as excinfo:
+                    await executor.close_position(pos.id)
+
+        err = excinfo.value
+        assert len(err.succeeded_legs) == 1
+        assert len(err.failed_legs) == 1
+        assert err.succeeded_legs[0].instrument_type == InstrumentType.PERPETUAL
+        assert err.failed_legs[0][0].instrument_type == InstrumentType.SPOT
+        # 仓位仍未标记 closed（DB 与真实状态会被 reconciler 修正）
+        assert pos.status == PositionStatus.OPEN
+
+    @pytest.mark.asyncio
+    async def test_perp_first_then_spot_order(self):
+        """sorted_legs 必须 perp 在 spot 前 — perp reduce_only 更安全先确定。"""
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        order: list = []
+        async def fake_execute(req):
+            order.append(req.instrument_type)
+            from app.execution.paper_broker import OrderResult
+            return OrderResult(
+                request=req, filled=True,
+                avg_price=req.reference_price, filled_size=req.size,
+                fees=Decimal("0"), slippage_bps=Decimal("0"),
+                filled_at=datetime.now(UTC),
+            )
+
+        with patch.object(executor._broker, "execute", new=fake_execute):
+            with patch.object(manager, "save", new=AsyncMock()):
+                await executor.close_position(pos.id)
+
+        assert order[0] == InstrumentType.PERPETUAL
+        assert order[1] == InstrumentType.SPOT
+
+
+class TestClosePositionReduceOnlyPerLeg:
+    """X6 修复 — close_position 不应给 spot leg 传 reduce_only=True
+    （Binance spot 不接受该参数，会返回 -1104 'extra parameter'）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_spot_leg_close_no_reduce_only(self):
+        from unittest.mock import patch as patch_mod
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        with patch_mod.object(manager, "save", new=AsyncMock()):
+            pos = await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        # mock broker.execute 捕获 close 时传给每条腿的 OrderRequest
+        captured: list = []
+
+        async def fake_execute(req):
+            captured.append(req)
+            from app.execution.paper_broker import OrderResult
+            return OrderResult(
+                request=req,
+                filled=True,
+                avg_price=req.reference_price,
+                filled_size=req.size,
+                fees=Decimal("0"),
+                slippage_bps=Decimal("0"),
+                filled_at=datetime.now(UTC),
+            )
+
+        with patch_mod.object(executor._broker, "execute", new=fake_execute):
+            with patch_mod.object(manager, "save", new=AsyncMock()):
+                await executor.close_position(pos.id)
+
+        # 应有 2 个 close 请求（spot + perp）
+        assert len(captured) == 2
+        spot_req = next(r for r in captured if r.instrument_type == InstrumentType.SPOT)
+        perp_req = next(r for r in captured if r.instrument_type == InstrumentType.PERPETUAL)
+        assert spot_req.reduce_only is False, "spot 关单不能传 reduce_only=True"
+        assert perp_req.reduce_only is True, "perp 关单必须 reduce_only=True"
+        assert perp_req.position_side == "SHORT"
+        assert spot_req.position_side is None
+
+
+class TestTradeableExchanges:
+    """tradeable_exchanges 让调用方过滤无 broker 的候选。
+
+    Why: live_mode 下仅鉴权 adapter 有 broker；scanner 仍扫全部 exchange 行情。
+    没有这个 hint 候选会反复抛 RuntimeError 污染 paper_open_unexpected_error。
+    """
+
+    def test_dict_broker_returns_keys(self):
+        manager = PositionManager()
+        guard = RiskGuard(limits=_default_limits())
+        b1 = PaperBroker(slippage_bps=Decimal("0"), fee_rate=Decimal("0"))
+        b2 = PaperBroker(slippage_bps=Decimal("0"), fee_rate=Decimal("0"))
+        ex = OrderExecutor(broker={"binance": b1, "okx": b2}, manager=manager, guard=guard)
+        assert ex.tradeable_exchanges == {"binance", "okx"}
+
+    def test_single_broker_returns_none(self):
+        executor, _ = _make_executor()
+        assert executor.tradeable_exchanges is None
+
+    def test_empty_dict_returns_empty_set(self):
+        manager = PositionManager()
+        guard = RiskGuard(limits=_default_limits())
+        ex = OrderExecutor(broker={}, manager=manager, guard=guard)
+        assert ex.tradeable_exchanges == set()
+
+
+class TestOpenBrokerFailureRollback:
+    """broker.execute_pair 抛错时，OrderExecutor 必须 discard 内存 position
+    并重新抛出，避免幽灵持仓污染 max_positions 配额。
+
+    Why: 实战中 Binance API 白名单不含某 symbol，spot 下单返回 -2010，
+    旧实现把 position 留在内存里，后续所有候选都被 max_positions=1 屏蔽，
+    整个 8h 窗口实际成交 = 0。
+    """
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_position_on_broker_error(self):
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        boom = RuntimeError('binance {"code":-2010,"msg":"Symbol not whitelisted for API key."}')
+
+        with patch.object(manager, "save", new=AsyncMock()):
+            with patch.object(
+                executor._broker, "execute_pair", new=AsyncMock(side_effect=boom)
+            ):
+                with pytest.raises(RuntimeError):
+                    await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+        assert manager.all_positions == []
+        assert manager.open_positions == []
+
+    @pytest.mark.asyncio
+    async def test_rollback_does_not_persist_to_db(self):
+        executor, manager = _make_executor()
+        opp = _make_opportunity()
+        save_mock = AsyncMock()
+
+        with patch.object(manager, "save", save_mock):
+            with patch.object(
+                executor._broker, "execute_pair", new=AsyncMock(side_effect=Exception("nope"))
+            ):
+                try:
+                    await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+                except Exception:
+                    pass
+
+        save_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_subsequent_open_succeeds_after_rollback(self):
+        """回滚后 max_positions 配额未被永久占用，下一次 open 可成功。"""
+        executor, manager = _make_executor(max_positions=1)
+        opp = _make_opportunity()
+
+        with patch.object(manager, "save", new=AsyncMock()):
+            with patch.object(
+                executor._broker, "execute_pair",
+                new=AsyncMock(side_effect=Exception("Symbol not whitelisted")),
+            ):
+                with pytest.raises(Exception):
+                    await executor.open_delta_neutral(opp, size_usd=Decimal("600"))
+
+            # 第二次（不再 patch，走真实 PaperBroker）必须成功
+            opp2 = _make_opportunity(symbol=ETH)
+            pos = await executor.open_delta_neutral(opp2, size_usd=Decimal("600"))
+
+        assert pos.status == PositionStatus.OPEN
+        assert len(manager.open_positions) == 1
 
 
 # ---------------------------------------------------------------------------

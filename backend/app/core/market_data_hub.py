@@ -297,24 +297,32 @@ class MarketDataHub:
         cache = self._cache[exchange]
         clients = getattr(adapter, "_clients", {}) or {}
         perp_client = clients.get(InstrumentType.PERPETUAL)
-        if perp_client is None or not hasattr(perp_client, "fetch_funding_rates"):
-            # 跳过：CCXT 部分交易所只支持 per-symbol fetch_funding_rate（这种成本太高，
-            # 不在 hub 缓存全量；策略可降级到自己拉单标的）
+        if perp_client is None:
             return
         now = datetime.now(timezone.utc)
-        try:
-            raw = await asyncio.wait_for(
-                perp_client.fetch_funding_rates(), timeout=15.0,
+        raw: dict | None = None
+
+        # 1. 优先 bulk fetch_funding_rates（多数 exchange 支持）
+        if hasattr(perp_client, "fetch_funding_rates"):
+            try:
+                raw = await asyncio.wait_for(
+                    perp_client.fetch_funding_rates(), timeout=15.0,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "hub_fetch_funding_bulk_failed",
+                    exchange=exchange, error=str(exc)[:120],
+                )
+                raw = None
+        # 2. bulk 不支持 / 失败 / 返回空 → fallback per-symbol
+        # 仅对 Bybit linear 等已知 bulk 不支持的 exchange 启用
+        if not raw or not isinstance(raw, dict) or len(raw) == 0:
+            raw = await self._fetch_funding_per_symbol_fallback(
+                exchange, perp_client, cache,
             )
-        except Exception as exc:
+        if not isinstance(raw, dict) or not raw:
             cache.consecutive_failures += 1
             get_metrics().record_ccxt(exchange, ok=False)
-            logger.debug(
-                "hub_fetch_funding_failed",
-                exchange=exchange, error=str(exc)[:120],
-            )
-            return
-        if not isinstance(raw, dict):
             return
         cache.consecutive_failures = 0
         get_metrics().record_ccxt(exchange, ok=True)
@@ -351,6 +359,62 @@ class MarketDataHub:
             logger.debug(
                 "hub_funding_refreshed", exchange=exchange, count=count,
             )
+
+    async def _fetch_funding_per_symbol_fallback(
+        self, exchange: str, perp_client, cache,
+    ) -> dict:
+        """bulk 不支持时，对 cache 已有 perp ticker 的 top-N symbol 并发 fetch_funding_rate。
+
+        Why: Bybit linear 不支持 fetch_funding_rates() bulk 调用。退化到 per-symbol
+        fetch_funding_rate，但限制并发避免触发 rate limit。
+
+        从 cache.tickers 取 perp 来源的 symbols（按 quoteVolume top 50），
+        Semaphore(5) 并发拉 funding。
+        """
+        if not hasattr(perp_client, "fetch_funding_rate"):
+            return {}
+        # 取 ticker cache 的 perp symbols（top-50 by 24h volume）
+        # cache.tickers key 是 (instrument_type_value, symbol_str)
+        symbols: list[str] = []
+        try:
+            scored: list[tuple[float, str]] = []
+            for key, te in cache.tickers.items():
+                inst = key[0] if isinstance(key, tuple) else None
+                sym_str = key[1] if isinstance(key, tuple) else key
+                if inst != InstrumentType.PERPETUAL.value:
+                    continue
+                vol = float(te.raw.get("quoteVolume") or te.raw.get("volume") or 0)
+                scored.append((vol, sym_str))
+            scored.sort(reverse=True)
+            symbols = [s for _, s in scored[:50]]
+        except Exception:
+            symbols = []
+        if not symbols:
+            return {}
+
+        sem = asyncio.Semaphore(5)
+        results: dict = {}
+
+        async def fetch_one(sym_str: str) -> None:
+            async with sem:
+                try:
+                    base, _, quote = sym_str.partition("/")
+                    ccxt_sym = f"{base}/{quote}:{quote}" if ":" not in quote else sym_str
+                    r = await asyncio.wait_for(
+                        perp_client.fetch_funding_rate(ccxt_sym), timeout=8.0,
+                    )
+                    if isinstance(r, dict) and r:
+                        results[sym_str] = r
+                except Exception:
+                    pass
+
+        await asyncio.gather(*(fetch_one(s) for s in symbols), return_exceptions=False)
+        if results:
+            logger.info(
+                "hub_funding_per_symbol_fallback",
+                exchange=exchange, count=len(results),
+            )
+        return results
 
 
 # ---------------------------------------------------------------------------

@@ -171,6 +171,100 @@ class TestUpdates:
             mgr.record_fees("bad-id", Decimal("1"))
 
 
+class TestLegRoundTrip:
+    """X5 修复 — legs 必须能在 save → load 之间往返，否则重启后无法平仓。"""
+
+    def test_position_leg_record_from_to_domain_roundtrip(self):
+        """直接测 PositionLegRecord 转换不丢字段。"""
+        from app.exchanges.models import InstrumentType, Side
+        from app.models.position import PositionLegRecord
+        leg = PositionLeg(
+            exchange="binance",
+            symbol=BTC,
+            instrument_type=InstrumentType.SPOT,
+            side=Side.BUY,
+            size=Decimal("0.5"),
+            entry_price=Decimal("60000"),
+            leverage=Decimal("1"),
+        )
+        rec = PositionLegRecord.from_domain(leg, position_id=42)
+        assert rec.position_id == 42
+        assert rec.exchange == "binance"
+        assert rec.symbol == "BTC/USDT"
+        assert rec.instrument_type == "spot"
+        assert rec.side == "buy"
+        assert rec.size == Decimal("0.5")
+        assert rec.entry_price == Decimal("60000")
+        assert rec.margin == Decimal("30000")  # notional / leverage
+        # round trip
+        restored = rec.to_domain()
+        assert restored.exchange == leg.exchange
+        assert str(restored.symbol) == str(leg.symbol)
+        assert restored.instrument_type == leg.instrument_type
+        assert restored.side == leg.side
+        assert restored.size == leg.size
+        assert restored.entry_price == leg.entry_price
+        assert restored.leverage == leg.leverage
+
+    def test_perp_short_leg_with_leverage(self):
+        from app.exchanges.models import InstrumentType, Side
+        from app.models.position import PositionLegRecord
+        leg = PositionLeg(
+            exchange="binance",
+            symbol=BTC,
+            instrument_type=InstrumentType.PERPETUAL,
+            side=Side.SELL,
+            size=Decimal("0.5"),
+            entry_price=Decimal("60000"),
+            leverage=Decimal("5"),
+        )
+        rec = PositionLegRecord.from_domain(leg, position_id=99)
+        assert rec.margin == Decimal("6000")  # 30000 / 5
+        restored = rec.to_domain()
+        assert restored.leverage == Decimal("5")
+        assert restored.side == Side.SELL
+
+
+class TestDiscard:
+    """discard() 用于 broker 失败时回滚未成功开仓的 position。
+
+    Why: 旧实现把内存 position 留在 _positions 字典里，造成幽灵持仓
+    占用 max_positions 配额。
+    """
+
+    def test_discard_removes_from_all_positions(self):
+        mgr = PositionManager()
+        pos = mgr.create("s1", BTC, Decimal("500"))
+        assert mgr.discard(pos.id) is True
+        assert mgr.all_positions == []
+
+    def test_discard_unknown_id_returns_false(self):
+        mgr = PositionManager()
+        assert mgr.discard("does-not-exist") is False
+
+    def test_discard_idempotent(self):
+        mgr = PositionManager()
+        pos = mgr.create("s1", BTC, Decimal("500"))
+        mgr.discard(pos.id)
+        assert mgr.discard(pos.id) is False  # 第二次返回 False
+
+    def test_discard_does_not_affect_other_positions(self):
+        mgr = PositionManager()
+        keep = mgr.create("s1", BTC, Decimal("500"))
+        drop = mgr.create("s1", ETH, Decimal("500"))
+        mgr.discard(drop.id)
+        assert mgr.all_positions == [keep]
+
+    def test_discard_frees_max_positions_quota(self):
+        """关键：discard 后总持仓数 -1，max_positions=1 配额可被复用。"""
+        mgr = PositionManager()
+        pos = mgr.create("s1", BTC, Decimal("500"))
+        pos.mark_open()
+        assert len(mgr.open_positions) == 1
+        mgr.discard(pos.id)
+        assert len(mgr.open_positions) == 0
+
+
 # ---------------------------------------------------------------------------
 # DB 持久化（mock session）
 # ---------------------------------------------------------------------------
@@ -188,10 +282,27 @@ class TestPersistence:
         async def capturing_session() -> AsyncGenerator[MagicMock, None]:
             session = MagicMock()
 
-            async def capture(record):
-                merged.append(record)
+            # select(id by uuid) → 返回 None（首次 save，不存在）
+            scalar_result = MagicMock()
+            scalar_result.scalar_one_or_none = MagicMock(return_value=None)
 
-            session.merge = capture
+            async def fake_execute(stmt):
+                return scalar_result
+
+            async def fake_merge(record):
+                merged.append(record)
+                # mimic SA flushed PK
+                if record.id is None:
+                    record.id = 1
+                return record
+
+            async def fake_flush():
+                return None
+
+            session.execute = fake_execute
+            session.merge = fake_merge
+            session.flush = fake_flush
+            session.add = MagicMock()
             yield session
 
         with patch("app.core.database.get_session", new=capturing_session):

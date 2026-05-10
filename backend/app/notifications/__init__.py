@@ -48,3 +48,34 @@ def notify_risk_violation(rule: str, message: str) -> None:
 def notify_system(message: str) -> None:
     _tg.notify_system(message)
     _email.notify_system(message)
+
+
+def notify_reconcile_alert(
+    alert_type: str,
+    severity: str,
+    exchange: str,
+    symbol: str,
+    explanation: str,
+) -> None:
+    """对账告警 — 单腿暴露 / 残留持仓 / 数量漂移。仅 Telegram（紧急）。
+
+    R10 (Wave 2): BalanceReconcilerService 发现 DB↔真实交易所不一致时调用，
+    用户第一时间感知。
+    """
+    severity_emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡"}.get(severity, "⚪")
+    type_label = {
+        "single_leg_exposure": "单腿暴露",
+        "orphan_position": "残留持仓",
+        "qty_drift": "数量漂移",
+    }.get(alert_type, alert_type)
+    msg = (
+        f"{severity_emoji} 对账告警 [{type_label}]\n"
+        f"交易所: {exchange}\n"
+        f"标的: {symbol}\n"
+        f"详情: {explanation}"
+    )
+    try:
+        _tg.notify_system(msg)
+    except Exception:
+        # 通知失败不影响主对账循环
+        pass

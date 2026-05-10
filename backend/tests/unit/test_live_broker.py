@@ -370,6 +370,404 @@ class TestExecutePair:
             )
 
 
+class TestAutoRebalance:
+    """R8 — spot quote 不足时自动从 cross-margin / funding wallet 划转。
+
+    Why: 用户授权 + 账户主资金可能在 cross-margin 或 funding wallet。
+    """
+
+    @pytest.mark.asyncio
+    async def test_rebalance_from_cross_margin(self):
+        adapter = _make_adapter()
+        adapter.exchange_id = "binance"
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # spot 不够；cross-margin 充裕
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "5"}, "total": {"USDT": "5"}},   # preflight 检查
+            {"free": {"USDT": "55"}, "total": {"USDT": "55"}}, # rebalance 后
+        ])
+        spot_client.sapi_get_margin_account = AsyncMock(
+            return_value={"userAssets": [{"asset": "USDT", "free": "100"}]}
+        )
+        spot_client.sapi_post_asset_transfer = AsyncMock(return_value={"tranId": "tx1"})
+        perp_client = adapter._clients[InstrumentType.PERPETUAL]
+        perp_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "100"}, "total": {"USDT": "100"}}
+        )
+        adapter.place_order = AsyncMock(side_effect=[
+            _filled_order(InstrumentType.SPOT, Side.BUY, "0.0008"),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL, "0.0008"),
+        ])
+        broker = LiveBroker(adapter=adapter)
+        await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT, size="0.0008", price="60000"),
+            _req(Side.SELL, InstrumentType.PERPETUAL, size="0.0008", price="60000"),
+        )
+        # 应调用 transfer with MARGIN_MAIN
+        spot_client.sapi_post_asset_transfer.assert_awaited_once()
+        call = spot_client.sapi_post_asset_transfer.await_args
+        assert call.args[0]["type"] == "MARGIN_MAIN"
+
+    @pytest.mark.asyncio
+    async def test_rebalance_falls_back_to_funding(self):
+        """cross-margin 不够时回退到 funding wallet。"""
+        adapter = _make_adapter()
+        adapter.exchange_id = "binance"
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "5"}, "total": {"USDT": "5"}},
+            {"free": {"USDT": "55"}, "total": {"USDT": "55"}},
+        ])
+        spot_client.sapi_get_margin_account = AsyncMock(
+            return_value={"userAssets": [{"asset": "USDT", "free": "1"}]}  # margin 不够
+        )
+        spot_client.sapi_post_asset_get_funding_asset = AsyncMock(
+            return_value=[{"asset": "USDT", "free": "200"}]  # funding 充裕
+        )
+        spot_client.sapi_post_asset_transfer = AsyncMock(return_value={"tranId": "tx2"})
+        perp_client = adapter._clients[InstrumentType.PERPETUAL]
+        perp_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "100"}, "total": {"USDT": "100"}}
+        )
+        adapter.place_order = AsyncMock(side_effect=[
+            _filled_order(InstrumentType.SPOT, Side.BUY, "0.0008"),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL, "0.0008"),
+        ])
+        broker = LiveBroker(adapter=adapter)
+        await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT, size="0.0008", price="60000"),
+            _req(Side.SELL, InstrumentType.PERPETUAL, size="0.0008", price="60000"),
+        )
+        call = spot_client.sapi_post_asset_transfer.await_args
+        assert call.args[0]["type"] == "FUNDING_MAIN"
+
+
+class TestSpotSellAutoCap:
+    """X7 修复 — spot SELL 必须 cap 到真实 free 余额，防 close_position 用
+    DB leg.size 卖时因 fee 占用导致 -2010 InsufficientFunds。
+    """
+
+    @pytest.mark.asyncio
+    async def test_sell_capped_when_balance_lower_than_requested(self):
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # 请求卖 351.1，真实余额 350.75（fee 占 0.35）
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"BTC": "350.75"}, "total": {"BTC": "350.75"}}
+        )
+        spot_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q:.2f}")
+        adapter.place_order = AsyncMock(
+            return_value=_filled_order(InstrumentType.SPOT, Side.SELL, size="350.75"),
+        )
+        broker = LiveBroker(adapter=adapter)
+        req = _req(Side.SELL, InstrumentType.SPOT, size="351.1", price="0.142")
+        await broker.execute(req)
+        place_call = adapter.place_order.await_args
+        assert place_call.kwargs["size"] == Decimal("350.75"), (
+            f"expected size capped to 350.75, got {place_call.kwargs['size']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sell_unchanged_when_balance_sufficient(self):
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"BTC": "1000"}, "total": {"BTC": "1000"}}
+        )
+        adapter.place_order = AsyncMock(
+            return_value=_filled_order(InstrumentType.SPOT, Side.SELL, size="100"),
+        )
+        broker = LiveBroker(adapter=adapter)
+        req = _req(Side.SELL, InstrumentType.SPOT, size="100", price="0.142")
+        await broker.execute(req)
+        place_call = adapter.place_order.await_args
+        assert place_call.kwargs["size"] == Decimal("100"), "余额够时不该 cap"
+
+    @pytest.mark.asyncio
+    async def test_buy_not_capped(self):
+        """SELL 才 cap，BUY 不应触发余额检查。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"BTC": "0"}, "total": {"BTC": "0"}}
+        )
+        adapter.place_order = AsyncMock(
+            return_value=_filled_order(InstrumentType.SPOT, Side.BUY, size="100"),
+        )
+        broker = LiveBroker(adapter=adapter)
+        req = _req(Side.BUY, InstrumentType.SPOT, size="100", price="0.142")
+        await broker.execute(req)
+        place_call = adapter.place_order.await_args
+        assert place_call.kwargs["size"] == Decimal("100")
+
+
+class TestPairSizeAlignment:
+    """R3 修复 — spot/perp 数量必须对齐到两边交易所精度的 min。
+
+    Why: spot 12.48 + perp 12.00 = 净 delta 0.48 个 base asset 暴露，
+    破坏 delta-neutral 假设。LiveBroker.execute_pair 第一步 align。
+    """
+
+    @pytest.mark.asyncio
+    async def test_aligns_to_perp_integer_when_spot_decimal(self):
+        """spot 12.48 / perp 整数 → 取 12 让两边一致。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        perp_client = adapter._clients[InstrumentType.PERPETUAL]
+        spot_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q:.2f}")
+        perp_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{int(q)}")
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "10000"}, "total": {"USDT": "10000"}}
+        )
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY, size="12"),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL, size="12"),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+        broker = LiveBroker(adapter=adapter)
+        await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT, size="12.48", price="3.99"),
+            _req(Side.SELL, InstrumentType.PERPETUAL, size="12.48", price="3.99"),
+        )
+        # 两次 place_order 调用应该都用 size=12（aligned）
+        spot_call = adapter.place_order.await_args_list[0]
+        perp_call = adapter.place_order.await_args_list[1]
+        assert spot_call.kwargs["size"] == Decimal("12"), (
+            f"spot size should align to 12, got {spot_call.kwargs['size']}"
+        )
+        assert perp_call.kwargs["size"] == Decimal("12"), (
+            f"perp size should align to 12, got {perp_call.kwargs['size']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_alignment_no_op_when_sizes_match(self):
+        """spot/perp 已经是同精度时不应改动。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        perp_client = adapter._clients[InstrumentType.PERPETUAL]
+        spot_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q:.4f}")
+        perp_client.amount_to_precision = MagicMock(side_effect=lambda s, q: f"{q:.4f}")
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "10000"}, "total": {"USDT": "10000"}}
+        )
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY, size="0.5"),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL, size="0.5"),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+        broker = LiveBroker(adapter=adapter)
+        await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT, size="0.5", price="100"),
+            _req(Side.SELL, InstrumentType.PERPETUAL, size="0.5", price="100"),
+        )
+        spot_call = adapter.place_order.await_args_list[0]
+        assert spot_call.kwargs["size"] == Decimal("0.5")
+
+
+class TestPreflightBalanceCheck:
+    """P0 预检 — 开仓前同时检查 spot+perp 余额，任一不够则零下单。
+
+    Why: "不能再出现单腿持仓"是用户硬性要求。事前预检比 unwind 兜底更彻底 —
+    能在事前判断余额不够的场景下，宁可不开也不留单腿风险。
+    """
+
+    @pytest.mark.asyncio
+    async def test_spot_quote_insufficient_no_orders_placed(self):
+        """spot USDT 不够时直接 raise，不下任何单。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "100"}, "total": {"USDT": "100"}}
+        )
+        # 0.01 BTC × 60000 = 600 notional > 100 free
+        broker = LiveBroker(adapter=adapter)
+        with pytest.raises(InsufficientBalanceError, match="spot USDT insufficient"):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01", price="60000"),
+                _req(Side.SELL, InstrumentType.PERPETUAL, size="0.01", price="60000"),
+            )
+        adapter.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_perp_margin_insufficient_no_orders_placed(self):
+        """perp 钱包不够 margin 时直接 raise，不下任何单。"""
+        adapter = _make_adapter()
+        # spot 够
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "10000"}, "total": {"USDT": "10000"}}
+        )
+        # perp 不够 — 0.01 × 60000 / 5 = 120 required，free 10
+        perp_client = adapter._clients[InstrumentType.PERPETUAL]
+        perp_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "10"}, "total": {"USDT": "10"}}
+        )
+        # top_up_perp_margin 失败也不应让交易继续
+        adapter.top_up_perp_margin = AsyncMock(side_effect=RuntimeError("transfer failed"))
+
+        broker = LiveBroker(adapter=adapter, perp_leverage=Decimal("5"))
+        with pytest.raises(InsufficientBalanceError, match="perp USDT insufficient"):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01", price="60000"),
+                _req(Side.SELL, InstrumentType.PERPETUAL, size="0.01", price="60000"),
+            )
+        adapter.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_both_sufficient_proceeds_to_execute(self):
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(
+            return_value={"free": {"USDT": "10000"}, "total": {"USDT": "10000"}}
+        )
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+        broker = LiveBroker(adapter=adapter)
+        spot, perp = await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT),
+            _req(Side.SELL, InstrumentType.PERPETUAL),
+        )
+        assert spot.filled is True
+        assert perp.filled is True
+        assert adapter.place_order.await_count == 2  # 仅 spot+perp，无 unwind
+
+    @pytest.mark.asyncio
+    async def test_balance_fetch_failure_does_not_block(self):
+        """fetch_balance 抛错（如网络问题）时不阻塞下单 — 保持向后兼容，
+        让 broker 真实拒单触发 unwind 路径作为兜底。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        spot_client.fetch_balance = AsyncMock(side_effect=RuntimeError("network"))
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY),
+            _filled_order(InstrumentType.PERPETUAL, Side.SELL),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+        broker = LiveBroker(adapter=adapter)
+        spot, perp = await broker.execute_pair(
+            _req(Side.BUY, InstrumentType.SPOT),
+            _req(Side.SELL, InstrumentType.PERPETUAL),
+        )
+        assert spot.filled is True
+        assert perp.filled is True
+
+
+class TestUnwindFeeAdjusted:
+    """unwind 必须按 fetch_balance 真实余额卖，不能用 filled_size 直接卖。
+
+    Why: spot 买单 fee 在 base asset 里扣（如 FIL 0.1%），导致 filled_size > 实际余额。
+    旧实现按 filled_size=42.12 卖 → 余额只有 42.07 → -2010 拒单 → spot 裸多遗留。
+    """
+
+    @pytest.mark.asyncio
+    async def test_unwind_uses_real_balance_below_filled(self):
+        """fetch_balance 返回 < filled_size 时，按 free 余额卖。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # 第 1 次预检（USDT 充裕通过），第 2 次 unwind（BTC 仅 0.0099，fee 扣了 0.0001）
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "10000", "BTC": "0"}, "total": {"USDT": "10000"}},
+            {"free": {"BTC": "0.0099"}, "total": {"BTC": "0.0099"}},
+        ])
+
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY, size="0.01"),
+            OrderRejectedError("perp open failed"),
+            _filled_order(InstrumentType.SPOT, Side.SELL, size="0.0099"),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+
+        broker = LiveBroker(adapter=adapter)
+        with pytest.raises(RuntimeError):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01"),
+                _req(Side.SELL, InstrumentType.PERPETUAL),
+            )
+        unwind_call = adapter.place_order.await_args_list[-1]
+        # 必须按真实余额 0.0099 卖，不是 filled_size 0.01
+        assert unwind_call.kwargs["size"] == Decimal("0.0099"), (
+            f"expected size=0.0099, got {unwind_call.kwargs['size']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unwind_uses_filled_when_balance_higher(self):
+        """fetch_balance 返回 > filled_size（用户原有持仓）时，仅卖 filled_size 数量。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # preflight USDT 充裕；unwind 时用户已经持有 1 BTC，但本次只买了 0.01
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "10000", "BTC": "1.0"}, "total": {"USDT": "10000"}},
+            {"free": {"BTC": "1.0"}, "total": {"BTC": "1.0"}},
+        ])
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY, size="0.01"),
+            OrderRejectedError("perp open failed"),
+            _filled_order(InstrumentType.SPOT, Side.SELL, size="0.01"),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+
+        broker = LiveBroker(adapter=adapter)
+        with pytest.raises(RuntimeError):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01"),
+                _req(Side.SELL, InstrumentType.PERPETUAL),
+            )
+        unwind_call = adapter.place_order.await_args_list[-1]
+        assert unwind_call.kwargs["size"] == Decimal("0.01")
+
+    @pytest.mark.asyncio
+    async def test_unwind_skipped_when_real_balance_zero(self):
+        """spot 没成交（filled=0）时 unwind 提前返回，不调 fetch_balance。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # preflight USDT 充裕
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "10000"}, "total": {"USDT": "10000"}},
+        ])
+        empty_spot = _filled_order(InstrumentType.SPOT, Side.BUY, size="0.01")
+        empty_spot.filled = Decimal("0")
+        responses = [empty_spot, OrderRejectedError("perp")]
+        adapter.place_order = AsyncMock(side_effect=responses)
+
+        broker = LiveBroker(adapter=adapter)
+        with pytest.raises(RuntimeError):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01"),
+                _req(Side.SELL, InstrumentType.PERPETUAL),
+            )
+        # 仅 2 次：spot + perp，没有 unwind 卖单
+        assert adapter.place_order.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_unwind_falls_back_to_filled_when_balance_fetch_fails(self):
+        """unwind 时 fetch_balance 抛错则降级到 filled_size，不阻塞 unwind。"""
+        adapter = _make_adapter()
+        spot_client = adapter._clients[InstrumentType.SPOT]
+        # preflight 一次成功，unwind 时第二次抛错
+        spot_client.fetch_balance = AsyncMock(side_effect=[
+            {"free": {"USDT": "10000"}, "total": {"USDT": "10000"}},
+            RuntimeError("network"),
+        ])
+        responses = [
+            _filled_order(InstrumentType.SPOT, Side.BUY, size="0.01"),
+            OrderRejectedError("perp open failed"),
+            _filled_order(InstrumentType.SPOT, Side.SELL, size="0.01"),
+        ]
+        adapter.place_order = AsyncMock(side_effect=responses)
+
+        broker = LiveBroker(adapter=adapter)
+        with pytest.raises(RuntimeError):
+            await broker.execute_pair(
+                _req(Side.BUY, InstrumentType.SPOT, size="0.01"),
+                _req(Side.SELL, InstrumentType.PERPETUAL),
+            )
+        # 降级也要 unwind（共 3 次调用）
+        assert adapter.place_order.await_count == 3
+
+
 # ---------------------------------------------------------------------------
 # _round_qty
 # ---------------------------------------------------------------------------

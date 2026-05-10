@@ -173,3 +173,44 @@ class TestMarketDataHub:
         assert hub.is_running
         await hub.stop()
         assert not hub.is_running
+
+
+class TestFundingPerSymbolFallback:
+    """Bybit linear 等不支持 fetch_funding_rates() bulk → fallback per-symbol。"""
+
+    @pytest.mark.asyncio
+    async def test_bulk_fail_triggers_per_symbol_fallback(self):
+        adapter = MagicMock()
+        perp_client = MagicMock()
+        # bulk 抛错（模拟 Bybit linear）
+        perp_client.fetch_funding_rates = AsyncMock(
+            side_effect=Exception("does not support linear markets"),
+        )
+        # per-symbol 成功
+        async def fetch_one(sym):
+            return {"fundingRate": 0.0001, "fundingTimestamp": 1_700_000_000_000}
+        perp_client.fetch_funding_rate = AsyncMock(side_effect=fetch_one)
+        adapter._clients = {InstrumentType.PERPETUAL: perp_client}
+        hub = MarketDataHub(adapters={"bybit": adapter})
+        # 预填 perp ticker cache（为 fallback 提供 symbols）
+        cache = hub._cache["bybit"]
+        for sym in ["BTC/USDT", "ETH/USDT"]:
+            cache.tickers[(InstrumentType.PERPETUAL.value, sym)] = TickerEntry(
+                raw={"quoteVolume": 1_000_000}, fetched_at=_now(),
+            )
+        await hub._fetch_funding_once("bybit")
+        # bulk 失败但 per-symbol 成功 → cache 应有 funding
+        assert cache.last_funding_count > 0
+        assert perp_client.fetch_funding_rate.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_perp_tickers_no_fallback(self):
+        adapter = MagicMock()
+        perp_client = MagicMock()
+        perp_client.fetch_funding_rates = AsyncMock(side_effect=Exception("nope"))
+        perp_client.fetch_funding_rate = AsyncMock(return_value={"fundingRate": 0})
+        adapter._clients = {InstrumentType.PERPETUAL: perp_client}
+        hub = MarketDataHub(adapters={"bybit": adapter})
+        # ticker cache 空 → fallback 也无来源
+        await hub._fetch_funding_once("bybit")
+        perp_client.fetch_funding_rate.assert_not_awaited()

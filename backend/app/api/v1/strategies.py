@@ -11,6 +11,8 @@ from app.api.v1.schemas.strategies import (
     ConfigPatchRequest,
     FundingRateOpportunitiesResponse,
     FundingRateOpportunityOut,
+    PerpBasisConfigPatchRequest,
+    PerpBasisConfigResponse,
     PerpBasisOpportunitiesResponse,
     PerpBasisOpportunityOut,
     SpotPerpConfigPatchRequest,
@@ -26,7 +28,10 @@ from app.services.strategy_control import (
     is_spot_perp_running,
     patch_strategy_config,
     start_paper,
+    is_perp_basis_paper_running,
+    start_perp_basis_paper,
     start_spot_perp,
+    stop_perp_basis_paper,
     stop_paper,
     stop_spot_perp,
 )
@@ -172,6 +177,117 @@ async def funding_rate_opportunities(
 # ---------------------------------------------------------------------------
 # #02 perp-basis: 跨所 funding 差套利 (Phase A monitor only)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/perp-basis/exchange-balance")
+async def perp_basis_exchange_balance(
+    _: CurrentUser, request: Request,
+) -> dict:
+    """#02-4: per-exchange perp 可用余额 — 跨所策略需要每个 exchange 都有 perp margin。
+
+    数据源：reconciler.balance_cache（30s 周期更新）。
+    """
+    rec = getattr(request.app.state, "balance_reconciler", None)
+    if rec is None or not getattr(rec, "balance_cache", None):
+        return {"data": [], "ready": False}
+    out: list[dict] = []
+    for ex_name, assets in (rec.balance_cache or {}).items():
+        # binance 用 USDT_PERP；其他 exchange 用 USDT 总（OKX UTA 共享）
+        perp_usdt = (assets or {}).get("USDT_PERP")
+        if perp_usdt is None:
+            perp_usdt = (assets or {}).get("USDT", {})
+        if not perp_usdt:
+            continue
+        try:
+            free = float(perp_usdt.get("free") or 0)
+            total = float(perp_usdt.get("total") or 0)
+            out.append({
+                "exchange": ex_name,
+                "perp_usdt_free": str(round(free, 4)),
+                "perp_usdt_total": str(round(total, 4)),
+                "ready": free >= 10.0,  # 至少 $10 才能开 $50 × 5 leverage
+            })
+        except Exception:
+            pass
+    return {
+        "data": sorted(out, key=lambda x: x["exchange"]),
+        "ready": sum(1 for r in out if r["ready"]) >= 2,  # ≥ 2 个 exchange 就绪 = 跨所可用
+    }
+
+
+@router.get("/perp-basis/config", response_model=PerpBasisConfigResponse)
+async def perp_basis_config(_: CurrentUser, request: Request) -> PerpBasisConfigResponse:
+    """读取 #02 perp_basis 当前生效配置（yaml + override 合并）。"""
+    import yaml as _yaml  # noqa: PLC0415
+    state = request.app.state
+    runner = getattr(state, "perp_basis_runner", None)
+    cfg: dict = {}
+    try:
+        with open("config/strategies/perp_basis_main.yaml") as f:
+            cfg = _yaml.safe_load(f) or {}
+    except Exception:
+        cfg = {}
+    entry = cfg.get("entry", {}) or {}
+    pos_cfg = cfg.get("position", {}) or {}
+    exit_cfg = cfg.get("exit", {}) or {}
+    scan_cfg = cfg.get("scanning", {}) or {}
+    scanner_cfg = runner._scanner._config if runner is not None else None
+    paper = getattr(state, "perp_basis_paper", None)
+    paper_task = getattr(state, "perp_basis_paper_task", None)
+    paper_running = (
+        paper is not None and paper_task is not None and not paper_task.done()
+    )
+    return PerpBasisConfigResponse(
+        enabled=bool(cfg.get("enabled", True)),
+        paper_running=paper_running,
+        min_diff_apr_pct=str(
+            scanner_cfg.min_diff_apr_pct if scanner_cfg
+            else entry.get("min_diff_apr_pct", "50.0")
+        ),
+        max_concurrent=int(pos_cfg.get("max_concurrent", 2)),
+        notional_per_position=str(pos_cfg.get("notional_per_position", "50")),
+        max_hold_hours=str(exit_cfg.get("max_hold_hours", "48")),
+        min_hold_hours=str(exit_cfg.get("min_hold_hours", "4")),
+        exit_diff_apr_pct=str(exit_cfg.get("exit_diff_apr_pct", "5")),
+        candidate_symbols=list(pos_cfg.get("candidate_symbols", []) or []),
+        scan_interval_seconds=float(scan_cfg.get("scan_interval_seconds", 30)),
+    )
+
+
+@router.patch("/perp-basis/config", response_model=PerpBasisConfigResponse)
+async def perp_basis_config_patch(
+    _: CurrentUser, request: Request, body: PerpBasisConfigPatchRequest,
+) -> PerpBasisConfigResponse:
+    """热更新 #02 perp_basis 参数（min_diff / max_concurrent 等）。
+
+    立即作用于 scanner._config + 已运行的 paper session（下个 tick 生效）。
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+    state = request.app.state
+    runner = getattr(state, "perp_basis_runner", None)
+    paper = getattr(state, "perp_basis_paper", None)
+    patch = body.model_dump(exclude_none=True)
+
+    # 1. scanner 配置（影响候选过滤）
+    if runner is not None and "min_diff_apr_pct" in patch:
+        runner._scanner._config.min_diff_apr_pct = _Decimal(str(patch["min_diff_apr_pct"]))
+
+    # 2. paper session 配置（影响入场/出场决策）
+    if paper is not None:
+        if "min_diff_apr_pct" in patch:
+            paper._min_diff = _Decimal(str(patch["min_diff_apr_pct"]))
+        if "max_concurrent" in patch:
+            paper._max_concurrent = int(patch["max_concurrent"])
+        if "notional_per_position" in patch:
+            paper._notional = _Decimal(str(patch["notional_per_position"]))
+        if "max_hold_hours" in patch:
+            paper._max_hold = _Decimal(str(patch["max_hold_hours"]))
+        if "min_hold_hours" in patch:
+            paper._min_hold = _Decimal(str(patch["min_hold_hours"]))
+        if "exit_diff_apr_pct" in patch:
+            paper._exit_diff = _Decimal(str(patch["exit_diff_apr_pct"]))
+
+    return await perp_basis_config(_, request)
 
 
 @router.get(
@@ -346,6 +462,12 @@ async def start_any(
             paper_running=is_spot_perp_running(state),
             timestamp=datetime.now(timezone.utc),
         )
+    if strategy_id == "perp-basis":
+        await start_perp_basis_paper(state)
+        return StrategyActionResponse(
+            paper_running=is_perp_basis_paper_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
     # 未实现策略:返回响应壳子,前端展示 "queued"
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
 
@@ -365,6 +487,12 @@ async def stop_any(
         await stop_spot_perp(state)
         return StrategyActionResponse(
             paper_running=is_spot_perp_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
+    if strategy_id == "perp-basis":
+        await stop_perp_basis_paper(state)
+        return StrategyActionResponse(
+            paper_running=is_perp_basis_paper_running(state),
             timestamp=datetime.now(timezone.utc),
         )
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))

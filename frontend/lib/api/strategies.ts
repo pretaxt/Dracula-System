@@ -137,6 +137,7 @@ export type PerpBasisOpportunity = {
   long_next_funding_ms: number
   short_next_funding_ms: number
   timestamp_ms: number
+  health_tier?: 'safe' | 'risky' | 'dirty'
 }
 
 export type PerpBasisOpportunitiesResponse = {
@@ -151,6 +152,58 @@ export async function getPerpBasisOpportunities(): Promise<PerpBasisOpportunitie
   const { data } = await apiClient.get<PerpBasisOpportunitiesResponse>(
     '/strategies/perp-basis/opportunities',
   )
+  return data
+}
+
+// #02 配置 GET/PATCH
+export type PerpBasisConfig = {
+  enabled: boolean
+  paper_running: boolean
+  min_diff_apr_pct: string
+  max_concurrent: number
+  notional_per_position: string
+  max_hold_hours: string
+  min_hold_hours: string
+  exit_diff_apr_pct: string
+  candidate_symbols: string[]
+  scan_interval_seconds: number
+}
+
+export type PerpBasisConfigPatch = Partial<{
+  min_diff_apr_pct: string
+  max_concurrent: number
+  notional_per_position: string
+  max_hold_hours: string
+  min_hold_hours: string
+  exit_diff_apr_pct: string
+}>
+
+export async function getPerpBasisConfig(): Promise<PerpBasisConfig> {
+  const { data } = await apiClient.get<PerpBasisConfig>('/strategies/perp-basis/config')
+  return data
+}
+
+export async function patchPerpBasisConfig(p: PerpBasisConfigPatch): Promise<PerpBasisConfig> {
+  const { data } = await apiClient.patch<PerpBasisConfig>('/strategies/perp-basis/config', p)
+  return data
+}
+
+// #02 per-exchange perp 余额
+export type PerpBasisExchangeBalance = {
+  exchange: string
+  perp_usdt_free: string
+  perp_usdt_total: string
+  ready: boolean
+}
+
+export async function getPerpBasisExchangeBalance(): Promise<{
+  data: PerpBasisExchangeBalance[]
+  ready: boolean
+}> {
+  const { data } = await apiClient.get<{
+    data: PerpBasisExchangeBalance[]
+    ready: boolean
+  }>('/strategies/perp-basis/exchange-balance')
   return data
 }
 

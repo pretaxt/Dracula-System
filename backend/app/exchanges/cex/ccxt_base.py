@@ -129,6 +129,11 @@ class CCXTAdapter(ExchangeAdapter):
         return self._exchange_id
 
     @property
+    def exchange_id(self) -> str:
+        """LiveBroker / reconciler 等组件使用的 alias。"""
+        return self._exchange_id
+
+    @property
     def supported_instruments(self) -> List[InstrumentType]:
         return list(self._clients.keys())
 
@@ -365,7 +370,9 @@ class CCXTAdapter(ExchangeAdapter):
         # MARKET 订单不需要 timeInForce（Binance margin 严格校验报 -1106）
         if order_type != OrderType.MARKET:
             params["timeInForce"] = time_in_force.value
-        if reduce_only:
+        # reduceOnly 仅 PERPETUAL 支持；spot 传会被 Binance 拒（-1104 extra parameter）
+        # X6 修复：广播屏蔽，防调用方误传到 spot leg
+        if reduce_only and instrument == InstrumentType.PERPETUAL:
             params["reduceOnly"] = True
         if post_only:
             params["postOnly"] = True
@@ -380,7 +387,8 @@ class CCXTAdapter(ExchangeAdapter):
             # sideEffectType 是 Binance 现货保证金特有；OKX UTA cross-margin 自动借/还，无此概念
             if self._exchange_id == "binance":
                 params["sideEffectType"] = side_effect
-        if position_side:
+        if position_side and instrument == InstrumentType.PERPETUAL:
+            # positionSide 仅 PERPETUAL Hedge 模式有效；spot 传会被拒
             # Binance Hedge 模式必填；One-way 模式忽略此字段
             params["positionSide"] = position_side.upper()
             # reduceOnly 不能与 hedge 模式同时存在（hedge 用 positionSide 区分）

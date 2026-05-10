@@ -6,9 +6,13 @@ import { useT } from '@/components/i18n/I18nProvider'
 import {
   runBacktest,
   runSpotPerpBacktest,
+  runPerpBasisBacktest,
+  runPerpBasisSweep,
   type BacktestResult,
   type EquityPoint,
   type SpotPerpBacktestResult,
+  type PerpBasisBacktestResult,
+  type PerpBasisSweepResponse,
 } from '@/lib/api/backtest'
 import { getSymbols } from '@/lib/api/system'
 
@@ -474,6 +478,8 @@ export default function BacktestPage() {
       )}
 
       <SpotPerpBacktestSection symbolBases={symbolBases} />
+
+      <PerpBasisBacktestSection symbolBases={symbolBases} />
     </div>
   )
 }
@@ -714,6 +720,329 @@ function SpotPerpBacktestSection({ symbolBases }: { symbolBases: string[] }) {
               </table>
             </div>
           )}
+        </div>
+      )}
+    </CardElevated>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// #02 perp-basis 跨所 funding 差套利回测区块
+// ---------------------------------------------------------------------------
+
+
+function PerpBasisBacktestSection({ symbolBases: _symbolBases }: { symbolBases: string[] }) {
+  const { t } = useT()
+  const [symbolsCsv, setSymbolsCsv] = useState('BTC/USDT,ETH/USDT,FIL/USDT,SOL/USDT,TIA/USDT')
+  const [days, setDays] = useState(14)
+  const [minDiff, setMinDiff] = useState(50)
+  const [notional, setNotional] = useState(50)
+  const [maxConcurrent, setMaxConcurrent] = useState(3)
+  const [maxHold, setMaxHold] = useState(48)
+  const [minHold, setMinHold] = useState(4)
+  const [exitDiff, setExitDiff] = useState(5)
+
+  const [result, setResult] = useState<PerpBasisBacktestResult | null>(null)
+  const [sweep, setSweep] = useState<PerpBasisSweepResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [sweepLoading, setSweepLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const inputStyle: React.CSSProperties = {
+    background: 'var(--surface-2)', border: '1px solid var(--border)',
+    borderRadius: 6, color: 'var(--text-primary)', padding: '6px 10px',
+    fontSize: 14, width: '100%',
+  }
+  const labelStyle: React.CSSProperties = {
+    fontSize: 12, color: 'var(--text-muted)', marginBottom: 4,
+    display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em',
+  }
+
+  const symbols = useMemo(
+    () => symbolsCsv.split(',').map(s => s.trim()).filter(Boolean),
+    [symbolsCsv],
+  )
+
+  async function handleRun() {
+    setLoading(true); setError(null); setResult(null)
+    try {
+      const res = await runPerpBasisBacktest({
+        symbols, days,
+        min_diff_apr_pct: minDiff,
+        notional_per_position: notional,
+        max_concurrent: maxConcurrent,
+        max_hold_hours: maxHold,
+        min_hold_hours: minHold,
+        exit_diff_apr_pct: exitDiff,
+      })
+      setResult(res)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '回测失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleSweep() {
+    setSweepLoading(true); setError(null); setSweep(null)
+    try {
+      const res = await runPerpBasisSweep({
+        symbols, days,
+        min_diff_apr_pct_list: [15, 30, 50, 75, 100, 150],
+        notional_per_position: notional,
+        min_hold_hours: minHold,
+      })
+      setSweep(res)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'sweep 失败')
+    } finally {
+      setSweepLoading(false)
+    }
+  }
+
+  return (
+    <CardElevated style={{ padding: 20 }}>
+      <SectionHeader
+        title={t('#02 跨所基差套利回测')}
+        subtitle="PERP-BASIS · CCXT funding history → engine + multi-threshold sweep"
+      />
+
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+        gap: 12, marginTop: 16,
+      }}>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <label style={labelStyle}>{t('交易对（逗号分隔）')}</label>
+          <input
+            value={symbolsCsv} onChange={e => setSymbolsCsv(e.target.value)}
+            style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>{t('回测天数')}</label>
+          <select value={days} onChange={e => setDays(Number(e.target.value))} style={inputStyle}>
+            {[3, 7, 14, 30, 60].map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>min_diff_apr (%)</label>
+          <input type="number" value={minDiff} onChange={e => setMinDiff(Number(e.target.value))}
+                 style={inputStyle} step="5" />
+        </div>
+        <div>
+          <label style={labelStyle}>{t('单笔名义')}</label>
+          <input type="number" value={notional} onChange={e => setNotional(Number(e.target.value))}
+                 style={inputStyle} step="10" />
+        </div>
+        <div>
+          <label style={labelStyle}>max_concurrent</label>
+          <input type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(Number(e.target.value))}
+                 style={inputStyle} step="1" />
+        </div>
+        <div>
+          <label style={labelStyle}>max_hold (h)</label>
+          <input type="number" value={maxHold} onChange={e => setMaxHold(Number(e.target.value))}
+                 style={inputStyle} step="1" />
+        </div>
+        <div>
+          <label style={labelStyle}>min_hold (h)</label>
+          <input type="number" value={minHold} onChange={e => setMinHold(Number(e.target.value))}
+                 style={inputStyle} step="1" />
+        </div>
+        <div>
+          <label style={labelStyle}>exit_diff_apr (%)</label>
+          <input type="number" value={exitDiff} onChange={e => setExitDiff(Number(e.target.value))}
+                 style={inputStyle} step="1" />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          onClick={handleRun} disabled={loading}
+          style={{
+            padding: '8px 18px', background: 'var(--accent-blood)', color: 'white',
+            border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            opacity: loading ? 0.5 : 1,
+          }}
+        >
+          {loading ? t('回测中...') : t('运行回测')}
+        </button>
+        <button
+          onClick={handleSweep} disabled={sweepLoading}
+          style={{
+            padding: '8px 18px', background: 'var(--accent-emerald)', color: 'white',
+            border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            opacity: sweepLoading ? 0.5 : 1,
+          }}
+        >
+          {sweepLoading ? t('Sweep 中...') : t('阈值 Sweep（6 组对比）')}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{
+          marginTop: 16, padding: 12, background: 'rgba(227,64,88,0.1)',
+          border: '1px solid var(--accent-blood)', borderRadius: 4,
+          color: 'var(--accent-blood)', fontFamily: 'var(--font-mono)', fontSize: 13,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* 单次回测结果 */}
+      {result && (
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
+          <SectionHeader title={t('回测结果')} subtitle={`${result.summary.snapshots_loaded ?? '?'} snapshots · ${result.trades.length} trades`} />
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 12, marginTop: 12,
+          }}>
+            {Object.entries(result.summary).map(([k, v]) => (
+              <div key={k} style={{
+                padding: 12, background: 'var(--bg-deepest)',
+                border: '1px solid var(--border-subtle)', borderRadius: 4,
+              }}>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase', letterSpacing: '0.06em',
+                }}>{k}</div>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 16, marginTop: 4,
+                  color: 'var(--text-primary)',
+                }}>
+                  {String(v)}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {result.trades.length > 0 && (
+            <div style={{
+              marginTop: 16, maxHeight: 300, overflow: 'auto',
+              border: '1px solid var(--border-subtle)', borderRadius: 4,
+            }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead style={{ background: 'var(--bg-deepest)', position: 'sticky', top: 0 }}>
+                  <tr>
+                    {[t('symbol'), t('long→short'), t('开仓'), t('held'), t('入场 diff%'), t('funding'), t('fees'), t('PnL'), t('reason')].map(h => (
+                      <th key={h} style={{
+                        padding: '8px', textAlign: 'left', fontWeight: 500,
+                        fontSize: 11, textTransform: 'uppercase',
+                        color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-default)',
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.trades.slice(0, 50).map((tr, i) => {
+                    const pnl = parseFloat(tr.realized_pnl)
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '6px 8px', fontWeight: 600 }}>{tr.symbol}</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                          {tr.long_exchange}→{tr.short_exchange}
+                        </td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          {tr.open_at.slice(5, 16)}
+                        </td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.held_hours}h</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{tr.entry_diff_apr_pct}%</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)', color: 'var(--accent-emerald)' }}>
+                          +{tr.funding_collected}
+                        </td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                          -{tr.fees_paid}
+                        </td>
+                        <td style={{
+                          padding: '6px 8px', fontFamily: 'var(--font-mono)', fontWeight: 600,
+                          color: pnl >= 0 ? '#10b981' : '#ef4444',
+                        }}>
+                          {pnl >= 0 ? '+' : ''}{tr.realized_pnl}
+                        </td>
+                        <td style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          {tr.exit_reason}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sweep 多阈值对比表 */}
+      {sweep && (
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
+          <SectionHeader
+            title={t('阈值 Sweep 对比')}
+            subtitle={`${sweep.snapshots_loaded} snapshots · 6 thresholds`}
+          />
+          <div style={{ marginTop: 12, overflow: 'auto', border: '1px solid var(--border-subtle)', borderRadius: 4 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead style={{ background: 'var(--bg-deepest)' }}>
+                <tr>
+                  {['min_diff_apr (%)', 'trades', 'win%', 'funding $', 'fees $', 'PnL $', 'PnL %'].map(h => (
+                    <th key={h} style={{
+                      padding: '10px 12px', textAlign: 'left', fontWeight: 500,
+                      fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
+                      color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-default)',
+                    }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sweep.rows.map((r) => {
+                  const pnl = parseFloat(r.total_pnl_usd)
+                  // 找最优行（PnL 最大）
+                  const maxPnl = Math.max(...sweep.rows.map(x => parseFloat(x.total_pnl_usd)))
+                  const isBest = pnl === maxPnl && pnl > 0
+                  return (
+                    <tr key={r.min_diff_apr_pct} style={{
+                      borderBottom: '1px solid var(--border-subtle)',
+                      background: isBest ? 'rgba(16,185,129,0.08)' : 'transparent',
+                    }}>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        {isBest && '★ '}{r.min_diff_apr_pct}
+                      </td>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)' }}>{r.num_trades}</td>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)' }}>{r.win_rate_pct}%</td>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', color: 'var(--accent-emerald)' }}>
+                        +{r.total_funding_usd}
+                      </td>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                        -{r.total_fees_usd}
+                      </td>
+                      <td style={{
+                        padding: '10px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600,
+                        color: pnl >= 0 ? '#10b981' : '#ef4444',
+                      }}>
+                        {pnl >= 0 ? '+' : ''}{r.total_pnl_usd}
+                      </td>
+                      <td style={{
+                        padding: '10px 12px', fontFamily: 'var(--font-mono)',
+                        color: pnl >= 0 ? '#10b981' : '#ef4444',
+                      }}>
+                        {pnl >= 0 ? '+' : ''}{r.total_pnl_pct}%
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{
+            marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 11,
+            color: 'var(--text-muted)',
+          }}>
+            ★ {t('标记 = PnL 最优阈值。win_rate 越高 + PnL 越大 = 实盘建议参数')}
+          </div>
         </div>
       )}
     </CardElevated>

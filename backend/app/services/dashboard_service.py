@@ -29,7 +29,11 @@ def _initial_capital() -> Decimal:
 INITIAL_CAPITAL_USD = _initial_capital()
 
 
-async def get_summary(session: AsyncSession, adapters: dict | None = None) -> dict:
+async def get_summary(
+    session: AsyncSession,
+    adapters: dict | None = None,
+    reconciler: object | None = None,
+) -> dict:
     # 总 realized PnL
     r_pnl = (
         await session.execute(
@@ -121,7 +125,33 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
     # 优先取真实账户聚合（spot+USDM），拉不到 fallback 到 env
     real_balance: Decimal | None = None
     per_exchange_equity: dict[str, str] = {}
-    if adapters:
+    # R6: 优先 reconciler cache（30s 周期更新，已经聚合 spot+margin+perp）
+    if reconciler is not None and getattr(reconciler, "balance_cache", None):
+        try:
+            cache = reconciler.balance_cache
+            total = Decimal("0")
+            per_ex_local: dict[str, Decimal] = {}
+            # binance 含 USDT (spot) + USDT_MARGIN (cross-margin) + USDT_PERP (USDM) + USDT_FUNDING (Pay)
+            # OKX UTA 共享 trading account，仅 USDT
+            usdt_keys = ("USDT", "USDT_MARGIN", "USDT_PERP", "USDT_FUNDING")
+            for ex_name, assets in cache.items():
+                ex_total = Decimal("0")
+                for key in usdt_keys:
+                    info = (assets or {}).get(key)
+                    if info:
+                        ex_total += Decimal(str(info.get("total") or 0))
+                if ex_total > 0:
+                    per_ex_local[ex_name] = ex_total
+                    total += ex_total
+            if total > 0:
+                real_balance = total
+                per_exchange_equity = {
+                    ex: str(round(v, 2)) for ex, v in per_ex_local.items()
+                }
+        except Exception:
+            pass
+    # 降级：reconciler 不可用 → lazy fetch
+    if real_balance is None and adapters:
         real_balance = await get_total_equity_usd(adapters)
         per_ex = await get_per_exchange_equity(adapters)
         per_exchange_equity = {
@@ -184,7 +214,18 @@ async def get_summary(session: AsyncSession, adapters: dict | None = None) -> di
     # Market Data Hub health（v0.4.5：跨策略共享行情缓存）
     from app.core.market_data_hub import get_market_data_hub  # noqa: PLC0415
     hub = get_market_data_hub()
-    hub_health = hub.health() if hub is not None else {}
+    hub_per_ex = hub.health() if hub is not None else {}
+    # 聚合 per-exchange → 顶层字段（schema 兼容）
+    total_tickers = sum((v.get("ticker_count") or 0) for v in hub_per_ex.values())
+    total_funding = sum((v.get("funding_count") or 0) for v in hub_per_ex.values())
+    ticker_ages = [v.get("ticker_age_s") for v in hub_per_ex.values() if v.get("ticker_age_s") is not None]
+    age_s = max(ticker_ages) if ticker_ages else None
+    hub_health = {
+        "ticker_count": total_tickers,
+        "funding_count": total_funding,
+        "age_s": age_s,
+        "per_exchange": hub_per_ex,
+    }
 
     return {
         "net_pnl_usd": str(round(net_pnl, 8)),

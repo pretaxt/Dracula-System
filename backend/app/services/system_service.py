@@ -146,13 +146,19 @@ async def get_recent_activity(session: AsyncSession, limit: int = 10) -> list[di
 _EXIT_REASON_ZH = {
     "basis_convergence": "基差收敛",
     "max_hold": "持仓超时",
+    "max_hold_time": "持仓超时",
     "manual": "手动平仓",
     "manual_close": "手动平仓",
+    "manual_emergency": "紧急平仓",
     "stop_loss": "止损",
     "basis_stop": "基差止损",
     "liquidation": "强平",
     "perp_liq_risk": "强平兜底",
     "funding_reversal": "费率反转",
+    "strategy": "策略退出",
+    "diff_decay": "费差衰减",  # #02 perp_basis: diff_apr 衰减到 exit_diff_apr_pct
+    "price_divergence": "价格脱钩",  # #02 perp_basis: 跨所价差超 stop_price_divergence_pct
+    "risk_limit": "风控触发",
 }
 
 

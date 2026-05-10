@@ -4,7 +4,7 @@
  */
 
 export type StrategyPhase = 'P0' | 'P1' | 'P3'
-export type StrategyStatus = 'RUNNING' | 'PLANNED' | 'MONITOR' | 'DISABLED' | 'UNDERWATER'
+export type StrategyStatus = 'RUNNING' | 'PLANNED' | 'MONITOR' | 'DISABLED' | 'UNDERWATER' | 'PAPER'
 
 export type Strategy = {
   num: string
@@ -68,12 +68,47 @@ export const STRATEGIES: Strategy[] = [
     },
   },
   {
-    num: '02', id: 'perp-basis', zhName: '跨所基差套利',
-    enLabel: 'PERP BASIS ARB · P1', phase: 'P1', status: 'MONITOR',
-    capital: '$0', monthly: null, positions: '—', posLabel: '持仓',
-    desc: '做多便宜的合约,做空贵的合约,等基差收敛。',
-    thesis: '不同交易所同一标的的永续合约因流动性、用户结构、资金费率差异短期会有 basis,通过 long-cheap / short-expensive 锁定。',
-    risks: ['持仓时间不确定(回归窗口可能拉长)', '保证金分两边管理', '提币转移成本'],
+    num: '02', id: 'perp-basis', zhName: '跨所 funding 差套利',
+    enLabel: 'PERP BASIS ARB · P0', phase: 'P0', status: 'PAPER',
+    capital: '$0', monthly: null, positions: '0 / 2', posLabel: '持仓',
+    desc: '同一标的在不同交易所的 funding rate 差 → 高 funding 端 SHORT + 低 funding 端 LONG，跨所 delta-neutral。',
+    thesis: '不同交易所流动性 / 用户结构 / 持仓比例差异导致同一永续合约的 funding rate 不同步，差额持续存在时可锁定 (short_apr - long_apr) × notional × 持仓时间，价格风险被跨所对冲抵消。回测显示 14 天最优阈值 ≥ 50% APR diff 才能覆盖手续费。',
+    risks: [
+      '跨所价格脱钩（市场极端 / 交易所故障 → 持续价差 = 持续亏损，已加 stop_price_divergence_pct 强平保护）',
+      'funding 周期不同步（binance 8h vs htx 4h，需独立按时间戳累计）',
+      '小所 funding 数据脏点（HTX -99% 类异常，已加 max_abs_apr_pct 过滤）',
+      '资金分两边账户管理 + 提币转移成本',
+      '需要在 ≥ 2 个交易所配 trading API key + perp 余额',
+    ],
+    rules: {
+      entry: [
+        '跨所 funding diff APR ≥ 50%（基于 sweep 14 天历史最优阈值）',
+        '两侧单边 APR 绝对值 ≤ 500%（防小所脏数据）',
+        '同时持仓数小于 2 笔',
+        '同一 (symbol, long_ex, short_ex) 不可重复开仓',
+        'long_exchange + short_exchange 都需 trading key + perp USDT 余额',
+      ],
+      exit: [
+        'diff_apr 衰减到 ≤ 1%（min_hold 4h 后才检查）',
+        '持仓时长达到 max_hold_hours（默认 240h / 10 天兜底）',
+        '跨所价格脱钩 ≥ 5%（最高优先级强平，防价差扩大）',
+      ],
+      params: [
+        { label: '入场门槛', value: 'funding diff APR ≥ 50%' },
+        { label: '最少持仓', value: '4 小时' },
+        { label: '最长持仓', value: '240 小时' },
+        { label: '收敛平仓', value: 'diff_apr ≤ 1%' },
+        { label: '价格脱钩强平', value: '|long_price - short_price| / mid ≥ 5%' },
+        { label: '健康度分级', value: 'safe (≤200%) · risky (200-500%) · dirty (>500%)' },
+        { label: '同时持仓上限', value: '2 笔' },
+        { label: '单笔名义规模', value: '$50（每边 perp）' },
+        { label: '永续杠杆', value: '5x（双边各 $10 margin）' },
+        { label: '候选币种', value: '30 主流 USDT 永续' },
+        { label: '交易所配对', value: 'binance / okx / bitget / bybit / htx 5 家两两 = 10 pairs' },
+        { label: '扫描间隔', value: '30 秒（数据来自 MarketDataHub 缓存）' },
+        { label: 'PnL 计算', value: '跨所 funding 差累计 + 反向单成交差 - 4 腿 fee' },
+      ],
+    },
   },
   {
     num: '03', id: 'spot-spread', zhName: '跨所价差套利',

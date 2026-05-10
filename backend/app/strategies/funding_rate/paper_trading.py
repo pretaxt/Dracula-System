@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Sequence
 
@@ -47,6 +47,11 @@ from app.strategies.funding_rate.scanner import FundingRateOpportunity, FundingR
 logger = get_logger(__name__)
 
 _FUNDING_INTERVAL_HOURS = 8
+
+# 当 broker 拒绝某 (exchange, symbol) 因 API 白名单问题时，
+# 在以下时长内不再尝试，避免 -2010 错误反复污染 max_positions 配额
+_WHITELIST_DENY_TTL = timedelta(hours=24)
+_WHITELIST_DENY_MARKERS = ("Symbol not whitelisted", "-2010")
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +119,8 @@ class PaperTradingSession:
         self._running = False
         self._last_funding_settled: datetime = datetime.now(UTC)
         self._tick_count: int = 0
+        # (exchange, symbol_str) → 拉黑到期时间。在此之前跳过该候选。
+        self._whitelist_denied: dict[tuple[str, str], datetime] = {}
 
     # ------------------------------------------------------------------
     # 公开 API
@@ -152,6 +159,42 @@ class PaperTradingSession:
     async def run_once(self) -> list[FundingRateOpportunity]:
         """单次执行 tick，返回本次扫描到的机会列表（供测试/脚本使用）。"""
         return await self._tick()
+
+    async def close_position(
+        self,
+        position_id: str,
+        reason: str = "manual",
+    ) -> None:
+        """API 触发的手动平仓 — 走 _executor 标准平仓路径。
+
+        Why: positions/{uuid}/close endpoint 通过 hasattr 调用此方法；保证手动
+        平仓与策略自动平仓走同一路径（双腿对账、PnL 计算、DB 持久化都一致）。
+
+        Parameters
+        ----------
+        position_id:
+            DB / Manager 中的 position id（同一字段 — Position.id 即 uuid4）
+        reason:
+            ExitReason 字符串值；不识别时回退 MANUAL。
+
+        Raises
+        ------
+        KeyError
+            position_id 在 manager 中找不到（通常是已平仓或不存在）。
+        """
+        try:
+            exit_reason = ExitReason(reason)
+        except ValueError:
+            exit_reason = ExitReason.MANUAL
+        pos = self._manager.get(position_id)
+        if pos is None:
+            raise KeyError(f"Position not found: {position_id}")
+        await self._close_with_reason(
+            pos,
+            exit_reason,
+            log_event="paper_manual_close",
+            log_extra={"requested_reason": reason},
+        )
 
     def status(
         self,
@@ -245,8 +288,23 @@ class PaperTradingSession:
         # 现算 min_apr — 防御式读取（测试 mock 可能没 _config，回退 0 = 全过）
         scfg = getattr(self._scanner, "_config", None)
         min_apr = getattr(scfg, "min_apr_pct", Decimal("0")) if scfg else Decimal("0")
+        now = datetime.now(UTC)
+        # GC 过期 deny-list 条目
+        expired = [k for k, exp in self._whitelist_denied.items() if exp <= now]
+        for k in expired:
+            self._whitelist_denied.pop(k, None)
+        # 提前算 tradeable，过滤无 broker 的 exchange 候选（dict broker 模式下）
+        tradeable = self._executor.tradeable_exchanges
         for opp in opportunities:
             if opp.apr_pct < min_apr:
+                continue
+            if tradeable is not None and opp.exchange not in tradeable:
+                logger.debug(
+                    "paper_open_skipped_no_broker",
+                    symbol=str(opp.symbol),
+                    exchange=opp.exchange,
+                    available=sorted(tradeable),
+                )
                 continue
             time_to_funding_ms = opp.funding_rate.next_funding_time - now_ms
             if time_to_funding_ms <= 0 or time_to_funding_ms > window_ms:
@@ -255,6 +313,15 @@ class PaperTradingSession:
                     symbol=str(opp.symbol),
                     minutes_to_funding=round(time_to_funding_ms / 60_000, 2),
                     window_minutes=self._pre_funding_window_min,
+                )
+                continue
+            deny_key = (opp.exchange, str(opp.symbol))
+            if deny_key in self._whitelist_denied:
+                logger.debug(
+                    "paper_open_skipped_whitelist_denied",
+                    symbol=str(opp.symbol),
+                    exchange=opp.exchange,
+                    expires_at=self._whitelist_denied[deny_key].isoformat(),
                 )
                 continue
             if self._manager.get_by_symbol(opp.symbol):
@@ -282,10 +349,37 @@ class PaperTradingSession:
                     symbol=str(opp.symbol),
                     reason=str(e),
                 )
-            except Exception:
-                logger.exception(
-                    "paper_open_unexpected_error", symbol=str(opp.symbol)
-                )
+            except Exception as e:
+                err_msg = str(e)
+                if any(m in err_msg for m in _WHITELIST_DENY_MARKERS):
+                    self._whitelist_denied[deny_key] = (
+                        datetime.now(UTC) + _WHITELIST_DENY_TTL
+                    )
+                    logger.warning(
+                        "paper_open_whitelist_denied",
+                        symbol=str(opp.symbol),
+                        exchange=opp.exchange,
+                        ttl_hours=_WHITELIST_DENY_TTL.total_seconds() / 3600,
+                    )
+                else:
+                    logger.exception(
+                        "paper_open_unexpected_error", symbol=str(opp.symbol)
+                    )
+                    # T12/R9: risk_event 收口
+                    try:
+                        from app.services.risk_event_service import write_risk_event  # noqa: PLC0415
+                        await write_risk_event(
+                            event_type="open_unexpected_error",
+                            severity="high",
+                            description=(
+                                f"[{opp.exchange}/{opp.symbol}] 开仓异常 (#01 funding-rate): "
+                                f"{type(e).__name__}: {err_msg[:200]}"
+                            ),
+                            action_taken="rolled_back_in_memory",
+                            extra={"error": err_msg[:500]},
+                        )
+                    except Exception:
+                        pass
 
     async def _check_funding_flip(self) -> None:
         """实时查询每个开仓 symbol 的当前费率/价格，并按多个动态退出条件平仓：

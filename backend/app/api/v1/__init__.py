@@ -17,6 +17,7 @@ from app.api.v1.strategies import router as strategies_router
 from app.api.v1.system import router as system_router
 from app.api.v1.market import router as market_router
 from app.api.v1.backtest import router as backtest_router
+from app.api.v1.reconciliation import router as reconciliation_router
 
 # 无需鉴权的路由
 router = APIRouter()
@@ -35,6 +36,7 @@ _protected.include_router(orders_router)
 _protected.include_router(account_router)
 _protected.include_router(system_router)
 _protected.include_router(backtest_router)
+_protected.include_router(reconciliation_router)
 
 router.include_router(_protected)
 

@@ -1,0 +1,696 @@
+"""BalanceReconcilerService — 后台余额 + 持仓对账（v0.4.7+）
+
+设计目的（feedback_no_single_leg + 系统性设计）:
+- 30s 后台 task 持续 fetch 各交易所 spot 余额 + perp 持仓
+- 与 DB OPEN positions 对账，发现单腿暴露 / 残留持仓立即告警
+- 提供实时 endpoint 直接读 cache（替代 lazy fetch）
+
+三层不一致检测：
+  1. **单腿暴露**：DB OPEN 但其 perp leg 在真实 fetch_positions 缺失（perp 已被强平/手动平）
+  2. **残留持仓**：真实交易所有仓位但 DB 没有任一 OPEN 含此 symbol（孤儿）
+  3. **数量漂移**：DB leg.size 与真实持仓数量差 >5%（部分平仓 / 滑点）
+
+任何不一致写入 ``risk_events`` 表 + Telegram 告警 + 触发 auto-unwind。
+"""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+_DEFAULT_INTERVAL_SECONDS = 30.0
+_QTY_DRIFT_TOLERANCE_PCT = Decimal("5.0")  # 5% 数量差异容忍（fee + slippage 缓冲）
+
+# R2.b auto-unwind cap — 单笔残留持仓 ≤ 此名义价值才自动清，否则等人工
+_AUTO_UNWIND_MAX_NOTIONAL_USD = Decimal("200")
+_auto_unwind_attempted: set[tuple[str, str]] = set()  # (exchange, symbol) 防重复尝试
+
+# T6/R12 残留挂单清理 — 超过此年龄（秒）仍 NEW/PARTIAL 的 limit 单视为残留，自动撤
+_STALE_ORDER_MAX_AGE_S = 30 * 60  # 30 分钟（market 单不可能这么久仍 open）
+
+
+@dataclass
+class ReconcileAlert:
+    """单笔对账告警事件，可序列化到 risk_events 表 + Telegram。"""
+
+    type: str  # "single_leg_exposure" / "orphan_position" / "qty_drift"
+    severity: str  # "critical" / "high" / "medium"
+    exchange: str
+    symbol: str
+    detail: dict[str, Any] = field(default_factory=dict)
+    detected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+class BalanceReconcilerService:
+    """后台对账服务 — 周期性 fetch + reconcile。
+
+    Parameters
+    ----------
+    adapters:
+        ``{exchange_name: ExchangeAdapter}`` — 仅含已鉴权可调 fetch_balance/positions 的
+    refresh_interval_s:
+        每轮 fetch+reconcile 间隔，默认 30s
+    """
+
+    def __init__(
+        self,
+        adapters: dict[str, Any],
+        refresh_interval_s: float = _DEFAULT_INTERVAL_SECONDS,
+        market_data_hub: Any = None,
+    ) -> None:
+        self._adapters = adapters
+        self._interval = refresh_interval_s
+        self._hub = market_data_hub  # R7: 拉 ticker 用，可选
+        self._running = False
+        # cache (供 endpoint 直读)
+        self.balance_cache: dict[str, dict] = {}
+        self.position_cache: dict[str, list] = {}
+        self.live_pnl_cache: dict[str, dict] = {}  # R7: position_uuid → {unrealized_pnl, computed_at}
+        self.last_refresh_at: datetime | None = None
+        self.last_reconcile_at: datetime | None = None
+        # 最近 100 条对账告警（FIFO，监控用）
+        self.recent_alerts: list[ReconcileAlert] = []
+        # 已告警过的不一致（uuid: leg_index）防止刷屏
+        self._alerted: set[tuple[str, int]] = set()
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    # ------------------------------------------------------------------
+    # 生命周期
+    # ------------------------------------------------------------------
+
+    async def run_forever(self) -> None:
+        self._running = True
+        logger.info("balance_reconciler_started", interval_s=self._interval)
+        while self._running:
+            start = asyncio.get_event_loop().time()
+            try:
+                await self._tick()
+            except Exception:
+                logger.exception("balance_reconciler_tick_failed")
+            elapsed = asyncio.get_event_loop().time() - start
+            await asyncio.sleep(max(0.0, self._interval - elapsed))
+
+    async def stop(self) -> None:
+        self._running = False
+        logger.info("balance_reconciler_stop_requested")
+
+    async def run_once(self) -> dict[str, Any]:
+        """单次执行（测试 / 手动触发）。返回当前 snapshot。"""
+        await self._tick()
+        return self.snapshot()
+
+    # ------------------------------------------------------------------
+    # 主循环
+    # ------------------------------------------------------------------
+
+    async def _tick(self) -> None:
+        await self._refresh_balances()
+        await self._refresh_positions()
+        self.last_refresh_at = datetime.now(UTC)
+        await self._reconcile()
+        await self._cancel_stale_orders()  # T6/R12
+        self.last_reconcile_at = datetime.now(UTC)
+
+    async def _refresh_balances(self) -> None:
+        """并发拉取各交易所余额到 cache（spot + cross-margin + perp 全合并）。"""
+        async def fetch_one(name: str, adapter: Any) -> tuple[str, dict | None]:
+            try:
+                # 1. spot fetch_balance
+                bal = await adapter.fetch_balance()
+                out = _balance_to_dict(bal)
+                # 2. binance 特有：cross-margin + USDM perp USDT 也加入
+                if name == "binance":
+                    extra = await self._fetch_binance_extra_wallets(adapter)
+                    if extra:
+                        out.update(extra)
+                return name, out
+            except Exception as e:
+                logger.warning("reconcile_fetch_balance_failed", exchange=name, error=str(e))
+                return name, None
+
+        results = await asyncio.gather(
+            *(fetch_one(n, a) for n, a in self._adapters.items()),
+            return_exceptions=False,
+        )
+        for name, data in results:
+            if data is not None:
+                self.balance_cache[name] = data
+
+    async def _fetch_binance_extra_wallets(self, adapter: Any) -> dict:
+        """Binance 特定：cross-margin USDT + USDM perp USDT 合并到 cache。
+
+        cache 增加两个 pseudo-asset:
+          - USDT_MARGIN: cross-margin netAsset
+          - USDT_PERP: USDM perp wallet total
+        """
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        out: dict = {}
+        try:
+            spot_client = adapter._clients.get(InstrumentType.SPOT)
+            if spot_client is not None:
+                ma = await spot_client.sapi_get_margin_account()
+                margin_usdt = Decimal("0")
+                for a in ma.get("userAssets", []):
+                    if a.get("asset") == "USDT":
+                        margin_usdt = Decimal(str(a.get("netAsset") or 0))
+                        break
+                out["USDT_MARGIN"] = {
+                    "free": str(margin_usdt), "total": str(margin_usdt), "used": "0",
+                }
+        except Exception as e:
+            logger.debug("reconcile_margin_fetch_failed", error=str(e))
+        try:
+            perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+            if perp_client is not None:
+                raw = await perp_client.fetch_balance()
+                perp_total = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
+                perp_free = Decimal(str((raw.get("free") or {}).get("USDT") or 0))
+                out["USDT_PERP"] = {
+                    "free": str(perp_free), "total": str(perp_total),
+                    "used": str(perp_total - perp_free),
+                }
+        except Exception as e:
+            logger.debug("reconcile_perp_fetch_failed", error=str(e))
+        # Funding wallet (Binance Pay) — sapi_post_asset_get_funding_asset
+        try:
+            spot_client = adapter._clients.get(InstrumentType.SPOT)
+            if spot_client is not None:
+                fw = await spot_client.sapi_post_asset_get_funding_asset({})
+                funding_usdt = Decimal("0")
+                for a in (fw or []):
+                    if a.get("asset") == "USDT":
+                        funding_usdt = Decimal(str(a.get("free") or 0))
+                        break
+                if funding_usdt > 0:
+                    out["USDT_FUNDING"] = {
+                        "free": str(funding_usdt),
+                        "total": str(funding_usdt),
+                        "used": "0",
+                    }
+        except Exception as e:
+            logger.debug("reconcile_funding_wallet_fetch_failed", error=str(e))
+        return out
+
+    async def _refresh_positions(self) -> None:
+        """并发拉取各交易所 perp 持仓到 cache（仅鉴权 adapter）。"""
+        async def fetch_one(name: str, adapter: Any) -> tuple[str, list | None]:
+            try:
+                # ccxt fetch_positions 直读 — 避免 adapter.fetch_positions raise NotImplementedError
+                from app.exchanges.models import InstrumentType  # noqa: PLC0415
+                clients = getattr(adapter, "_clients", {})
+                client = clients.get(InstrumentType.PERPETUAL)
+                if client is None:
+                    return name, []
+                raw = await client.fetch_positions()
+                positions = []
+                for p in raw or []:
+                    contracts = float(p.get("contracts") or 0)
+                    if abs(contracts) > 0:
+                        positions.append({
+                            "symbol": p.get("symbol"),
+                            "side": p.get("side"),
+                            "contracts": contracts,
+                            "entry_price": float(p.get("entryPrice") or 0),
+                            "unrealized_pnl": float(p.get("unrealizedPnl") or 0),
+                        })
+                return name, positions
+            except Exception as e:
+                logger.warning("reconcile_fetch_positions_failed", exchange=name, error=str(e))
+                return name, None
+
+        results = await asyncio.gather(
+            *(fetch_one(n, a) for n, a in self._adapters.items()),
+            return_exceptions=False,
+        )
+        for name, data in results:
+            if data is not None:
+                self.position_cache[name] = data
+
+    # ------------------------------------------------------------------
+    # 对账逻辑
+    # ------------------------------------------------------------------
+
+    async def _reconcile(self) -> None:
+        """对 DB OPEN positions 与真实余额/持仓对账。"""
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from app.core.database import get_session  # noqa: PLC0415
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        from app.models.position import PositionLegRecord, PositionRecord  # noqa: PLC0415
+
+        async with get_session() as session:
+            res = await session.execute(
+                select(PositionRecord).where(PositionRecord.status == "open")
+            )
+            open_records: list[PositionRecord] = list(res.scalars().all())
+            pos_ids = [r.id for r in open_records]
+            legs_by_pos: dict[int, list[PositionLegRecord]] = {}
+            if pos_ids:
+                leg_res = await session.execute(
+                    select(PositionLegRecord).where(
+                        PositionLegRecord.position_id.in_(pos_ids)
+                    )
+                )
+                for lr in leg_res.scalars().all():
+                    legs_by_pos.setdefault(lr.position_id, []).append(lr)
+
+        # T8: GC 已不再 OPEN 的 alert key — 让真正的下次 inconsistency 能重发
+        current_open_uuids = {rec.uuid for rec in open_records}
+        stale_keys = [
+            k for k in self._alerted
+            if isinstance(k, tuple) and len(k) == 2
+            and isinstance(k[0], str)
+            and not k[0].startswith("orphan:")
+            and k[0] not in current_open_uuids
+        ]
+        for k in stale_keys:
+            self._alerted.discard(k)
+
+        new_alerts: list[ReconcileAlert] = []
+
+        for rec in open_records:
+            legs = legs_by_pos.get(rec.id, [])
+            for idx, leg in enumerate(legs):
+                alert = self._check_leg(rec, leg, idx)
+                if alert is not None:
+                    new_alerts.append(alert)
+
+        # 残留持仓检测：真实交易所 perp 持仓 vs DB OPEN
+        new_alerts.extend(self._detect_orphan_positions(open_records, legs_by_pos))
+
+        # R7: mark-to-market PnL（用 MarketDataHub ticker）
+        self._compute_live_pnl(open_records, legs_by_pos)
+
+        if new_alerts:
+            for alert in new_alerts:
+                self.recent_alerts.append(alert)
+                if len(self.recent_alerts) > 100:
+                    self.recent_alerts.pop(0)
+                logger.error(
+                    "reconcile_alert",
+                    type=alert.type,
+                    severity=alert.severity,
+                    exchange=alert.exchange,
+                    symbol=alert.symbol,
+                    detail=alert.detail,
+                )
+                # R2.b: orphan_position 尝试自动平（仅 perp 残留），结果记录到 action_taken
+                action_taken = None
+                if alert.type == "orphan_position":
+                    unwound = await self._try_auto_unwind_orphan(alert)
+                    action_taken = "auto_unwound" if unwound else "alert_only_above_cap"
+                await self._persist_alert(alert, action_taken=action_taken)
+                self._notify_alert(alert)
+
+    def _notify_alert(self, alert: ReconcileAlert) -> None:
+        """R10: 推送 Telegram。失败不影响主循环。"""
+        try:
+            from app.notifications import notify_reconcile_alert  # noqa: PLC0415
+            notify_reconcile_alert(
+                alert_type=alert.type,
+                severity=alert.severity,
+                exchange=alert.exchange,
+                symbol=alert.symbol,
+                explanation=alert.detail.get("explanation", ""),
+            )
+        except Exception:
+            logger.warning("reconcile_telegram_notify_failed", type=alert.type)
+
+    def _check_leg(self, rec: Any, leg: Any, idx: int) -> ReconcileAlert | None:
+        """检查单条 leg 与真实持仓是否匹配。返回告警 or None。"""
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+
+        key = (rec.uuid, idx)
+        # 已经告警过且仍未解决就不重复告警
+        if key in self._alerted:
+            return None
+
+        # PERPETUAL leg → 期望在 perp position_cache 中找到
+        if leg.instrument_type == InstrumentType.PERPETUAL.value:
+            cached = self.position_cache.get(leg.exchange, [])
+            match = next(
+                (p for p in cached if _normalize_symbol(p.get("symbol", "")) == leg.symbol),
+                None,
+            )
+            if match is None:
+                self._alerted.add(key)
+                return ReconcileAlert(
+                    type="single_leg_exposure",
+                    severity="critical",
+                    exchange=leg.exchange,
+                    symbol=leg.symbol,
+                    detail={
+                        "position_uuid": rec.uuid,
+                        "leg_idx": idx,
+                        "expected_size": str(leg.size),
+                        "actual": "no_perp_position",
+                        "explanation": "DB OPEN 但 perp 真实持仓缺失（已强平/被手动平）",
+                    },
+                )
+            actual = abs(Decimal(str(match["contracts"])))
+            drift = abs(actual - leg.size)
+            tolerance = leg.size * _QTY_DRIFT_TOLERANCE_PCT / Decimal("100")
+            if drift > tolerance:
+                self._alerted.add(key)
+                return ReconcileAlert(
+                    type="qty_drift",
+                    severity="high",
+                    exchange=leg.exchange,
+                    symbol=leg.symbol,
+                    detail={
+                        "position_uuid": rec.uuid,
+                        "leg_idx": idx,
+                        "expected_size": str(leg.size),
+                        "actual_contracts": str(actual),
+                        "drift_pct": str(drift / leg.size * 100),
+                    },
+                )
+
+        # SPOT leg → 期望在 balance_cache 中 base 余额 >= leg.size
+        elif leg.instrument_type == InstrumentType.SPOT.value:
+            bal = self.balance_cache.get(leg.exchange, {})
+            base = leg.symbol.split("/")[0] if "/" in leg.symbol else None
+            if base is None:
+                return None
+            free = Decimal(str((bal.get(base) or {}).get("free") or 0))
+            tolerance = leg.size * _QTY_DRIFT_TOLERANCE_PCT / Decimal("100")
+            if free + tolerance < leg.size:
+                self._alerted.add(key)
+                return ReconcileAlert(
+                    type="single_leg_exposure",
+                    severity="critical",
+                    exchange=leg.exchange,
+                    symbol=leg.symbol,
+                    detail={
+                        "position_uuid": rec.uuid,
+                        "leg_idx": idx,
+                        "expected_size": str(leg.size),
+                        "actual_free": str(free),
+                        "explanation": "DB OPEN 但 spot 真实余额不足（被卖出/转走）",
+                    },
+                )
+
+        return None
+
+    def _detect_orphan_positions(
+        self,
+        open_records: list,
+        legs_by_pos: dict,
+    ) -> list[ReconcileAlert]:
+        """真实 perp 持仓但 DB 找不到对应 OPEN — 残留单腿。"""
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+
+        # 构建 DB 期望的 (exchange, symbol) 集合
+        db_expected: set[tuple[str, str]] = set()
+        for rec in open_records:
+            for leg in legs_by_pos.get(rec.id, []):
+                if leg.instrument_type == InstrumentType.PERPETUAL.value:
+                    db_expected.add((leg.exchange, leg.symbol))
+
+        alerts: list[ReconcileAlert] = []
+        for ex_name, positions in self.position_cache.items():
+            for p in positions:
+                sym = _normalize_symbol(p.get("symbol", ""))
+                if (ex_name, sym) not in db_expected:
+                    key = (f"orphan:{ex_name}:{sym}", 0)
+                    if key in self._alerted:
+                        continue
+                    self._alerted.add(key)
+                    alerts.append(ReconcileAlert(
+                        type="orphan_position",
+                        severity="high",
+                        exchange=ex_name,
+                        symbol=sym,
+                        detail={
+                            "contracts": p.get("contracts"),
+                            "side": p.get("side"),
+                            "entry_price": p.get("entry_price") or 0,
+                            "explanation": "真实 perp 持仓但 DB 无对应 OPEN 仓位",
+                        },
+                    ))
+        return alerts
+
+    async def _persist_alert(
+        self, alert: ReconcileAlert, action_taken: str | None = None,
+    ) -> None:
+        """写入 risk_events 表（best-effort，DB 失败不影响主循环）。"""
+        from app.services.risk_event_service import write_risk_event  # noqa: PLC0415
+        await write_risk_event(
+            event_type=alert.type,
+            severity=alert.severity,
+            description=f"[{alert.exchange}/{alert.symbol}] {alert.detail.get('explanation', '')}",
+            action_taken=action_taken,
+            extra=alert.detail,
+        )
+
+    async def _cancel_stale_orders(self) -> None:
+        """T6/R12: 撤掉超过 _STALE_ORDER_MAX_AGE_S 仍未成交的挂单。
+
+        Why: market 单应即时成交；limit 单超时未填可能是网络问题或价格远离市场，
+        长期占用资金 / 配额。撤掉 + 写 risk_event。
+        """
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        max_age_ms = _STALE_ORDER_MAX_AGE_S * 1000
+
+        for ex_name, adapter in self._adapters.items():
+            try:
+                if not hasattr(adapter, "fetch_open_orders"):
+                    continue
+                orders = await adapter.fetch_open_orders()
+                stale_orders = []
+                for o in (orders or []):
+                    ts = getattr(o, "timestamp", 0) or 0
+                    if ts > 0 and (now_ms - ts) > max_age_ms:
+                        stale_orders.append(o)
+                if not stale_orders:
+                    continue
+                for o in stale_orders:
+                    try:
+                        cancelled = await adapter.cancel_order(
+                            o.order_id, o.symbol,
+                        )
+                        age_min = (now_ms - (o.timestamp or now_ms)) / 60_000
+                        logger.warning(
+                            "stale_order_cancelled",
+                            exchange=ex_name,
+                            symbol=str(o.symbol),
+                            order_id=o.order_id,
+                            age_minutes=round(age_min, 1),
+                            cancelled=cancelled,
+                        )
+                        from app.services.risk_event_service import write_risk_event  # noqa: PLC0415
+                        await write_risk_event(
+                            event_type="stale_order_cancelled",
+                            severity="medium",
+                            description=(
+                                f"[{ex_name}/{o.symbol}] order {o.order_id[:12]} "
+                                f"挂单 {age_min:.1f}min 未成交自动撤"
+                            ),
+                            action_taken="cancel_order" if cancelled else "cancel_failed",
+                            extra={
+                                "order_id": o.order_id,
+                                "side": o.side.value if hasattr(o.side, "value") else str(o.side),
+                                "instrument": o.instrument.value if hasattr(o.instrument, "value") else str(o.instrument),
+                                "age_minutes": age_min,
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "stale_order_cancel_failed",
+                            exchange=ex_name, order_id=o.order_id, error=str(e),
+                        )
+            except Exception as e:
+                logger.debug("stale_order_scan_failed", exchange=ex_name, error=str(e))
+
+    def _compute_live_pnl(self, open_records: list, legs_by_pos: dict) -> None:
+        """R7: 用 MarketDataHub ticker 计算每个 OPEN position 的 mark-to-market PnL。
+
+        无 hub / 无 ticker 时静默跳过该 position。
+        """
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        if self._hub is None:
+            return
+        new_pnl: dict[str, dict] = {}
+        for rec in open_records:
+            legs = legs_by_pos.get(rec.id, [])
+            unrealized = Decimal("0")
+            has_data = False
+            for leg in legs:
+                try:
+                    instrument = (
+                        InstrumentType.PERPETUAL
+                        if leg.instrument_type == "perpetual"
+                        else InstrumentType.SPOT
+                    )
+                    entry_obj = self._hub.get_ticker(
+                        leg.exchange, instrument,
+                        _parse_symbol_for_hub(leg.symbol),
+                    )
+                    if entry_obj is None:
+                        continue
+                    current = entry_obj.last or entry_obj.bid
+                    if current is None or current <= 0:
+                        continue
+                    has_data = True
+                    if leg.side == "buy":
+                        unrealized += (Decimal(str(current)) - leg.entry_price) * leg.size
+                    else:  # sell
+                        unrealized += (leg.entry_price - Decimal(str(current))) * leg.size
+                except Exception:
+                    continue
+            if has_data:
+                new_pnl[rec.uuid] = {
+                    "unrealized_pnl": str(unrealized.quantize(Decimal("0.0001"))),
+                    "computed_at": datetime.now(UTC).isoformat(),
+                }
+        self.live_pnl_cache = new_pnl
+
+    async def _try_auto_unwind_orphan(self, alert: ReconcileAlert) -> bool:
+        """R2.b: 真实交易所有残留 perp 持仓但 DB 无 OPEN → 自动反向平掉。
+
+        保护：
+          - 仅 binance（hedge mode positionSide）
+          - 单笔残留名义价值 ≤ _AUTO_UNWIND_MAX_NOTIONAL_USD ($200)
+          - 同 (exchange, symbol) 仅尝试一次（防失败循环）
+
+        Returns
+        -------
+        bool: 是否成功平仓
+        """
+        key = (alert.exchange, alert.symbol)
+        if key in _auto_unwind_attempted:
+            return False
+        _auto_unwind_attempted.add(key)
+
+        if alert.exchange != "binance":
+            return False
+        adapter = self._adapters.get(alert.exchange)
+        if adapter is None:
+            return False
+        try:
+            from app.exchanges.models import InstrumentType  # noqa: PLC0415
+
+            contracts = abs(Decimal(str(alert.detail.get("contracts") or 0)))
+            side = alert.detail.get("side", "")
+            entry = Decimal(str(alert.detail.get("entry_price") or 0))
+            notional = contracts * entry
+            if notional > _AUTO_UNWIND_MAX_NOTIONAL_USD:
+                logger.warning(
+                    "auto_unwind_skip_above_cap",
+                    symbol=alert.symbol,
+                    notional=str(notional),
+                    cap=str(_AUTO_UNWIND_MAX_NOTIONAL_USD),
+                )
+                return False
+            perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+            if perp_client is None:
+                return False
+            close_side = "buy" if side == "short" else "sell"
+            params = {"positionSide": "SHORT" if side == "short" else "LONG"}
+            if close_side == "buy":
+                r = await perp_client.create_market_buy_order(
+                    alert.symbol, float(contracts), params=params,
+                )
+            else:
+                r = await perp_client.create_market_sell_order(
+                    alert.symbol, float(contracts), params=params,
+                )
+            logger.warning(
+                "auto_unwind_orphan_executed",
+                symbol=alert.symbol,
+                contracts=str(contracts),
+                side=close_side,
+                notional=str(notional),
+                order_id=r.get("id"),
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "auto_unwind_failed",
+                symbol=alert.symbol,
+                error=str(e),
+            )
+            return False
+
+    # ------------------------------------------------------------------
+    # 状态 snapshot
+    # ------------------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        """供 endpoint 直读的 snapshot。"""
+        return {
+            "running": self._running,
+            "interval_s": self._interval,
+            "last_refresh_at": self.last_refresh_at.isoformat() if self.last_refresh_at else None,
+            "last_reconcile_at": self.last_reconcile_at.isoformat() if self.last_reconcile_at else None,
+            "balance_cache": self.balance_cache,
+            "position_cache": self.position_cache,
+            "live_pnl": self.live_pnl_cache,
+            "alerts_total": len(self.recent_alerts),
+            "recent_alerts": [
+                {
+                    "type": a.type,
+                    "severity": a.severity,
+                    "exchange": a.exchange,
+                    "symbol": a.symbol,
+                    "detail": a.detail,
+                    "detected_at": a.detected_at.isoformat(),
+                }
+                for a in self.recent_alerts[-20:]
+            ],
+        }
+
+
+# ---------------------------------------------------------------------------
+# 工具
+# ---------------------------------------------------------------------------
+
+
+def _balance_to_dict(bal: Any) -> dict:
+    """把 Balance / ccxt dict 转换成扁平 dict[asset → {free, total, used}]。"""
+    if isinstance(bal, dict):
+        out: dict[str, dict] = {}
+        for k, v in bal.items():
+            if isinstance(v, dict) and ("free" in v or "total" in v):
+                out[k] = {
+                    "free": str(v.get("free") or 0),
+                    "total": str(v.get("total") or 0),
+                    "used": str(v.get("used") or 0),
+                }
+        return out
+    # app.exchanges.models.Balance(entries=[BalanceEntry(asset, free, locked)])
+    if hasattr(bal, "entries"):
+        return {
+            e.asset: {
+                "free": str(e.free),
+                "total": str(e.total),
+                "used": str(e.locked),
+            }
+            for e in (bal.entries or [])
+        }
+    return {}
+
+
+def _parse_symbol_for_hub(s: str) -> Any:
+    """'FIL/USDT' → Symbol('FIL','USDT')，供 MarketDataHub.get_ticker 使用。"""
+    from app.exchanges.models import Symbol  # noqa: PLC0415
+    if "/" in s:
+        base, _, quote = s.partition("/")
+        return Symbol(base, quote)
+    return Symbol(s, "USDT")
+
+
+def _normalize_symbol(s: str) -> str:
+    """ccxt perp symbol 'FIL/USDT:USDT' → 'FIL/USDT'。"""
+    if ":" in s:
+        return s.split(":")[0]
+    return s

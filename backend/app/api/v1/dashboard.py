@@ -13,7 +13,9 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/summary", response_model=DashboardSummary)
 async def summary(_: CurrentUser, db: DbSession, request: Request) -> DashboardSummary:
     adapters = getattr(request.app.state, "adapters", None)
-    data = await get_summary(db, adapters=adapters)
+    # R6: 优先用 reconciler cache，避免 lazy fetch 阻塞用户访问
+    reconciler = getattr(request.app.state, "balance_reconciler", None)
+    data = await get_summary(db, adapters=adapters, reconciler=reconciler)
     return DashboardSummary(
         net_pnl_usd=data["net_pnl_usd"],
         realized_pnl_usd=data["realized_pnl_usd"],

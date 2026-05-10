@@ -462,3 +462,152 @@ class TestPerpMarginRisk:
         pos = _delta_neutral_position(leverage="10")
         triggered = await session._maybe_close_perp_margin_risk(pos, "binance")
         assert triggered is True
+
+
+# ---------------------------------------------------------------------------
+# Whitelist deny-list — broker 抛 -2010 时 24h 内不再尝试该候选
+# ---------------------------------------------------------------------------
+
+
+class TestWhitelistDenyList:
+    """Why: Binance API 白名单不含某 symbol 时，broker 反复返回 -2010
+    污染 max_positions 配额。deny-list 让首次失败后 24h 跳过该 (exchange,symbol)。
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_failure_adds_to_deny_list(self):
+        session = _make_session(opportunities=[_make_opportunity()])
+        session._executor.open_delta_neutral = AsyncMock(
+            side_effect=Exception('binance {"code":-2010,"msg":"Symbol not whitelisted for API key."}')
+        )
+        await session.run_once()
+        assert ("binance", "BTC/USDT") in session._whitelist_denied
+
+    @pytest.mark.asyncio
+    async def test_second_attempt_skipped(self):
+        session = _make_session(opportunities=[_make_opportunity()])
+        session._executor.open_delta_neutral = AsyncMock(
+            side_effect=Exception("Symbol not whitelisted")
+        )
+        await session.run_once()
+        assert session._executor.open_delta_neutral.await_count == 1
+        await session.run_once()
+        # 第二次 tick 候选被 deny-list 跳过，不再调 open_delta_neutral
+        assert session._executor.open_delta_neutral.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_non_whitelist_error_not_added(self):
+        """普通异常（非 -2010）不应加入 deny-list。"""
+        session = _make_session(opportunities=[_make_opportunity()])
+        session._executor.open_delta_neutral = AsyncMock(
+            side_effect=RuntimeError("transient network blip")
+        )
+        await session.run_once()
+        assert session._whitelist_denied == {}
+
+    @pytest.mark.asyncio
+    async def test_expired_entry_is_gced(self):
+        session = _make_session(opportunities=[_make_opportunity()])
+        # 手动塞过期条目
+        session._whitelist_denied[("binance", "BTC/USDT")] = datetime.now(UTC) - timedelta(seconds=1)
+        session._executor.open_delta_neutral = AsyncMock(
+            return_value=MagicMock(id="abc123def")
+        )
+        await session.run_once()
+        assert ("binance", "BTC/USDT") not in session._whitelist_denied
+        # GC 后应正常尝试开仓
+        session._executor.open_delta_neutral.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_deny_list_uses_exchange_symbol_pair(self):
+        """同 symbol 不同 exchange 应独立 deny。"""
+        opp_binance = _make_opportunity()
+        session = _make_session(opportunities=[opp_binance])
+        session._executor.open_delta_neutral = AsyncMock(
+            side_effect=Exception("Symbol not whitelisted")
+        )
+        await session.run_once()
+        assert ("binance", "BTC/USDT") in session._whitelist_denied
+        assert ("okx", "BTC/USDT") not in session._whitelist_denied
+
+
+class TestPublicClosePosition:
+    """API 触发的手动平仓走 _executor.close_position 标准路径。
+
+    Why: positions/{uuid}/close endpoint 用 hasattr 调用 paper_session.close_position；
+    没这个方法 endpoint 静默无效。手动平仓必须与策略自动平仓走同一路径。
+    """
+
+    @pytest.mark.asyncio
+    async def test_close_existing_position(self):
+        opp = _make_opportunity()
+        session = _make_session(opportunities=[opp])
+        await session.run_once()
+        # 现在应有 1 笔 OPEN
+        assert len(session._manager.open_positions) == 1
+        pos = session._manager.open_positions[0]
+
+        await session.close_position(pos.id, reason="manual")
+        # 应已平仓（CLOSED 状态）
+        from app.risk.models import PositionStatus
+        assert pos.status == PositionStatus.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_close_unknown_position_raises_key_error(self):
+        session = _make_session()
+        with pytest.raises(KeyError, match="Position not found"):
+            await session.close_position("does-not-exist")
+
+    @pytest.mark.asyncio
+    async def test_close_unknown_reason_falls_back_to_manual(self):
+        opp = _make_opportunity()
+        session = _make_session(opportunities=[opp])
+        await session.run_once()
+        pos = session._manager.open_positions[0]
+        # 传一个无效 reason，应该回退 MANUAL 不抛
+        await session.close_position(pos.id, reason="banana_split")
+        assert pos.exit_reason == ExitReason.MANUAL
+
+
+class TestNoBrokerFiltering:
+    """tradeable_exchanges 过滤掉无 broker 的候选。
+
+    Why: 实战中 scanner 会扫所有 exchange 行情，但 live_mode 下 broker dict 仅含
+    已鉴权的 exchange。无 broker 候选直接 attempt 会反复抛 RuntimeError 污染日志、
+    污染 max_positions 配额（旧实现 — 现已被 A 修复回滚）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_skip_candidate_when_exchange_not_in_broker_dict(self):
+        opp = _make_opportunity()  # exchange='binance'
+        session = _make_session(opportunities=[opp])
+        # 把 executor 替换成只允许 okx 的 dict broker
+        broker_dict = {"okx": session._executor._broker}
+        session._executor._broker = broker_dict
+        session._executor.open_delta_neutral = AsyncMock()
+        await session.run_once()
+        # binance 不在 dict 里，open_delta_neutral 不应被调用
+        session._executor.open_delta_neutral.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_open_when_exchange_in_broker_dict(self):
+        opp = _make_opportunity()  # exchange='binance'
+        session = _make_session(opportunities=[opp])
+        broker_dict = {"binance": session._executor._broker}
+        session._executor._broker = broker_dict
+        session._executor.open_delta_neutral = AsyncMock(
+            return_value=MagicMock(id="abcdef12345")
+        )
+        await session.run_once()
+        session._executor.open_delta_neutral.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_single_broker_mode_no_filtering(self):
+        """单 broker 模式（PaperBroker）tradeable_exchanges 返回 None，不过滤。"""
+        opp = _make_opportunity()  # exchange='binance'
+        session = _make_session(opportunities=[opp])
+        # 默认 _make_session 用单 PaperBroker，不动它
+        assert session._executor.tradeable_exchanges is None
+        await session.run_once()
+        # 至少创建了一笔 position（不被过滤）
+        assert len(session._manager.all_positions) >= 1

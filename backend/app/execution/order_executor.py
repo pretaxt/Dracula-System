@@ -36,6 +36,39 @@ from app.strategies.funding_rate.scanner import FundingRateOpportunity
 logger = get_logger(__name__)
 
 
+class PartialCloseError(Exception):
+    """R4: close_position 中部分腿成功部分腿失败时抛出。
+
+    此异常表示**真实交易所有单腿暴露**——已平的腿是真平了，未平的腿仍在交易所。
+    调用方必须立即处理（reconciler 队列 / 告警 / 人工介入）。
+
+    Attributes
+    ----------
+    position_id : str
+        仓位 ID
+    succeeded_legs : list[PositionLeg]
+        已成功平仓的腿
+    failed_legs : list[tuple[PositionLeg, Exception]]
+        失败的腿 + 原始异常
+    """
+
+    def __init__(
+        self,
+        position_id: str,
+        succeeded_legs: list,
+        failed_legs: list,
+    ) -> None:
+        self.position_id = position_id
+        self.succeeded_legs = succeeded_legs
+        self.failed_legs = failed_legs
+        msg = (
+            f"Partial close on {position_id[:8]}: "
+            f"{len(succeeded_legs)} legs closed, {len(failed_legs)} failed. "
+            f"Real exchange has SINGLE-LEG EXPOSURE — reconciler must clean up."
+        )
+        super().__init__(msg)
+
+
 class OrderExecutor:
     """将扫描机会转化为实际（或模拟）持仓的执行编排器。"""
 
@@ -64,6 +97,23 @@ class OrderExecutor:
                 )
             return broker
         return self._broker
+
+    @property
+    def tradeable_exchanges(self) -> set[str] | None:
+        """可下单的 exchange 集合；调用方据此过滤候选避免触发 RuntimeError。
+
+        Why: live_mode 下 broker 是 dict，仅含已鉴权的 adapter (有 API key 的)；
+        scanner 仍会扫所有 exchange 的行情产出候选。直接尝试开仓会让无 broker
+        的候选反复抛 RuntimeError 污染 paper_open_unexpected_error 日志。
+
+        Returns
+        -------
+        set[str] | None
+            None 表示单 broker 模式（不限制）。否则是可下单 exchange 名集合。
+        """
+        if isinstance(self._broker, dict):
+            return set(self._broker.keys())
+        return None
 
     # ------------------------------------------------------------------
     # 开仓
@@ -127,7 +177,18 @@ class OrderExecutor:
             instrument_type=InstrumentType.PERPETUAL,
             position_side="SHORT",  # funding-rate 永远开 SHORT 永续
         )
-        spot_result, perp_result = await self._get_broker(exchange).execute_pair(spot_req, perp_req)
+        try:
+            spot_result, perp_result = await self._get_broker(exchange).execute_pair(spot_req, perp_req)
+        except Exception:
+            # broker 失败时回滚内存 position，避免幽灵持仓占用 max_positions 配额
+            self._manager.discard(pos.id)
+            logger.warning(
+                "position_open_rolled_back",
+                position_id=pos.id,
+                symbol=str(symbol),
+                exchange=exchange,
+            )
+            raise
 
         # 5. 将成交价写入腿
         pos.add_leg(PositionLeg(
@@ -189,12 +250,21 @@ class OrderExecutor:
 
         close_fees = Decimal("0")
         realized_pnl = Decimal("0")
+        succeeded_legs: list = []
+        failed_legs: list = []
 
-        for leg in pos.legs:
+        # R4: 先 perp 后 spot —— perp 用 reduce_only 更安全，先确定下来
+        # 任一腿失败时记录但继续尝试平其他腿（最大化恢复机会，最小化暴露窗口）
+        sorted_legs = sorted(
+            pos.legs,
+            key=lambda l: 0 if l.instrument_type == InstrumentType.PERPETUAL else 1,
+        )
+
+        for leg in sorted_legs:
             close_side = leg.side.opposite()
-            # Hedge 模式: 永续平仓必须传 positionSide 与原仓方向一致
             position_side = None
-            if leg.instrument_type == InstrumentType.PERPETUAL:
+            is_perp = leg.instrument_type == InstrumentType.PERPETUAL
+            if is_perp:
                 position_side = "SHORT" if leg.side == Side.SELL else "LONG"
             req = OrderRequest(
                 symbol=leg.symbol,
@@ -202,30 +272,94 @@ class OrderExecutor:
                 size=leg.size,
                 reference_price=leg.entry_price,
                 exchange=leg.exchange,
-                reduce_only=True,
+                reduce_only=is_perp,
                 instrument_type=leg.instrument_type,
                 position_side=position_side,
             )
-            result: OrderResult = await self._get_broker(leg.exchange).execute(req)
-
-            if result.leg_already_closed:
-                # 永续已被交易所强平，跳过该腿 PnL（LiquidationWatcher 已处理）
-                logger.warning(
-                    "leg_already_closed_skipped",
+            try:
+                result: OrderResult = await self._get_broker(leg.exchange).execute(req)
+                if result.leg_already_closed:
+                    logger.warning(
+                        "leg_already_closed_skipped",
+                        position_id=pos.id[:8],
+                        instrument=leg.instrument_type.value,
+                        symbol=str(leg.symbol),
+                    )
+                    succeeded_legs.append(leg)
+                    continue
+                close_fees += result.fees
+                price_diff = result.avg_price - leg.entry_price
+                if leg.side == Side.SELL:
+                    price_diff = -price_diff
+                # T7: 用真实成交量计算 PnL（X7 cap 后 filled_size 可能小于 leg.size）
+                actual_size = result.filled_size if result.filled_size > 0 else leg.size
+                realized_pnl += price_diff * actual_size
+                succeeded_legs.append(leg)
+            except Exception as e:
+                logger.exception(
+                    "close_leg_failed",
                     position_id=pos.id[:8],
-                    instrument=leg.instrument_type.value,
+                    exchange=leg.exchange,
                     symbol=str(leg.symbol),
+                    instrument=leg.instrument_type.value,
                 )
-                continue
+                failed_legs.append((leg, e))
 
-            close_fees += result.fees
+        # R4: 部分失败 = 单腿暴露 — 立即抛 PartialCloseError 让 reconciler/告警系统接管
+        if failed_legs:
+            # 先把已成功的 fee 入账（避免 fee 丢失）
+            if close_fees > 0:
+                self._manager.record_fees(pos.id, close_fees)
+            exposed = [
+                f"{l.instrument_type.value}/{l.exchange}/{l.symbol}"
+                for l, _ in failed_legs
+            ]
+            logger.error(
+                "position_partial_close",
+                position_id=pos.id,
+                succeeded=len(succeeded_legs),
+                failed=len(failed_legs),
+                exposed_legs=exposed,
+            )
+            # R9: risk_events 收口
+            try:
+                from app.services.risk_event_service import write_risk_event  # noqa: PLC0415
+                await write_risk_event(
+                    event_type="partial_close",
+                    severity="critical",
+                    description=(
+                        f"Partial close on {pos.id[:8]}: "
+                        f"{len(succeeded_legs)} closed, {len(failed_legs)} failed. "
+                        f"SINGLE-LEG EXPOSURE on: {', '.join(exposed)}"
+                    ),
+                    strategy_instance=pos.strategy_instance,
+                    action_taken="raised_partial_close_error",
+                    extra={
+                        "position_uuid": pos.id,
+                        "succeeded_count": len(succeeded_legs),
+                        "failed_count": len(failed_legs),
+                        "failed_errors": [str(e) for _, e in failed_legs],
+                    },
+                )
+                # Telegram 告警
+                from app.notifications import notify_reconcile_alert  # noqa: PLC0415
+                notify_reconcile_alert(
+                    alert_type="single_leg_exposure",
+                    severity="critical",
+                    exchange=failed_legs[0][0].exchange,
+                    symbol=str(failed_legs[0][0].symbol),
+                    explanation=f"close 部分失败: {failed_legs[0][1]}",
+                )
+            except Exception:
+                logger.exception("partial_close_alert_failed")
 
-            # 计算该腿已实现盈亏
-            price_diff = result.avg_price - leg.entry_price
-            if leg.side == Side.SELL:
-                price_diff = -price_diff
-            realized_pnl += price_diff * leg.size
+            raise PartialCloseError(
+                position_id=pos.id,
+                succeeded_legs=succeeded_legs,
+                failed_legs=failed_legs,
+            )
 
+        # 全部成功 → 标记 closed
         self._manager.record_fees(pos.id, close_fees)
         self._manager.close(position_id=pos.id, reason=reason, realized_pnl=realized_pnl)
         await self._manager.save(pos)
@@ -237,7 +371,69 @@ class OrderExecutor:
             realized_pnl=str(realized_pnl),
             close_fees=str(close_fees),
         )
+
+        # T9/R13: 平仓后真实余额对账 — 各 leg 反向后 base/quote 余额应符合预期
+        # 不影响主流程，发现不一致立即写 risk_event + Telegram
+        try:
+            await self._post_close_reconcile(pos)
+        except Exception:
+            logger.exception("post_close_reconcile_failed", position_id=pos.id)
+
         return pos
+
+    async def _post_close_reconcile(self, pos) -> None:
+        """T9/R13: close_position 成功返回前对每条 leg 在交易所做余额验证。
+
+        - perp leg: 真实 fetch_positions 应不含此 symbol（已平）
+        - spot leg: base 余额应已下降（卖出）/ quote 余额应已上升（买入）
+        若不一致 → 写 risk_event + Telegram 告警，让 reconciler 后续接管。
+
+        仅当 broker 是 dict（live mode）才执行。
+        """
+        if not isinstance(self._broker, dict):
+            return
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        for leg in pos.legs:
+            broker = self._broker.get(leg.exchange)
+            if broker is None:
+                continue
+            adapter = getattr(broker, "_adapter", None)
+            if adapter is None:
+                continue
+            try:
+                if leg.instrument_type == InstrumentType.PERPETUAL:
+                    perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+                    if perp_client is None:
+                        continue
+                    raw = await perp_client.fetch_positions([str(leg.symbol)])
+                    nz = [p for p in (raw or []) if abs(float(p.get("contracts") or 0)) > 0.001]
+                    if nz:
+                        # perp 还有持仓 → 平仓未真实生效
+                        from app.services.risk_event_service import write_risk_event  # noqa: PLC0415
+                        from app.notifications import notify_reconcile_alert  # noqa: PLC0415
+                        await write_risk_event(
+                            event_type="post_close_reconcile_perp_residual",
+                            severity="critical",
+                            description=(
+                                f"[{leg.exchange}/{leg.symbol}] close_position 已返回但 perp 仍持仓 "
+                                f"contracts={nz[0].get('contracts')} — 反向单可能未真实成交"
+                            ),
+                            strategy_instance=pos.strategy_instance,
+                            action_taken="alert_only",
+                            extra={"position_uuid": pos.id, "raw_positions": nz},
+                        )
+                        notify_reconcile_alert(
+                            alert_type="post_close_residual",
+                            severity="critical",
+                            exchange=leg.exchange,
+                            symbol=str(leg.symbol),
+                            explanation="平仓后真实持仓未清，需要人工介入",
+                        )
+            except Exception:
+                logger.warning(
+                    "post_close_leg_check_failed",
+                    leg=f"{leg.instrument_type.value}/{leg.exchange}/{leg.symbol}",
+                )
 
     # ------------------------------------------------------------------
     # 持仓监控

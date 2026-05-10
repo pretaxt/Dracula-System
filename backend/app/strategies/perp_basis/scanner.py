@@ -43,6 +43,7 @@ class PerpBasisOpportunity:
     long_next_funding_ms: int
     short_next_funding_ms: int
     timestamp: datetime               # opportunity computed time
+    health_tier: str = "safe"         # #02-3: safe / risky / dirty
 
     @property
     def diff_apr_pct(self) -> Decimal:
@@ -64,6 +65,7 @@ class PerpBasisOpportunity:
             "long_next_funding_ms": self.long_next_funding_ms,
             "short_next_funding_ms": self.short_next_funding_ms,
             "timestamp_ms": int(self.timestamp.timestamp() * 1000),
+            "health_tier": self.health_tier,
         }
 
 
@@ -75,6 +77,11 @@ class PerpBasisScannerConfig:
     min_diff_apr_pct: Decimal = Decimal("3.0")
     max_opportunities: int = 50
     max_funding_age_seconds: float = 180.0   # MarketDataHub funding 最大允许 staleness
+    # #02-5: 单边 APR 绝对值过滤（防 TIA HTX -99% 类脏数据）
+    max_abs_apr_pct: Decimal = Decimal("500.0")
+    # #02-3: 健康度分级阈值
+    health_safe_diff_apr_max: Decimal = Decimal("200.0")
+    health_risky_diff_apr_max: Decimal = Decimal("500.0")
 
 
 class PerpBasisScanner:
@@ -104,6 +111,12 @@ class PerpBasisScanner:
                     continue
                 a_fr: FundingRate = rate_a.rate
                 b_fr: FundingRate = rate_b.rate
+                a_apr_pct = a_fr.apr * _HUNDRED
+                b_apr_pct = b_fr.apr * _HUNDRED
+                # #02-5: 单边 APR 绝对值过滤
+                if (abs(a_apr_pct) > self._config.max_abs_apr_pct
+                        or abs(b_apr_pct) > self._config.max_abs_apr_pct):
+                    continue
                 # 选 short = 高 funding 端，long = 低 funding 端
                 if a_fr.apr >= b_fr.apr:
                     short_ex, short_fr = ex_a, a_fr
@@ -114,6 +127,13 @@ class PerpBasisScanner:
                 diff_apr = (short_fr.apr - long_fr.apr) * _HUNDRED
                 if diff_apr < self._config.min_diff_apr_pct:
                     continue
+                # #02-3: 健康度分级
+                if diff_apr <= self._config.health_safe_diff_apr_max:
+                    health = "safe"
+                elif diff_apr <= self._config.health_risky_diff_apr_max:
+                    health = "risky"
+                else:
+                    health = "dirty"
                 opps.append(PerpBasisOpportunity(
                     symbol=sym_str,
                     long_exchange=long_ex,
@@ -127,6 +147,7 @@ class PerpBasisScanner:
                     long_next_funding_ms=long_fr.next_funding_time or 0,
                     short_next_funding_ms=short_fr.next_funding_time or 0,
                     timestamp=now,
+                    health_tier=health,
                 ))
         opps.sort(key=lambda o: o.diff_apr_pct, reverse=True)
         if self._config.max_opportunities and len(opps) > self._config.max_opportunities:

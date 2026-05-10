@@ -511,6 +511,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("market_data_hub_init_failed")
     app.state.market_data_hub = market_data_hub
 
+    # --- BalanceReconcilerService (实时余额 + 持仓对账，单腿告警) ---
+    balance_reconciler = None
+    balance_reconciler_task = None
+    if adapters:
+        try:
+            from app.services.balance_reconciler import BalanceReconcilerService  # noqa: PLC0415
+            # 仅传已鉴权的 adapter（fetch_balance/positions 需要 API key）
+            authed_adapters = {
+                n: a for n, a in adapters.items()
+                if getattr(a, "_api_key", "")
+            }
+            if authed_adapters:
+                balance_reconciler = BalanceReconcilerService(
+                    adapters=authed_adapters,
+                    refresh_interval_s=30.0,
+                    market_data_hub=market_data_hub,  # R7: mark-to-market PnL
+                )
+                balance_reconciler_task = asyncio.create_task(
+                    balance_reconciler.run_forever(), name="balance_reconciler",
+                )
+                logger.info("balance_reconciler_initialized",
+                            authed_exchanges=list(authed_adapters.keys()))
+            else:
+                logger.warning("balance_reconciler_no_authed_adapters")
+        except Exception:
+            logger.exception("balance_reconciler_init_failed")
+    app.state.balance_reconciler = balance_reconciler
+    app.state.balance_reconciler_task = balance_reconciler_task
+
     # --- #02 perp-basis runner (Phase A: monitor only) ---
     perp_basis_runner = None
     perp_basis_task = None
@@ -537,6 +566,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # 仅保留 adapter 已就绪的交易所
             _pb_exchanges = [e for e in _pb_exchanges if e in adapters]
             _pb_pairs = all_pairs(_pb_exchanges)
+            _pb_risk = _pb_yaml.get("risk", {}) or {}
             pb_scanner = PerpBasisScanner(
                 hub=market_data_hub,
                 config=PerpBasisScannerConfig(
@@ -545,6 +575,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     min_diff_apr_pct=_Decimal(str(_pb_entry.get("min_diff_apr_pct", "3.0"))),
                     max_opportunities=int(_pb_entry.get("max_opportunities", 50)),
                     max_funding_age_seconds=float(_pb_scan.get("max_funding_age_seconds", 180)),
+                    max_abs_apr_pct=_Decimal(str(_pb_risk.get("max_abs_apr_pct", "500.0"))),
+                    health_safe_diff_apr_max=_Decimal(str(
+                        _pb_risk.get("health_safe_diff_apr_max", "200.0")
+                    )),
+                    health_risky_diff_apr_max=_Decimal(str(
+                        _pb_risk.get("health_risky_diff_apr_max", "500.0")
+                    )),
                 ),
             )
             perp_basis_runner = PerpBasisRunner(
@@ -564,6 +601,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("perp_basis_runner_init_failed")
     app.state.perp_basis_runner = perp_basis_runner
     app.state.perp_basis_task = perp_basis_task
+
+    # --- #02 perp-basis Phase C paper trading (off by default) ---
+    perp_basis_paper = None
+    perp_basis_paper_task = None
+    if perp_basis_runner is not None and adapters:
+        try:
+            _pb_paper_enabled = bool(
+                (_pb_yaml.get("paper_trading", {}) or {}).get("enabled", False)
+            )
+            if _pb_paper_enabled:
+                from app.strategies.perp_basis.session_factory import (  # noqa: PLC0415
+                    build_perp_basis_paper_session,
+                )
+                perp_basis_paper = build_perp_basis_paper_session(
+                    cfg=_pb_yaml, adapters=adapters, scanner=pb_scanner,
+                    market_data_hub=market_data_hub,
+                )
+                if perp_basis_paper is not None:
+                    await perp_basis_paper.restore()
+                    perp_basis_paper_task = asyncio.create_task(
+                        perp_basis_paper.run_forever(), name="perp_basis_paper",
+                    )
+                    logger.info("perp_basis_paper_initialized")
+        except Exception:
+            logger.exception("perp_basis_paper_init_failed")
+    app.state.perp_basis_paper = perp_basis_paper
+    app.state.perp_basis_paper_task = perp_basis_paper_task
 
     # --- Telegram 双向命令 bot（C 项）---
     telegram_bot = None

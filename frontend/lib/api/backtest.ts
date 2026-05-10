@@ -101,3 +101,85 @@ export async function runSpotPerpBacktest(
   )
   return data
 }
+
+
+// ---------------------------------------------------------------------------
+// #02 perp_basis 跨所 funding 差套利回测 + sweep
+// ---------------------------------------------------------------------------
+
+export interface PerpBasisBacktestRequest {
+  symbols: string[]
+  days: number
+  initial_capital_usd?: number
+  notional_per_position?: number
+  max_concurrent?: number
+  min_diff_apr_pct?: number
+  max_hold_hours?: number
+  min_hold_hours?: number
+  exit_diff_apr_pct?: number
+  max_abs_apr_pct?: number
+  fee_rate?: number
+  slippage_pct?: number
+}
+
+export interface PerpBasisTradeRow {
+  symbol: string
+  long_exchange: string
+  short_exchange: string
+  open_at: string
+  closed_at: string | null
+  held_hours: string
+  entry_diff_apr_pct: string
+  funding_collected: string
+  fees_paid: string
+  realized_pnl: string
+  exit_reason: string | null
+}
+
+export interface PerpBasisBacktestResult {
+  summary: Record<string, unknown>
+  trades: PerpBasisTradeRow[]
+  equity_curve: { ts: number; equity: number }[]
+}
+
+export async function runPerpBasisBacktest(
+  req: PerpBasisBacktestRequest,
+): Promise<PerpBasisBacktestResult> {
+  const { data } = await apiClient.post<PerpBasisBacktestResult>(
+    '/backtest/perp-basis', req,
+  )
+  return data
+}
+
+// Sweep: 多阈值对比表
+export interface PerpBasisSweepRequest {
+  symbols: string[]
+  days: number
+  min_diff_apr_pct_list: number[]
+  min_hold_hours?: number
+  notional_per_position?: number
+}
+
+export interface PerpBasisSweepRow {
+  min_diff_apr_pct: number
+  num_trades: number
+  win_rate_pct: string
+  total_funding_usd: string
+  total_fees_usd: string
+  total_pnl_usd: string
+  total_pnl_pct: string
+}
+
+export interface PerpBasisSweepResponse {
+  snapshots_loaded: number
+  rows: PerpBasisSweepRow[]
+}
+
+export async function runPerpBasisSweep(
+  req: PerpBasisSweepRequest,
+): Promise<PerpBasisSweepResponse> {
+  const { data } = await apiClient.post<PerpBasisSweepResponse>(
+    '/backtest/perp-basis/sweep', req,
+  )
+  return data
+}

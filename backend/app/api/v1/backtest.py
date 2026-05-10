@@ -298,3 +298,185 @@ async def run_spot_perp_backtest(
             for p in result.equity_curve
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# #02 perp_basis (跨所 funding 差) backtest endpoint
+# ---------------------------------------------------------------------------
+
+
+class PerpBasisBacktestRequest(BaseModel):
+    symbols: list[str] = Field(
+        default_factory=lambda: ["BTC/USDT", "ETH/USDT", "FIL/USDT"],
+        description="交易对列表 'BASE/QUOTE'",
+    )
+    days: int = Field(default=14, ge=3, le=60)
+    initial_capital_usd: float = Field(default=1_000.0, ge=100)
+    notional_per_position: float = Field(default=50.0, ge=10)
+    max_concurrent: int = Field(default=3, ge=1, le=10)
+    min_diff_apr_pct: float = Field(default=30.0, ge=5.0)
+    max_hold_hours: float = Field(default=48.0, ge=4.0)
+    min_hold_hours: float = Field(default=4.0, ge=0.0)
+    exit_diff_apr_pct: float = Field(default=5.0, ge=0.0)
+    max_abs_apr_pct: float = Field(default=500.0, ge=50.0)
+    fee_rate: float = Field(default=0.0004, ge=0)
+    slippage_pct: float = Field(default=0.05, ge=0)
+
+
+class PerpBasisTradeRow(BaseModel):
+    symbol: str
+    long_exchange: str
+    short_exchange: str
+    open_at: str
+    closed_at: str | None
+    held_hours: str
+    entry_diff_apr_pct: str
+    funding_collected: str
+    fees_paid: str
+    realized_pnl: str
+    exit_reason: str | None
+
+
+class PerpBasisEquityRow(BaseModel):
+    ts: int
+    equity: float
+
+
+class PerpBasisBacktestResponse(BaseModel):
+    summary: dict[str, Any]
+    trades: list[PerpBasisTradeRow]
+    equity_curve: list[PerpBasisEquityRow]
+
+
+@router.post("/perp-basis", response_model=PerpBasisBacktestResponse)
+async def run_perp_basis_backtest_endpoint(
+    body: PerpBasisBacktestRequest, request: Request,
+) -> PerpBasisBacktestResponse:
+    from app.backtest.perp_basis_engine import run_perp_basis_backtest
+    from app.backtest.perp_basis_loader import load_funding_history
+    from app.backtest.perp_basis_models import PerpBasisBacktestConfig
+
+    adapters = getattr(request.app.state, "adapters", None)
+    if not adapters:
+        raise HTTPException(status_code=503, detail="adapters not available")
+
+    snaps = await load_funding_history(adapters, body.symbols, days=body.days)
+    if not snaps:
+        raise HTTPException(status_code=404, detail="所选时间范围内无 funding 数据")
+
+    cfg = PerpBasisBacktestConfig(
+        initial_capital_usd=Decimal(str(body.initial_capital_usd)),
+        notional_per_position=Decimal(str(body.notional_per_position)),
+        max_concurrent=body.max_concurrent,
+        min_diff_apr_pct=Decimal(str(body.min_diff_apr_pct)),
+        max_hold_hours=Decimal(str(body.max_hold_hours)),
+        min_hold_hours=Decimal(str(body.min_hold_hours)),
+        exit_diff_apr_pct=Decimal(str(body.exit_diff_apr_pct)),
+        max_abs_apr_pct=Decimal(str(body.max_abs_apr_pct)),
+        fee_rate=Decimal(str(body.fee_rate)),
+        slippage_pct=Decimal(str(body.slippage_pct)),
+    )
+    result = run_perp_basis_backtest(snaps, cfg)
+
+    return PerpBasisBacktestResponse(
+        summary={
+            "num_trades": result.num_trades,
+            "win_rate_pct": str(result.win_rate_pct),
+            "total_pnl_usd": str(round(result.total_pnl_usd, 4)),
+            "total_pnl_pct": str(round(result.total_pnl_pct, 4)),
+            "total_funding_usd": str(round(result.total_funding_collected, 4)),
+            "total_fees_usd": str(round(result.total_fees_paid, 4)),
+            "final_equity_usd": str(round(result.final_equity_usd, 2)),
+            "snapshots_loaded": len(snaps),
+        },
+        trades=[
+            PerpBasisTradeRow(
+                symbol=t.symbol,
+                long_exchange=t.long_exchange,
+                short_exchange=t.short_exchange,
+                open_at=t.open_at.isoformat(),
+                closed_at=t.closed_at.isoformat() if t.closed_at else None,
+                held_hours=str(round(t.held_hours, 3)),
+                entry_diff_apr_pct=str(round(t.entry_diff_apr_pct, 2)),
+                funding_collected=str(round(t.funding_collected, 4)),
+                fees_paid=str(round(t.fees_paid, 4)),
+                realized_pnl=str(round(t.realized_pnl, 4)),
+                exit_reason=t.exit_reason,
+            )
+            for t in result.trades
+        ],
+        equity_curve=[
+            PerpBasisEquityRow(ts=int(p.timestamp.timestamp() * 1000),
+                               equity=float(p.equity_usd))
+            for p in result.equity_curve
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# #02 perp_basis sweep — 多阈值对比，找最优 min_diff_apr_pct
+# ---------------------------------------------------------------------------
+
+
+class PerpBasisSweepRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "FIL/USDT"])
+    days: int = Field(default=14, ge=3, le=60)
+    min_diff_apr_pct_list: list[float] = Field(
+        default_factory=lambda: [15, 30, 50, 75, 100, 150],
+    )
+    min_hold_hours: float = Field(default=4.0, ge=0)
+    notional_per_position: float = Field(default=50.0, ge=10)
+
+
+class PerpBasisSweepRow(BaseModel):
+    min_diff_apr_pct: float
+    num_trades: int
+    win_rate_pct: str
+    total_funding_usd: str
+    total_fees_usd: str
+    total_pnl_usd: str
+    total_pnl_pct: str
+
+
+class PerpBasisSweepResponse(BaseModel):
+    snapshots_loaded: int
+    rows: list[PerpBasisSweepRow]
+
+
+@router.post("/perp-basis/sweep", response_model=PerpBasisSweepResponse)
+async def run_perp_basis_sweep(
+    body: PerpBasisSweepRequest, request: Request,
+) -> PerpBasisSweepResponse:
+    """对多个 min_diff_apr_pct 阈值并行回测，输出对比表。"""
+    from app.backtest.perp_basis_engine import run_perp_basis_backtest
+    from app.backtest.perp_basis_loader import load_funding_history
+    from app.backtest.perp_basis_models import PerpBasisBacktestConfig
+
+    adapters = getattr(request.app.state, "adapters", None)
+    if not adapters:
+        raise HTTPException(status_code=503, detail="adapters not available")
+
+    # 数据只拉一次复用
+    snaps = await load_funding_history(adapters, body.symbols, days=body.days)
+    if not snaps:
+        raise HTTPException(status_code=404, detail="所选时间范围内无 funding 数据")
+
+    rows: list[PerpBasisSweepRow] = []
+    for thr in body.min_diff_apr_pct_list:
+        cfg = PerpBasisBacktestConfig(
+            initial_capital_usd=Decimal("1000"),
+            notional_per_position=Decimal(str(body.notional_per_position)),
+            min_diff_apr_pct=Decimal(str(thr)),
+            min_hold_hours=Decimal(str(body.min_hold_hours)),
+        )
+        result = run_perp_basis_backtest(snaps, cfg)
+        rows.append(PerpBasisSweepRow(
+            min_diff_apr_pct=thr,
+            num_trades=result.num_trades,
+            win_rate_pct=str(result.win_rate_pct),
+            total_funding_usd=str(round(result.total_funding_collected, 2)),
+            total_fees_usd=str(round(result.total_fees_paid, 2)),
+            total_pnl_usd=str(round(result.total_pnl_usd, 2)),
+            total_pnl_pct=str(round(result.total_pnl_pct, 2)),
+        ))
+    return PerpBasisSweepResponse(snapshots_loaded=len(snaps), rows=rows)
