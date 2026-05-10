@@ -15,7 +15,10 @@ import {
   getPerpBasisConfig,
   patchPerpBasisConfig,
   getPerpBasisExchangeBalance,
+  getSpotPerpConfig,
+  patchSpotPerpConfig,
 } from '@/lib/api/strategies'
+import { getRiskLimits, patchRiskLimits } from '@/lib/api/risk'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
@@ -83,6 +86,20 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     refetchInterval: 30_000,
     enabled: params.id === 'perp-basis',
   })
+  // #01 funding-rate 配置（用 risk_limits 全局 API，但 UI 入口聚集到 #01 详情页）
+  const { data: frRiskCfg } = useQuery({
+    queryKey: ['risk-limits-for-fr'],
+    queryFn: getRiskLimits,
+    refetchInterval: 30_000,
+    enabled: params.id === 'funding-rate',
+  })
+  // #04 spot-perp 配置
+  const { data: spotPerpCfg } = useQuery({
+    queryKey: ['spot-perp-cfg'],
+    queryFn: getSpotPerpConfig,
+    refetchInterval: 30_000,
+    enabled: params.id === 'spot-perp',
+  })
   const queryClient = useQueryClient()
   const patchPbCfg = useMutation({
     mutationFn: patchPerpBasisConfig,
@@ -91,7 +108,22 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
       queryClient.invalidateQueries({ queryKey: ['perp-basis-opps'] })
     },
   })
-  // PATCH 表单 local state（仅 perp-basis 用）
+  const patchFrCfg = useMutation({
+    mutationFn: (patch: Record<string, unknown>) => patchRiskLimits(patch, false),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['risk-limits-for-fr'] })
+      queryClient.invalidateQueries({ queryKey: ['risk'] })
+      queryClient.invalidateQueries({ queryKey: ['funding-rate-opps'] })
+    },
+  })
+  const patchSpCfg = useMutation({
+    mutationFn: patchSpotPerpConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['spot-perp-cfg'] })
+      queryClient.invalidateQueries({ queryKey: ['spot-perp-opps'] })
+    },
+  })
+  // PATCH 表单 local state
   const [pbForm, setPbForm] = useState({
     min_diff_apr_pct: '',
     exit_diff_apr_pct: '',
@@ -99,6 +131,25 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     notional_per_position: '',
     max_hold_hours: '',
     min_hold_hours: '',
+  })
+  const [frForm, setFrForm] = useState({
+    min_apr_pct: '',
+    scan_threshold_apr_pct: '',
+    max_positions: '',
+    max_total_notional_usd: '',
+    stop_loss_pct: '',
+    max_hold_hours: '',
+  })
+  const [spForm, setSpForm] = useState({
+    entry_pct: '',
+    entry_pct_premium: '',
+    entry_pct_discount: '',
+    exit_pct: '',
+    max_hold_hours: '',
+    max_concurrent: '',
+    notional_per_position: '',
+    stop_basis_widening_pct: '',
+    scan_threshold_pct: '',
   })
   const { data: summary } = useQuery({
     queryKey: ['dashboard'],
@@ -1018,6 +1069,205 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               }}
             >
               {patchPbCfg.isPending ? t('应用中...') : t('应用 PATCH')}
+            </button>
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)',
+            }}>
+              {t('仅填空字段会被更新，下一 tick (≤30s) 生效')}
+            </span>
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #01 funding-rate: 配置表单（risk_limits PATCH，#01 强相关字段集中入口）*/}
+      {strategy.id === 'funding-rate' && frRiskCfg && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('参数配置（PATCH 热更新）')}
+            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            right={
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 12,
+                color: live?.paper_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+              }}>
+                {live?.paper_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+              </span>
+            }
+          />
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 16,
+          }}>
+            {([
+              { key: 'min_apr_pct',            label: '最低入场 APR (%)',     cur: String(frRiskCfg.min_apr_pct) },
+              { key: 'scan_threshold_apr_pct', label: '候选展示门槛 APR (%)', cur: String(frRiskCfg.scan_threshold_apr_pct ?? '0') },
+              { key: 'max_positions',          label: '同时持仓上限',         cur: String(frRiskCfg.max_positions) },
+              { key: 'max_total_notional_usd', label: '总名义上限 (USD)',     cur: String(frRiskCfg.max_total_notional_usd) },
+              { key: 'stop_loss_pct',          label: '止损 (%)',             cur: String(frRiskCfg.stop_loss_pct) },
+              { key: 'max_hold_hours',         label: '最长持仓 (h)',         cur: String(frRiskCfg.max_hold_hours) },
+            ] as const).map((f) => (
+              <div key={f.key}>
+                <label style={{
+                  display: 'block', fontFamily: 'var(--font-mono)', fontSize: 11,
+                  color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.08em', marginBottom: 6,
+                }}>
+                  {t(f.label)}
+                </label>
+                <input
+                  type="text"
+                  placeholder={f.cur}
+                  value={(frForm as Record<string, string>)[f.key]}
+                  onChange={(e) => setFrForm({ ...frForm, [f.key]: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 10px',
+                    background: 'var(--bg-deepest)', border: '1px solid var(--border-default)',
+                    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 14,
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4,
+                  color: 'var(--text-muted)',
+                }}>
+                  {t('当前')}: {f.cur}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: 20, paddingTop: 16,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          }}>
+            <button
+              onClick={() => {
+                const patch: Record<string, unknown> = {}
+                if (frForm.min_apr_pct) patch.min_apr_pct = frForm.min_apr_pct
+                if (frForm.scan_threshold_apr_pct) patch.scan_threshold_apr_pct = frForm.scan_threshold_apr_pct
+                if (frForm.max_positions) patch.max_positions = parseInt(frForm.max_positions, 10)
+                if (frForm.max_total_notional_usd) patch.max_total_notional_usd = frForm.max_total_notional_usd
+                if (frForm.stop_loss_pct) patch.stop_loss_pct = frForm.stop_loss_pct
+                if (frForm.max_hold_hours) patch.max_hold_hours = frForm.max_hold_hours
+                if (Object.keys(patch).length === 0) return
+                patchFrCfg.mutate(patch)
+                setFrForm({
+                  min_apr_pct: '', scan_threshold_apr_pct: '', max_positions: '',
+                  max_total_notional_usd: '', stop_loss_pct: '', max_hold_hours: '',
+                })
+              }}
+              disabled={patchFrCfg.isPending}
+              style={{
+                padding: '8px 18px', background: 'var(--accent-blood)', color: 'white',
+                border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                opacity: patchFrCfg.isPending ? 0.5 : 1, letterSpacing: '0.06em',
+              }}
+            >
+              {patchFrCfg.isPending ? t('应用中...') : t('应用 PATCH')}
+            </button>
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)',
+            }}>
+              {t('仅填空字段会被更新，下一 tick (≤30s) 生效')}
+            </span>
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #04 spot-perp: 配置表单 */}
+      {strategy.id === 'spot-perp' && spotPerpCfg && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('参数配置（PATCH 热更新）')}
+            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            right={
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 12,
+                color: spotPerpCfg.session_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+              }}>
+                {spotPerpCfg.session_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+              </span>
+            }
+          />
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 16,
+          }}>
+            {([
+              { key: 'entry_pct',               label: '入场基差通用阈值 (%)',  cur: spotPerpCfg.entry_pct },
+              { key: 'entry_pct_premium',       label: 'PREMIUM 阈值 (%)',     cur: spotPerpCfg.entry_pct_premium },
+              { key: 'entry_pct_discount',      label: 'DISCOUNT 阈值 (%)',    cur: spotPerpCfg.entry_pct_discount },
+              { key: 'exit_pct',                label: '收敛平仓阈值 (%)',     cur: spotPerpCfg.exit_pct },
+              { key: 'max_hold_hours',          label: '最长持仓 (h)',          cur: spotPerpCfg.max_hold_hours },
+              { key: 'max_concurrent',          label: '同时持仓上限',          cur: String(spotPerpCfg.max_concurrent) },
+              { key: 'notional_per_position',   label: '单笔名义 (USD)',        cur: spotPerpCfg.notional_per_position },
+              { key: 'stop_basis_widening_pct', label: '基差扩大止损 (%)',     cur: spotPerpCfg.stop_basis_widening_pct },
+              { key: 'scan_threshold_pct',      label: '候选展示门槛 (%)',     cur: spotPerpCfg.scan_threshold_pct },
+            ] as const).map((f) => (
+              <div key={f.key}>
+                <label style={{
+                  display: 'block', fontFamily: 'var(--font-mono)', fontSize: 11,
+                  color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.08em', marginBottom: 6,
+                }}>
+                  {t(f.label)}
+                </label>
+                <input
+                  type="text"
+                  placeholder={f.cur}
+                  value={(spForm as Record<string, string>)[f.key]}
+                  onChange={(e) => setSpForm({ ...spForm, [f.key]: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 10px',
+                    background: 'var(--bg-deepest)', border: '1px solid var(--border-default)',
+                    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 14,
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 4,
+                  color: 'var(--text-muted)',
+                }}>
+                  {t('当前')}: {f.cur}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: 20, paddingTop: 16,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          }}>
+            <button
+              onClick={() => {
+                const patch: Record<string, unknown> = {}
+                if (spForm.entry_pct) patch.entry_pct = spForm.entry_pct
+                if (spForm.entry_pct_premium) patch.entry_pct_premium = spForm.entry_pct_premium
+                if (spForm.entry_pct_discount) patch.entry_pct_discount = spForm.entry_pct_discount
+                if (spForm.exit_pct) patch.exit_pct = spForm.exit_pct
+                if (spForm.max_hold_hours) patch.max_hold_hours = spForm.max_hold_hours
+                if (spForm.max_concurrent) patch.max_concurrent = parseInt(spForm.max_concurrent, 10)
+                if (spForm.notional_per_position) patch.notional_per_position = spForm.notional_per_position
+                if (spForm.stop_basis_widening_pct) patch.stop_basis_widening_pct = spForm.stop_basis_widening_pct
+                if (spForm.scan_threshold_pct) patch.scan_threshold_pct = spForm.scan_threshold_pct
+                if (Object.keys(patch).length === 0) return
+                patchSpCfg.mutate(patch)
+                setSpForm({
+                  entry_pct: '', entry_pct_premium: '', entry_pct_discount: '',
+                  exit_pct: '', max_hold_hours: '', max_concurrent: '',
+                  notional_per_position: '', stop_basis_widening_pct: '', scan_threshold_pct: '',
+                })
+              }}
+              disabled={patchSpCfg.isPending}
+              style={{
+                padding: '8px 18px', background: 'var(--accent-blood)', color: 'white',
+                border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                opacity: patchSpCfg.isPending ? 0.5 : 1, letterSpacing: '0.06em',
+              }}
+            >
+              {patchSpCfg.isPending ? t('应用中...') : t('应用 PATCH')}
             </button>
             <span style={{
               fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)',
