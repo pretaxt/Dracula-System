@@ -655,6 +655,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     adapters=authed_adapters,
                     refresh_interval_s=30.0,
                     market_data_hub=market_data_hub,  # R7: mark-to-market PnL
+                    all_adapters_ref=adapters,  # 持有 dict 引用 → hot_reload 自动同步
                 )
                 balance_reconciler_task = asyncio.create_task(
                     balance_reconciler.run_forever(), name="balance_reconciler",

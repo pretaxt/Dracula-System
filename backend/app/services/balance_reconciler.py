@@ -167,8 +167,13 @@ class BalanceReconcilerService:
         adapters: dict[str, Any],
         refresh_interval_s: float = _DEFAULT_INTERVAL_SECONDS,
         market_data_hub: Any = None,
+        all_adapters_ref: dict[str, Any] | None = None,
     ) -> None:
+        # 启动时的 authed snapshot（fallback）
         self._adapters = adapters
+        # 持有 app.state.adapters 引用 — 每次 tick 重算 authed 子集
+        # 这样 hot_reload 后新增的 CEX 会自动被纳入对账
+        self._all_adapters_ref = all_adapters_ref
         self._interval = refresh_interval_s
         self._hub = market_data_hub  # R7: 拉 ticker 用，可选
         self._running = False
@@ -186,6 +191,19 @@ class BalanceReconcilerService:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    def _get_authed_adapters(self) -> dict[str, Any]:
+        """每次 tick 现算 authed 子集（hot_reload 后立即生效）。
+
+        优先用 app.state.adapters 引用过滤；fallback 到启动时 snapshot。
+        """
+        ref = self._all_adapters_ref
+        if ref is not None:
+            current = {n: a for n, a in ref.items() if getattr(a, "_api_key", "")}
+            # 同时刷新 self._adapters 让其他方法（_check_leg / _try_auto_unwind 等）一致
+            self._adapters = current
+            return current
+        return self._adapters
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -241,8 +259,10 @@ class BalanceReconcilerService:
                 logger.warning("reconcile_fetch_balance_failed", exchange=name, error=str(e))
                 return name, None
 
+        # 每次 tick 现算 authed adapters（hot_reload 后新增的 CEX 自动纳入）
+        active = self._get_authed_adapters()
         results = await asyncio.gather(
-            *(fetch_one(n, a) for n, a in self._adapters.items()),
+            *(fetch_one(n, a) for n, a in active.items()),
             return_exceptions=False,
         )
         for name, data in results:
@@ -331,8 +351,9 @@ class BalanceReconcilerService:
                 logger.warning("reconcile_fetch_positions_failed", exchange=name, error=str(e))
                 return name, None
 
+        active = self._get_authed_adapters()
         results = await asyncio.gather(
-            *(fetch_one(n, a) for n, a in self._adapters.items()),
+            *(fetch_one(n, a) for n, a in active.items()),
             return_exceptions=False,
         )
         for name, data in results:

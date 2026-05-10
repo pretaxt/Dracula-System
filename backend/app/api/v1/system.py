@@ -195,6 +195,21 @@ async def _hot_reload_exchange(app_state, exchange: str) -> None:
     adapters[exchange] = new_adapter  # 同 dict 引用 → scanner / runner 自动看到新值
     logger.info("exchange_adapter_hot_reloaded", exchange=exchange)
 
+    # 同步更新 BalanceReconcilerService 的 adapter dict + 清 balance_cache
+    # （否则 reconciler 持有 lifespan 启动时的 authed 子集，hot_reload 后看不到新 CEX）
+    reconciler = getattr(app_state, "balance_reconciler", None)
+    if reconciler is not None and getattr(new_adapter, "_api_key", ""):
+        try:
+            reconciler._adapters[exchange] = new_adapter
+            # 清掉该 exchange 的 cache，下次 tick 重新 fetch
+            if hasattr(reconciler, "balance_cache"):
+                reconciler.balance_cache.pop(exchange, None)
+            if hasattr(reconciler, "position_cache"):
+                reconciler.position_cache.pop(exchange, None)
+            logger.info("reconciler_adapter_synced", exchange=exchange)
+        except Exception:
+            logger.exception("reconciler_adapter_sync_failed", exchange=exchange)
+
     # 同步重建 LiveBroker（仅 live_mode 且 broker 是 dict 时）
     paper_session = getattr(app_state, "paper_session", None)
     if paper_session is None:
