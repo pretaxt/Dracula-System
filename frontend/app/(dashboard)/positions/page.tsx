@@ -142,7 +142,12 @@ export default function PositionsPage() {
               return (
                 <tr key={p.uuid} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                   <td style={{ padding: '10px 12px' }}>
-                    <Badge tone="active">{p.strategy_instance.includes('funding') ? t('资金费率') : p.strategy_instance}</Badge>
+                    <Badge tone="active">{
+                      p.strategy_instance.includes('funding') ? t('资金费率')
+                      : p.strategy_instance.includes('perp_basis') ? t('跨所基差')
+                      : p.strategy_instance.includes('spot_perp') ? t('期现套利')
+                      : p.strategy_instance
+                    }</Badge>
                   </td>
                   <td style={{ padding: '10px 12px' }}>
                     <Link

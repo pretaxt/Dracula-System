@@ -169,3 +169,86 @@ def apply_to_strategy_cfg(cfg: dict, overrides: dict[str, Any]) -> dict:
     if "scan_threshold_apr_pct" in overrides:
         cfg.setdefault("entry", {})["scan_threshold_apr_pct"] = overrides["scan_threshold_apr_pct"]
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# perp-basis 子节（#02）
+# ---------------------------------------------------------------------------
+
+
+_PERP_BASIS_ALLOWED = {
+    "min_diff_apr_pct", "exit_diff_apr_pct",
+    "max_hold_hours", "min_hold_hours",
+    "max_concurrent", "notional_per_position",
+}
+
+
+def save_perp_basis_overrides(patch: dict[str, Any]) -> None:
+    """合并 perp-basis patch 到 overrides.json 的 ``perp_basis`` 子节。"""
+    filtered = {
+        k: v for k, v in patch.items()
+        if k in _PERP_BASIS_ALLOWED and v is not None
+    }
+    if not filtered:
+        return
+
+    existing = load_overrides()
+    pb_existing = existing.get("perp_basis") or {}
+    if not isinstance(pb_existing, dict):
+        pb_existing = {}
+    merged_pb = {**pb_existing, **filtered}
+    merged = {**existing, "perp_basis": merged_pb}
+
+    try:
+        _OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".overrides_", suffix=".json.tmp",
+            dir=str(_OVERRIDES_PATH.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(merged, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _OVERRIDES_PATH)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        logger.info(
+            "perp_basis_overrides_saved",
+            path=str(_OVERRIDES_PATH),
+            keys=list(filtered.keys()),
+        )
+    except Exception as exc:
+        logger.exception("perp_basis_overrides_save_failed", error=str(exc))
+
+
+def apply_to_perp_basis_cfg(cfg: dict, overrides: dict[str, Any]) -> dict:
+    """把 perp_basis overrides 合并到 yaml 加载结果 dict。
+
+    映射规则：
+      min_diff_apr_pct       → cfg['entry']['min_diff_apr_pct']
+      exit_diff_apr_pct      → cfg['exit']['exit_diff_apr_pct']
+      max_hold_hours         → cfg['exit']['max_hold_hours']
+      min_hold_hours         → cfg['exit']['min_hold_hours']
+      max_concurrent         → cfg['position']['max_concurrent']
+      notional_per_position  → cfg['position']['notional_per_position']
+    """
+    if not overrides:
+        return cfg
+    if "min_diff_apr_pct" in overrides:
+        cfg.setdefault("entry", {})["min_diff_apr_pct"] = overrides["min_diff_apr_pct"]
+    if "exit_diff_apr_pct" in overrides:
+        cfg.setdefault("exit", {})["exit_diff_apr_pct"] = overrides["exit_diff_apr_pct"]
+    if "max_hold_hours" in overrides:
+        cfg.setdefault("exit", {})["max_hold_hours"] = overrides["max_hold_hours"]
+    if "min_hold_hours" in overrides:
+        cfg.setdefault("exit", {})["min_hold_hours"] = overrides["min_hold_hours"]
+    if "max_concurrent" in overrides:
+        cfg.setdefault("position", {})["max_concurrent"] = int(overrides["max_concurrent"])
+    if "notional_per_position" in overrides:
+        cfg.setdefault("position", {})["notional_per_position"] = overrides["notional_per_position"]
+    return cfg

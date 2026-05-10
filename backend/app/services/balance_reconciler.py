@@ -276,6 +276,8 @@ class BalanceReconcilerService:
             self._alerted.discard(k)
 
         new_alerts: list[ReconcileAlert] = []
+        # 缓存 alert → (rec, leg_idx) 用于 #02 跨所单腿失踪后定位幸存腿
+        alert_to_pos: dict[int, tuple[Any, int]] = {}
 
         for rec in open_records:
             legs = legs_by_pos.get(rec.id, [])
@@ -283,6 +285,7 @@ class BalanceReconcilerService:
                 alert = self._check_leg(rec, leg, idx)
                 if alert is not None:
                     new_alerts.append(alert)
+                    alert_to_pos[id(alert)] = (rec, idx)
 
         # 残留持仓检测：真实交易所 perp 持仓 vs DB OPEN
         new_alerts.extend(self._detect_orphan_positions(open_records, legs_by_pos))
@@ -303,11 +306,25 @@ class BalanceReconcilerService:
                     symbol=alert.symbol,
                     detail=alert.detail,
                 )
-                # R2.b: orphan_position 尝试自动平（仅 perp 残留），结果记录到 action_taken
+                # 自动修复路径：
+                # - orphan_position（DB CLOSED 但有真实持仓）→ 反向平掉
+                # - single_leg_exposure on #02 perp_basis（一腿被强平）→ 平另一腿
                 action_taken = None
                 if alert.type == "orphan_position":
                     unwound = await self._try_auto_unwind_orphan(alert)
                     action_taken = "auto_unwound" if unwound else "alert_only_above_cap"
+                elif alert.type == "single_leg_exposure":
+                    rec_idx = alert_to_pos.get(id(alert))
+                    if rec_idx is not None:
+                        rec, lost_idx = rec_idx
+                        if (rec.strategy_instance or "") == "perp_basis_main":
+                            closed = await self._try_auto_close_remaining_leg(
+                                rec, lost_idx, legs_by_pos.get(rec.id, []),
+                            )
+                            action_taken = (
+                                "auto_closed_remaining_leg" if closed
+                                else "alert_only_remaining_leg_skip"
+                            )
                 await self._persist_alert(alert, action_taken=action_taken)
                 self._notify_alert(alert)
 
@@ -617,6 +634,107 @@ class BalanceReconcilerService:
             logger.error(
                 "auto_unwind_failed",
                 symbol=alert.symbol,
+                error=str(e),
+            )
+            return False
+
+    async def _try_auto_close_remaining_leg(
+        self,
+        rec: Any,
+        lost_idx: int,
+        legs: list[Any],
+    ) -> bool:
+        """#02 perp_basis 一腿被强平 → 自动平掉幸存腿恢复 delta-neutral。
+
+        触发条件：
+          - alert.type == "single_leg_exposure"
+          - rec.strategy_instance == "perp_basis_main"
+
+        保护：
+          - 单笔幸存腿名义价值 ≤ _AUTO_UNWIND_MAX_NOTIONAL_USD ($200)
+          - 同 (position_uuid) 仅尝试一次（防失败循环 reuse _auto_unwind_attempted set）
+
+        Returns
+        -------
+        bool: 是否成功平掉幸存腿
+        """
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+
+        attempt_key = (f"close_remaining:{rec.uuid}", 0)
+        if attempt_key in _auto_unwind_attempted:
+            return False
+        _auto_unwind_attempted.add(attempt_key)
+
+        # 找幸存腿（idx != lost_idx 的 perp leg）
+        surviving = [
+            (i, l) for i, l in enumerate(legs)
+            if i != lost_idx and l.instrument_type == InstrumentType.PERPETUAL.value
+        ]
+        if not surviving:
+            return False
+        s_idx, s_leg = surviving[0]
+
+        adapter = self._adapters.get(s_leg.exchange)
+        if adapter is None:
+            logger.warning(
+                "auto_close_remaining_no_adapter",
+                position_uuid=rec.uuid,
+                exchange=s_leg.exchange,
+            )
+            return False
+
+        # 估算名义价值
+        try:
+            entry = Decimal(str(s_leg.entry_price or 0))
+            size = Decimal(str(s_leg.size))
+            notional = abs(entry * size)
+        except Exception:
+            notional = Decimal("0")
+        if notional > _AUTO_UNWIND_MAX_NOTIONAL_USD:
+            logger.warning(
+                "auto_close_remaining_skip_above_cap",
+                position_uuid=rec.uuid,
+                symbol=s_leg.symbol,
+                notional=str(notional),
+                cap=str(_AUTO_UNWIND_MAX_NOTIONAL_USD),
+            )
+            return False
+
+        try:
+            perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+            if perp_client is None:
+                return False
+            # 平仓方向：long 腿 → sell，short 腿 → buy
+            leg_side = (s_leg.side or "").lower()
+            close_side = "sell" if leg_side == "long" else "buy"
+            params: dict[str, Any] = {}
+            if s_leg.exchange == "binance":
+                # binance hedge mode 需要 positionSide
+                params["positionSide"] = "LONG" if leg_side == "long" else "SHORT"
+            if close_side == "sell":
+                r = await perp_client.create_market_sell_order(
+                    s_leg.symbol, float(size), params=params,
+                )
+            else:
+                r = await perp_client.create_market_buy_order(
+                    s_leg.symbol, float(size), params=params,
+                )
+            logger.warning(
+                "auto_close_remaining_leg_executed",
+                position_uuid=rec.uuid,
+                symbol=s_leg.symbol,
+                exchange=s_leg.exchange,
+                side=close_side,
+                size=str(size),
+                notional=str(notional),
+                order_id=(r or {}).get("id") if isinstance(r, dict) else None,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "auto_close_remaining_failed",
+                position_uuid=rec.uuid,
+                symbol=s_leg.symbol,
                 error=str(e),
             )
             return False

@@ -559,6 +559,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except FileNotFoundError:
                 logger.warning("perp_basis_yaml_not_found", path=_pb_cfg_path)
                 _pb_yaml = {}
+            # 应用 runtime overrides（PATCH /perp-basis/config 持久化的热更新）
+            try:
+                from app.services.runtime_overrides import (  # noqa: PLC0415
+                    load_overrides as _load_pb_overrides,
+                    apply_to_perp_basis_cfg,
+                )
+                _pb_overrides = (_load_pb_overrides() or {}).get("perp_basis") or {}
+                if isinstance(_pb_overrides, dict) and _pb_overrides:
+                    _pb_yaml = apply_to_perp_basis_cfg(_pb_yaml, _pb_overrides)
+                    logger.info(
+                        "perp_basis_overrides_applied", keys=list(_pb_overrides.keys()),
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception("perp_basis_overrides_apply_failed")
             _pb_entry = _pb_yaml.get("entry", {})
             _pb_pos = _pb_yaml.get("position", {})
             _pb_scan = _pb_yaml.get("scanning", {})

@@ -73,7 +73,7 @@ def _format_position_line(pos) -> str:
 
 
 async def _positions_handler(app_state) -> str:
-    """合并展示 #01（资金费率，PositionManager 内存）+ #04（期现，DB PositionRecord）。"""
+    """合并展示 #01（资金费率）+ #02（跨所基差）+ #04（期现）。"""
     fr_lines: list[str] = []
     fr_count = 0
     sess = getattr(app_state, "paper_session", None)
@@ -95,7 +95,15 @@ async def _positions_handler(app_state) -> str:
         logger.exception("positions_handler_spot_perp_read_failed")
         sp_lines.append("  ⚠️ 期现持仓读取失败")
 
-    total = fr_count + sp_count
+    pb_lines: list[str] = []
+    pb_count = 0
+    try:
+        pb_count, pb_lines = await _read_perp_basis_open_rows()
+    except Exception:
+        logger.exception("positions_handler_perp_basis_read_failed")
+        pb_lines.append("  ⚠️ 跨所基差持仓读取失败")
+
+    total = fr_count + sp_count + pb_count
     if total == 0:
         return "📭 当前无持仓。"
 
@@ -103,6 +111,9 @@ async def _positions_handler(app_state) -> str:
     if fr_count:
         out.append(f"<b>—— #01 资金费率 ({fr_count}) ——</b>")
         out.extend(fr_lines)
+    if pb_count:
+        out.append(f"<b>—— #02 跨所基差 ({pb_count}) ——</b>")
+        out.extend(pb_lines)
     if sp_count:
         out.append(f"<b>—— #04 期现套利 ({sp_count}) ——</b>")
         out.extend(sp_lines)
@@ -136,18 +147,74 @@ async def _read_spot_perp_open_rows() -> tuple[int, list[str]]:
         return len(rows), out
 
 
+async def _read_perp_basis_open_rows() -> tuple[int, list[str]]:
+    """从 DB 读 perp_basis_main 的 open 行并格式化为跨所双腿可读行。"""
+    from app.core.database import get_session  # noqa: PLC0415
+    from app.models.position import PositionRecord, PositionLegRecord  # noqa: PLC0415
+    from sqlalchemy import select  # noqa: PLC0415
+
+    out: list[str] = []
+    async with get_session() as session:
+        stmt = (
+            select(PositionRecord)
+            .where(PositionRecord.strategy_instance == "perp_basis_main")
+            .where(PositionRecord.status == "open")
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        for r in rows:
+            # 读 legs 拼出 long/short 交易所
+            leg_stmt = select(PositionLegRecord).where(
+                PositionLegRecord.position_id == r.id,
+            )
+            legs = (await session.execute(leg_stmt)).scalars().all()
+            long_ex = next((l.exchange for l in legs if (l.side or "").lower() == "long"), "?")
+            short_ex = next((l.exchange for l in legs if (l.side or "").lower() == "short"), "?")
+            sym = str(r.symbol)
+            entry_diff = r.target_apr_pct or Decimal("0")
+            upnl = r.unrealized_pnl or Decimal("0")
+            funding = r.funding_received or Decimal("0")
+            notional = r.notional_usd or Decimal("0")
+            out.append(
+                f"  <code>{sym:<10}</code> "
+                f"{long_ex}/{short_ex} ${notional:.0f}N "
+                f"diff{entry_diff:+.1f}%  uPnL{upnl:+.2f}  fund{funding:+.2f}"
+            )
+        return len(rows), out
+
+
+def _is_perp_basis_running(app_state) -> bool:
+    sess = getattr(app_state, "perp_basis_paper", None)
+    task = getattr(app_state, "perp_basis_paper_task", None)
+    return sess is not None and task is not None and not task.done()
+
+
 async def _pause_handler(app_state) -> str:
-    if not _is_paper_running(app_state):
+    """暂停所有纸交易 session（#01 + #02 + #04）。"""
+    actions: list[str] = []
+    if _is_paper_running(app_state):
+        if await strategy_control.stop_paper(app_state):
+            actions.append("#01")
+    if _is_perp_basis_running(app_state):
+        if await strategy_control.stop_perp_basis_paper(app_state):
+            actions.append("#02")
+    # #04 spot_perp 暂停由独立 toggle 控制（live_mode 不通过 stop session 体现）
+    if not actions:
         return "ℹ️ 策略已处于暂停状态。"
-    ok = await strategy_control.stop_paper(app_state)
-    return "⏸ 已暂停纸交易 session。" if ok else "ℹ️ 当前没有正在运行的 session。"
+    return f"⏸ 已暂停 {' + '.join(actions)} 纸交易 session。"
 
 
 async def _resume_handler(app_state) -> str:
-    if _is_paper_running(app_state):
-        return "ℹ️ 策略已在运行中。"
-    ok = await strategy_control.start_paper(app_state)
-    return "▶️ 已恢复纸交易 session。" if ok else "ℹ️ session 已在运行（幂等）。"
+    """恢复所有可恢复的纸交易 session。"""
+    actions: list[str] = []
+    if not _is_paper_running(app_state):
+        if await strategy_control.start_paper(app_state):
+            actions.append("#01")
+    if not _is_perp_basis_running(app_state):
+        if await strategy_control.start_perp_basis_paper(app_state):
+            actions.append("#02")
+    if not actions:
+        return "ℹ️ 策略已在运行中（幂等）。"
+    return f"▶️ 已恢复 {' + '.join(actions)} 纸交易 session。"
 
 
 async def _status_handler(app_state) -> str:
@@ -176,6 +243,14 @@ async def _status_handler(app_state) -> str:
     except Exception:
         sp_count = -1
 
+    # #02 perp-basis session 状态（跨所 perp+perp）
+    pb_running = _is_perp_basis_running(app_state)
+    pb_count = 0
+    try:
+        pb_count, _ = await _read_perp_basis_open_rows()
+    except Exception:
+        pb_count = -1
+
     adapters = getattr(app_state, "adapters", {}) or {}
     per_ex: dict[str, Decimal] = {}
     if adapters:
@@ -188,12 +263,15 @@ async def _status_handler(app_state) -> str:
     mode_emoji = "🔴 LIVE" if mode == "live" else "🟡 PAPER"
     fr_emoji = "✅ 运行中" if fr_running else "⏸ 已暂停"
     sp_emoji = "✅ 运行中" if sp_running else "⏸ 已暂停"
+    pb_emoji = "✅ 运行中" if pb_running else "⏸ 已暂停"
 
     lines = [
         "<b>📡 Dracula 状态</b>",
         f"  模式:    {mode_emoji}",
         f"  #01 策略:  {fr_emoji}",
         f"  #01 持仓:  {fr_count if fr_count >= 0 else '—'}",
+        f"  #02 策略:  {pb_emoji}",
+        f"  #02 持仓:  {pb_count if pb_count >= 0 else '—'}",
         f"  #04 策略:  {sp_emoji}",
         f"  #04 持仓:  {sp_count if sp_count >= 0 else '—'}",
         f"  总资产:    {_fmt_usd(total)}",

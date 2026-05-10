@@ -64,6 +64,7 @@ export default function PositionDetailPage({ params }: { params: { uuid: string 
   })
 
   const isSpotPerp = data?.strategy_instance.includes('spot_perp')
+  const isPerpBasis = data?.strategy_instance.includes('perp_basis')
   const { data: spOpps } = useQuery({
     queryKey: ['spot-perp-opps'],
     queryFn: getSpotPerpOpportunities,
@@ -183,6 +184,11 @@ export default function PositionDetailPage({ params }: { params: { uuid: string 
                   {direction === 'premium' ? '升水 PREMIUM' : '贴水 DISCOUNT'}
                 </Badge>
               )}
+              {isPerpBasis && meta?.long_ex && meta?.short_ex && (
+                <Badge tone="active">
+                  LONG {String(meta.long_ex).toUpperCase()} / SHORT {String(meta.short_ex).toUpperCase()}
+                </Badge>
+              )}
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>
                 持仓 {parseFloat(p.days_held).toFixed(2)} 天
               </span>
@@ -219,41 +225,58 @@ export default function PositionDetailPage({ params }: { params: { uuid: string 
           </div>
         </CardElevated>
 
-        {/* 基差状态 */}
-        <CardElevated style={{ padding: 20 }}>
-          <SectionHeader title="基差状态" subtitle="BASIS STATE" />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-            <Row
-              label="入场基差"
-              value={entryBasis != null ? `${entryBasis >= 0 ? '+' : ''}${entryBasis.toFixed(4)}%` : '—'}
-            />
-            <Row
-              label={isOpen ? '当前基差' : '平仓基差'}
-              value={
-                currentBasis != null
-                  ? `${currentBasis >= 0 ? '+' : ''}${currentBasis.toFixed(4)}%`
-                  : '—'
-              }
-            />
-            <Row
-              label="已捕获 (绝对值差)"
-              value={captured != null ? `${captured >= 0 ? '+' : ''}${captured.toFixed(4)}%` : '—'}
-              tone={captured != null && captured >= 0 ? 'pos' : 'neg'}
-            />
-            {meta?.entry_spot_px && (
-              <Row label="入场现货价" value={meta.entry_spot_px} />
-            )}
-            {meta?.entry_perp_px && (
-              <Row label="入场永续价" value={meta.entry_perp_px} />
-            )}
-            {meta?.close_spot_px && (
-              <Row label="平仓现货价" value={meta.close_spot_px} />
-            )}
-            {meta?.close_perp_px && (
-              <Row label="平仓永续价" value={meta.close_perp_px} />
-            )}
-          </div>
-        </CardElevated>
+        {/* 基差状态（spot_perp）/ Diff APR 状态（perp_basis） */}
+        {isPerpBasis ? (
+          <CardElevated style={{ padding: 20 }}>
+            <SectionHeader title="Diff APR 状态" subtitle="CROSS-EXCHANGE FUNDING DIFF" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+              <Row
+                label="入场 diff APR"
+                value={entryBasis != null ? `${entryBasis >= 0 ? '+' : ''}${entryBasis.toFixed(2)}%` : '—'}
+              />
+              {meta?.long_ex && <Row label="LONG 端" value={String(meta.long_ex).toUpperCase()} />}
+              {meta?.short_ex && <Row label="SHORT 端" value={String(meta.short_ex).toUpperCase()} />}
+              {p.exit_reason && (
+                <Row label="退出原因" value={p.exit_reason} />
+              )}
+            </div>
+          </CardElevated>
+        ) : (
+          <CardElevated style={{ padding: 20 }}>
+            <SectionHeader title="基差状态" subtitle="BASIS STATE" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+              <Row
+                label="入场基差"
+                value={entryBasis != null ? `${entryBasis >= 0 ? '+' : ''}${entryBasis.toFixed(4)}%` : '—'}
+              />
+              <Row
+                label={isOpen ? '当前基差' : '平仓基差'}
+                value={
+                  currentBasis != null
+                    ? `${currentBasis >= 0 ? '+' : ''}${currentBasis.toFixed(4)}%`
+                    : '—'
+                }
+              />
+              <Row
+                label="已捕获 (绝对值差)"
+                value={captured != null ? `${captured >= 0 ? '+' : ''}${captured.toFixed(4)}%` : '—'}
+                tone={captured != null && captured >= 0 ? 'pos' : 'neg'}
+              />
+              {meta?.entry_spot_px && (
+                <Row label="入场现货价" value={meta.entry_spot_px} />
+              )}
+              {meta?.entry_perp_px && (
+                <Row label="入场永续价" value={meta.entry_perp_px} />
+              )}
+              {meta?.close_spot_px && (
+                <Row label="平仓现货价" value={meta.close_spot_px} />
+              )}
+              {meta?.close_perp_px && (
+                <Row label="平仓永续价" value={meta.close_perp_px} />
+              )}
+            </div>
+          </CardElevated>
+        )}
 
         {/* 元数据 / 腿信息 */}
         {meta && (

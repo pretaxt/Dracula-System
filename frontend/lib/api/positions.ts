@@ -13,6 +13,11 @@ export type PositionMeta = {
   funding_received?: string
   borrow_interest?: string
   client_id?: string
+  // #02 perp_basis 跨所双腿元数据
+  long_ex?: string
+  short_ex?: string
+  entry_diff_apr_pct?: string
+  strategy?: string
   [k: string]: string | undefined
 }
 

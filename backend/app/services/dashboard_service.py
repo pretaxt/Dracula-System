@@ -204,6 +204,10 @@ async def get_summary(
             "p95_ms": round(metrics.scan_p95_ms("spot_perp"), 1),
             "count_5m": metrics.scan_count_5m("spot_perp"),
         },
+        "perp_basis": {
+            "p95_ms": round(metrics.scan_p95_ms("perp_basis"), 1),
+            "count_5m": metrics.scan_count_5m("perp_basis"),
+        },
     }
     ccxt_health = {}
     for ex in ("binance", "okx", "binanceusdm", "bitget", "bybit", "htx"):
@@ -332,6 +336,7 @@ async def _max_symbol_concentration(session: AsyncSession) -> Decimal:
 _STRATEGY_LABEL_MAP: dict[str, str] = {
     "funding_rate_main": "资金费率套利",
     "spot_perp_main": "期现套利",
+    "perp_basis_main": "跨所基差套利",
 }
 
 

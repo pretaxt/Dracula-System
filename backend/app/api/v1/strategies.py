@@ -219,6 +219,10 @@ async def perp_basis_exchange_balance(
 async def perp_basis_config(_: CurrentUser, request: Request) -> PerpBasisConfigResponse:
     """读取 #02 perp_basis 当前生效配置（yaml + override 合并）。"""
     import yaml as _yaml  # noqa: PLC0415
+    from app.services.runtime_overrides import (  # noqa: PLC0415
+        load_overrides as _load_overrides,
+        apply_to_perp_basis_cfg as _apply_pb,
+    )
     state = request.app.state
     runner = getattr(state, "perp_basis_runner", None)
     cfg: dict = {}
@@ -227,6 +231,9 @@ async def perp_basis_config(_: CurrentUser, request: Request) -> PerpBasisConfig
             cfg = _yaml.safe_load(f) or {}
     except Exception:
         cfg = {}
+    pb_overrides = (_load_overrides() or {}).get("perp_basis") or {}
+    if isinstance(pb_overrides, dict) and pb_overrides:
+        cfg = _apply_pb(cfg, pb_overrides)
     entry = cfg.get("entry", {}) or {}
     pos_cfg = cfg.get("position", {}) or {}
     exit_cfg = cfg.get("exit", {}) or {}
@@ -286,6 +293,14 @@ async def perp_basis_config_patch(
             paper._min_hold = _Decimal(str(patch["min_hold_hours"]))
         if "exit_diff_apr_pct" in patch:
             paper._exit_diff = _Decimal(str(patch["exit_diff_apr_pct"]))
+
+    # 3. 持久化到 overrides.json（重启不丢）
+    try:
+        from app.services.runtime_overrides import save_perp_basis_overrides  # noqa: PLC0415
+        save_perp_basis_overrides(patch)
+    except Exception:  # noqa: BLE001
+        # 持久化失败不影响内存生效
+        pass
 
     return await perp_basis_config(_, request)
 

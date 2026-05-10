@@ -95,6 +95,7 @@ export const dict: Record<string, string> = {
   '期权波动率套利': 'Options Vol Arb',
   '基差套利': 'Basis Arb',
   '资金费率': 'Funding',
+  '跨所基差': 'Cross-Ex Basis',
   '网格策略': 'Grid Strategy',
   '做市策略': 'Market Making',
   '趋势跟踪': 'Trend Following',
