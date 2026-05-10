@@ -256,9 +256,15 @@ class BalanceReconcilerService:
                 # 1. spot fetch_balance
                 bal = await adapter.fetch_balance()
                 out = _balance_to_dict(bal)
-                # 2. binance 特有：cross-margin + USDM perp USDT 也加入
+                # 2. binance 特有：cross-margin + USDM perp USDT + SPOT 非 USDT 折算
                 if name == "binance":
                     extra = await self._fetch_binance_extra_wallets(adapter)
+                    if extra:
+                        out.update(extra)
+                # 3. HTX UTA：CCXT fetch_balance 在 swap client 报 4002，
+                #    用 v3/unified_account_info 拿 USDT margin_balance
+                elif name == "htx":
+                    extra = await self._fetch_htx_extra_wallets(adapter)
                     if extra:
                         out.update(extra)
                 return name, out
@@ -376,6 +382,44 @@ class BalanceReconcilerService:
                     }
         except Exception as e:
             logger.debug("reconcile_funding_wallet_fetch_failed", error=str(e))
+        return out
+
+    async def _fetch_htx_extra_wallets(self, adapter: Any) -> dict:
+        """HTX UTA 模式：CCXT 默认 fetch_balance(swap) 报 4002，
+        改用 /linear-swap-api/v3/unified_account_info 拿 swap USDT 余额。
+
+        cache 增加 USDT_HTX_SWAP entry，dashboard 累加。
+        """
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        out: dict = {}
+        try:
+            perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+            if perp_client is None or not hasattr(
+                perp_client, "contract_private_get_linear_swap_api_v3_unified_account_info",
+            ):
+                return out
+            r = await perp_client.contract_private_get_linear_swap_api_v3_unified_account_info()
+            data = r.get("data") if isinstance(r, dict) else None
+            if not isinstance(data, list):
+                return out
+            for a in data:
+                if a.get("margin_asset") != "USDT":
+                    continue
+                try:
+                    mb = Decimal(str(a.get("margin_balance") or 0))
+                    frozen = Decimal(str(a.get("margin_frozen") or 0))
+                    withdraw = Decimal(str(a.get("withdraw_available") or 0))
+                except Exception:
+                    continue
+                if mb > 0:
+                    out["USDT_HTX_SWAP"] = {
+                        "free": str(withdraw if withdraw > 0 else mb - frozen),
+                        "total": str(mb),
+                        "used": str(frozen),
+                    }
+                break
+        except Exception as e:
+            logger.debug("reconcile_htx_uta_fetch_failed", error=str(e))
         return out
 
     async def _refresh_positions(self) -> None:

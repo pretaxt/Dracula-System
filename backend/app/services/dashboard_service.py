@@ -131,11 +131,12 @@ async def get_summary(
             cache = reconciler.balance_cache
             total = Decimal("0")
             per_ex_local: dict[str, Decimal] = {}
-            # binance 含 USDT (spot) + USDT_MARGIN (cross-margin) + USDT_PERP (USDM)
-            # + USDT_FUNDING (Pay) + USDT_SPOT_OTHERS（SPOT 钱包非 USDT 资产折算）
-            # OKX UTA 共享 trading account，仅 USDT
+            # binance: USDT (spot) + USDT_MARGIN + USDT_PERP + USDT_FUNDING + USDT_SPOT_OTHERS
+            # htx: USDT (spot) + USDT_HTX_SWAP（UTA swap 钱包，CCXT 默认拿不到走专用 API）
+            # OKX UTA / bybit / bitget UTA 共享 trading account，仅 USDT
             usdt_keys = (
-                "USDT", "USDT_MARGIN", "USDT_PERP", "USDT_FUNDING", "USDT_SPOT_OTHERS",
+                "USDT", "USDT_MARGIN", "USDT_PERP", "USDT_FUNDING",
+                "USDT_SPOT_OTHERS", "USDT_HTX_SWAP",
             )
             for ex_name, assets in cache.items():
                 ex_total = Decimal("0")

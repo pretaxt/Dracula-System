@@ -192,10 +192,15 @@ async def perp_basis_exchange_balance(
         return {"data": [], "ready": False}
     out: list[dict] = []
     for ex_name, assets in (rec.balance_cache or {}).items():
-        # binance 用 USDT_PERP；其他 exchange 用 USDT 总（OKX UTA 共享）
-        perp_usdt = (assets or {}).get("USDT_PERP")
-        if perp_usdt is None:
-            perp_usdt = (assets or {}).get("USDT", {})
+        # 各 CEX perp 钱包对应的 cache key 不同：
+        # - binance: USDT_PERP（USDM 永续钱包）
+        # - htx: USDT_HTX_SWAP（UTA swap 钱包，CCXT 默认拿不到）
+        # - okx UTA / bybit UTA / bitget UTA: 共享 USDT
+        perp_usdt = (
+            (assets or {}).get("USDT_PERP")
+            or (assets or {}).get("USDT_HTX_SWAP")
+            or (assets or {}).get("USDT", {})
+        )
         if not perp_usdt:
             continue
         try:
