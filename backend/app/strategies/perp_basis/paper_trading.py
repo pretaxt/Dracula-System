@@ -195,9 +195,15 @@ class PerpBasisPaperSession:
 
         symbol = opp.symbol
         sym_obj = self._parse_symbol(symbol)
-        long_price = Decimal(str(opp.long_perp_price)) if opp.long_perp_price else Decimal("0")
-        short_price = Decimal(str(opp.short_perp_price)) if opp.short_perp_price else Decimal("0")
+        # PerpBasisOpportunity 不直接含 perp price（避免重复 fetch），从 hub 实时取
+        long_price = self._get_perp_price(long_ex, sym_obj)
+        short_price = self._get_perp_price(short_ex, sym_obj)
         if long_price <= 0 or short_price <= 0:
+            logger.debug(
+                "perp_basis_open_no_price",
+                symbol=symbol, long_ex=long_ex, short_ex=short_ex,
+                long_price=str(long_price), short_price=str(short_price),
+            )
             return
         mid = (long_price + short_price) / Decimal("2")
         size = self._notional / mid
@@ -636,3 +642,20 @@ class PerpBasisPaperSession:
             base, _, quote = s.partition("/")
             return Symbol(base, quote)
         return Symbol(s, "USDT")
+
+    def _get_perp_price(self, exchange: str, symbol: Symbol) -> Decimal:
+        """从 MarketDataHub 实时取 perp 标记价。fail-safe: 取不到返回 0。"""
+        if self._hub is None:
+            return Decimal("0")
+        try:
+            ticker_entry = self._hub.get_ticker(
+                exchange, InstrumentType.PERPETUAL, symbol,
+            )
+            if ticker_entry is None:
+                return Decimal("0")
+            px = getattr(ticker_entry, "last", None) or getattr(ticker_entry, "bid", None)
+            if px is None:
+                return Decimal("0")
+            return Decimal(str(px))
+        except Exception:
+            return Decimal("0")
