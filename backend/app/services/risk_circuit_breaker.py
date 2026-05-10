@@ -109,7 +109,9 @@ async def check_circuit_breakers(
         return decision
 
     # B3-3 binance USDM 真实 MMR 监控（fail-closed 兜底）
-    mmr_decision = await _check_binance_mmr(adapters, strategy_label)
+    # P1-2 重构后 adapters 不再在本 scope，重新从 state 取
+    state_adapters = getattr(state, "adapters", None) if state else None
+    mmr_decision = await _check_binance_mmr(state_adapters, strategy_label)
     return mmr_decision if mmr_decision is not None else decision
 
 

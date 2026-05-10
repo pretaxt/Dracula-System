@@ -766,7 +766,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 from app.strategies.perp_basis.session_factory import (  # noqa: PLC0415
                     build_perp_basis_paper_session,
                 )
-                _pb_live_mode = settings.trading_mode.lower() == "live"
+                # #02 paper trading 必须强制 paper 模式：跨所策略需 ≥2 broker，
+                # 但只有 binance 配了 trading key → live=True 时只 1 broker 永远开不了仓
+                # paper 模式下用 PaperBroker wrapper，所有 5 家 adapter 都参与
+                _pb_yaml_pt = _pb_yaml.get("paper_trading", {}) or {}
+                _pb_live_mode = bool(_pb_yaml_pt.get("live_mode", False))
                 perp_basis_paper = build_perp_basis_paper_session(
                     cfg=_pb_yaml, adapters=adapters, scanner=pb_scanner,
                     market_data_hub=market_data_hub,
