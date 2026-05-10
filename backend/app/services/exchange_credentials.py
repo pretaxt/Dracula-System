@@ -88,6 +88,17 @@ def save_credentials(exchange: str, patch: dict[str, str]) -> dict[str, Any]:
             json.dump(existing, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
+        # 写入前先 .bak 备份当前文件（防 mount 重置 / 误删 / 写失败回滚）
+        if _CREDENTIALS_PATH.exists():
+            try:
+                bak_path = _CREDENTIALS_PATH.with_suffix(".json.bak")
+                # 用 copy 而非 rename，原文件继续存在；不影响 atomic replace
+                import shutil  # noqa: PLC0415
+                shutil.copy2(str(_CREDENTIALS_PATH), str(bak_path))
+                os.chmod(bak_path, stat.S_IRUSR | stat.S_IWUSR)
+            except Exception:
+                # 备份失败不阻塞主写
+                logger.debug("credentials_backup_failed")
         os.replace(tmp_path, _CREDENTIALS_PATH)
         # chmod 600 — 仅文件所有者可读
         os.chmod(_CREDENTIALS_PATH, stat.S_IRUSR | stat.S_IWUSR)

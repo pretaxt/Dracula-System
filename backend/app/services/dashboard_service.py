@@ -159,6 +159,13 @@ async def get_summary(
         }
     total_equity = real_balance if real_balance is not None else _initial_capital() + net_pnl
 
+    # 余额同步诊断字段：列出"无 trading 凭据"的 CEX，UI 提示用户去 设置 → 交易所凭据
+    missing_credentials_exchanges: list[str] = []
+    if adapters:
+        for ex_name, ad in adapters.items():
+            if not getattr(ad, "_api_key", "") or "":
+                missing_credentials_exchanges.append(ex_name)
+
     today_pnl = Decimal(str(today_pnl_raw))
     daily_drawdown_pct = (
         (today_pnl / total_equity * Decimal("100"))
@@ -248,6 +255,7 @@ async def get_summary(
         "pnl_series_30d": series,
         "strategy_performance": strategy_perf,
         "equity_by_exchange": per_exchange_equity,
+        "missing_credentials_exchanges": missing_credentials_exchanges,
         "sharpe_30d": str(round(sharpe_30d, 3)),
         "max_exchange_concentration_pct": str(round(max_ex_conc, 2)),
         "max_symbol_concentration_pct": str(round(max_sym_conc, 2)),

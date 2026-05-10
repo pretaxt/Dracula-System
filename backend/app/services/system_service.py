@@ -48,7 +48,13 @@ async def get_exchange_health(adapters: dict[str, Any] | None) -> list[dict]:
 
 async def _probe_one(name: str, adapter: Any) -> dict:
     if adapter is None:
-        return {"name": name, "status": "unconfigured", "ping_ms": None}
+        return {
+            "name": name, "status": "unconfigured", "ping_ms": None,
+            "has_credentials": False,
+        }
+
+    # 区分 "市场公开数据可用" vs "鉴权 API 可用"
+    has_credentials = bool(getattr(adapter, "_api_key", "") or "")
 
     client = None
     clients = getattr(adapter, "_clients", None)
@@ -65,14 +71,20 @@ async def _probe_one(name: str, adapter: Any) -> dict:
             client = next(iter(clients.values()), None) if clients else None
 
     if client is None or not hasattr(client, "fetch_time"):
-        return {"name": name, "status": "unconfigured", "ping_ms": None}
+        return {
+            "name": name, "status": "unconfigured", "ping_ms": None,
+            "has_credentials": has_credentials,
+        }
 
     start = time.perf_counter()
     try:
         await asyncio.wait_for(client.fetch_time(), timeout=_PING_TIMEOUT_S)
     except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
         logger.debug("exchange_ping_failed", exchange=name, error=str(e))
-        return {"name": name, "status": "critical", "ping_ms": None}
+        return {
+            "name": name, "status": "critical", "ping_ms": None,
+            "has_credentials": has_credentials,
+        }
 
     ping_ms = int((time.perf_counter() - start) * 1000)
     if ping_ms <= _PING_OK_MS:
@@ -81,7 +93,13 @@ async def _probe_one(name: str, adapter: Any) -> dict:
         status = "warn"
     else:
         status = "critical"
-    return {"name": name, "status": status, "ping_ms": ping_ms}
+    # 行情可达但无 trading 凭据 → 余额同步不可用，UI 应提示用户配凭据
+    if not has_credentials and status == "active":
+        status = "no_credentials"
+    return {
+        "name": name, "status": status, "ping_ms": ping_ms,
+        "has_credentials": has_credentials,
+    }
 
 
 # ---------------------------------------------------------------------------

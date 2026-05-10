@@ -6,8 +6,9 @@ from pydantic import BaseModel
 
 class ExchangeHealthOut(BaseModel):
     name: str
-    status: str  # active | warn | critical | unconfigured
+    status: str  # active | warn | critical | unconfigured | no_credentials
     ping_ms: int | None = None
+    has_credentials: bool = False  # 是否配了 trading API key（决定能否 fetch_balance/下单）
 
 
 class ExchangeHealthResponse(BaseModel):
