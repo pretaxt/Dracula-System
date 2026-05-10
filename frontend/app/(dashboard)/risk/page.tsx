@@ -476,7 +476,181 @@ export default function RiskPage() {
           )}
         </CardElevated>
 
-        {/* 卡 2 · 策略 #04 期现套利 */}
+        {/* 卡 2 · 策略 #02 跨所 funding 差套利 */}
+        {pbCfg && (
+        <CardElevated style={{ padding: 20 }} className="animate-in">
+          <SectionHeader
+            title="#02 跨所 funding 差套利 · 风控参数"
+            subtitle="PERP-BASIS ARB · LIVE TUNABLE"
+            right={
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Badge tone={pbCfg.paper_running ? 'active' : 'warn'}>
+                  {pbCfg.paper_running ? 'PAPER' : 'IDLE'}
+                </Badge>
+                {pbEditing ? (
+                  <button
+                    type="button"
+                    onClick={pbCancelEdit}
+                    title="取消"
+                    style={{ background: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', padding: 4, cursor: 'pointer', display: 'inline-flex' }}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={pbStartEdit}
+                    title="编辑参数"
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)', background: 'transparent', border: '1px solid rgba(227,64,88,0.3)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Pencil size={10} />
+                    <span>调整</span>
+                  </button>
+                )}
+              </div>
+            }
+          />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginTop: 12 }}>
+            {/* 入场 funding 差 APR 阈值 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="long/short 两端年化 funding rate 差 ≥ 该值才入场">
+                  入场 diff APR
+                </span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="1" min="0"
+                    value={pbDraft.min_diff_apr_pct ?? pbCfg.min_diff_apr_pct}
+                    onChange={(e) => setPbDraft({ ...pbDraft, min_diff_apr_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.min_diff_apr_pct).toFixed(0)}%</span>
+                )}
+              </div>
+              <ProgressBar pct={Math.min(100, (Number(pbCfg.min_diff_apr_pct) / 100) * 100)} tone="success" />
+            </div>
+
+            {/* 出场 diff 衰减阈值 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="diff APR 衰减到 ≤ 该值即平仓（费差消失）">
+                  退出 diff APR
+                </span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="0.5" min="0"
+                    value={pbDraft.exit_diff_apr_pct ?? pbCfg.exit_diff_apr_pct}
+                    onChange={(e) => setPbDraft({ ...pbDraft, exit_diff_apr_pct: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.exit_diff_apr_pct).toFixed(1)}%</span>
+                )}
+              </div>
+              <ProgressBar pct={Math.min(100, (Number(pbCfg.exit_diff_apr_pct) / 10) * 100)} tone="warn" />
+            </div>
+
+            {/* 最大持仓时长 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>最大持仓 (h)</span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="1" min="1"
+                    value={pbDraft.max_hold_hours ?? pbCfg.max_hold_hours}
+                    onChange={(e) => setPbDraft({ ...pbDraft, max_hold_hours: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.max_hold_hours).toFixed(0)}h</span>
+                )}
+              </div>
+            </div>
+
+            {/* 最少持仓时长 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="最少持仓时长，覆盖至少 1 个 funding 结算（防小波动早退）">
+                  最少持仓 (h)
+                </span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="1" min="0"
+                    value={pbDraft.min_hold_hours ?? pbCfg.min_hold_hours}
+                    onChange={(e) => setPbDraft({ ...pbDraft, min_hold_hours: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.min_hold_hours).toFixed(0)}h</span>
+                )}
+              </div>
+            </div>
+
+            {/* 同时持仓数 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>同时持仓上限</span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="1" min="1" max="10"
+                    value={pbDraft.max_concurrent ?? pbCfg.max_concurrent}
+                    onChange={(e) => setPbDraft({ ...pbDraft, max_concurrent: parseInt(e.target.value, 10) })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{pbCfg.max_concurrent}</span>
+                )}
+              </div>
+            </div>
+
+            {/* 单笔规模 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }} title="每笔仓位双腿 notional（每端各 N USDT，总 2N margin）">
+                  单笔 notional ($)
+                </span>
+                {pbEditing ? (
+                  <input
+                    type="number" step="10" min="0"
+                    value={pbDraft.notional_per_position ?? pbCfg.notional_per_position}
+                    onChange={(e) => setPbDraft({ ...pbDraft, notional_per_position: e.target.value })}
+                    style={{ ...inputStyle, width: 80 }}
+                  />
+                ) : (
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>${Number(pbCfg.notional_per_position).toFixed(0)}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            <span>
+              候选币 {pbCfg.candidate_symbols.length} · 扫描间隔 {pbCfg.scan_interval_seconds}s · enabled={String(pbCfg.enabled)}
+            </span>
+            {pbEditing && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                {pbPatchMut.isError && (
+                  <span style={{ color: 'var(--accent-blood)' }}>
+                    {String((pbPatchMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败')}
+                  </span>
+                )}
+                <Button onClick={pbSaveEdit} disabled={pbPatchMut.isPending}>
+                  {pbPatchMut.isPending ? '保存中…' : '保存'}
+                </Button>
+              </div>
+            )}
+            {!pbEditing && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-emerald)' }}>
+                <CheckCircle2 size={12} /> 修改即时持久化（重启不丢）
+              </span>
+            )}
+          </div>
+        </CardElevated>
+        )}
+
+        {/* 卡 3 · 策略 #04 期现套利 */}
         {spCfg && (
         <CardElevated style={{ padding: 20 }} className="animate-in">
           <SectionHeader
@@ -780,179 +954,6 @@ export default function RiskPage() {
         </CardElevated>
         )}
 
-        {/* 卡 3 · 策略 #02 跨所 funding 差套利 */}
-        {pbCfg && (
-        <CardElevated style={{ padding: 20 }} className="animate-in">
-          <SectionHeader
-            title="#02 跨所 funding 差套利 · 风控参数"
-            subtitle="PERP-BASIS ARB · LIVE TUNABLE"
-            right={
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <Badge tone={pbCfg.paper_running ? 'active' : 'warn'}>
-                  {pbCfg.paper_running ? 'PAPER' : 'IDLE'}
-                </Badge>
-                {pbEditing ? (
-                  <button
-                    type="button"
-                    onClick={pbCancelEdit}
-                    title="取消"
-                    style={{ background: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', padding: 4, cursor: 'pointer', display: 'inline-flex' }}
-                  >
-                    <XIcon size={12} />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={pbStartEdit}
-                    title="编辑参数"
-                    style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-blood)', background: 'transparent', border: '1px solid rgba(227,64,88,0.3)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Pencil size={10} />
-                    <span>调整</span>
-                  </button>
-                )}
-              </div>
-            }
-          />
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginTop: 12 }}>
-            {/* 入场 funding 差 APR 阈值 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }} title="long/short 两端年化 funding rate 差 ≥ 该值才入场">
-                  入场 diff APR
-                </span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="1" min="0"
-                    value={pbDraft.min_diff_apr_pct ?? pbCfg.min_diff_apr_pct}
-                    onChange={(e) => setPbDraft({ ...pbDraft, min_diff_apr_pct: e.target.value })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.min_diff_apr_pct).toFixed(0)}%</span>
-                )}
-              </div>
-              <ProgressBar pct={Math.min(100, (Number(pbCfg.min_diff_apr_pct) / 100) * 100)} tone="success" />
-            </div>
-
-            {/* 出场 diff 衰减阈值 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }} title="diff APR 衰减到 ≤ 该值即平仓（费差消失）">
-                  退出 diff APR
-                </span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="0.5" min="0"
-                    value={pbDraft.exit_diff_apr_pct ?? pbCfg.exit_diff_apr_pct}
-                    onChange={(e) => setPbDraft({ ...pbDraft, exit_diff_apr_pct: e.target.value })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.exit_diff_apr_pct).toFixed(1)}%</span>
-                )}
-              </div>
-              <ProgressBar pct={Math.min(100, (Number(pbCfg.exit_diff_apr_pct) / 10) * 100)} tone="warn" />
-            </div>
-
-            {/* 最大持仓时长 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>最大持仓 (h)</span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="1" min="1"
-                    value={pbDraft.max_hold_hours ?? pbCfg.max_hold_hours}
-                    onChange={(e) => setPbDraft({ ...pbDraft, max_hold_hours: e.target.value })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.max_hold_hours).toFixed(0)}h</span>
-                )}
-              </div>
-            </div>
-
-            {/* 最少持仓时长 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }} title="最少持仓时长，覆盖至少 1 个 funding 结算（防小波动早退）">
-                  最少持仓 (h)
-                </span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="1" min="0"
-                    value={pbDraft.min_hold_hours ?? pbCfg.min_hold_hours}
-                    onChange={(e) => setPbDraft({ ...pbDraft, min_hold_hours: e.target.value })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{Number(pbCfg.min_hold_hours).toFixed(0)}h</span>
-                )}
-              </div>
-            </div>
-
-            {/* 同时持仓数 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>同时持仓上限</span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="1" min="1" max="10"
-                    value={pbDraft.max_concurrent ?? pbCfg.max_concurrent}
-                    onChange={(e) => setPbDraft({ ...pbDraft, max_concurrent: parseInt(e.target.value, 10) })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{pbCfg.max_concurrent}</span>
-                )}
-              </div>
-            </div>
-
-            {/* 单笔规模 */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
-                <span style={{ color: 'var(--text-secondary)' }} title="每笔仓位双腿 notional（每端各 N USDT，总 2N margin）">
-                  单笔 notional ($)
-                </span>
-                {pbEditing ? (
-                  <input
-                    type="number" step="10" min="0"
-                    value={pbDraft.notional_per_position ?? pbCfg.notional_per_position}
-                    onChange={(e) => setPbDraft({ ...pbDraft, notional_per_position: e.target.value })}
-                    style={{ ...inputStyle, width: 80 }}
-                  />
-                ) : (
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>${Number(pbCfg.notional_per_position).toFixed(0)}</span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-            <span>
-              候选币 {pbCfg.candidate_symbols.length} · 扫描间隔 {pbCfg.scan_interval_seconds}s · enabled={String(pbCfg.enabled)}
-            </span>
-            {pbEditing && (
-              <div style={{ display: 'flex', gap: 8 }}>
-                {pbPatchMut.isError && (
-                  <span style={{ color: 'var(--accent-blood)' }}>
-                    {String((pbPatchMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败')}
-                  </span>
-                )}
-                <Button onClick={pbSaveEdit} disabled={pbPatchMut.isPending}>
-                  {pbPatchMut.isPending ? '保存中…' : '保存'}
-                </Button>
-              </div>
-            )}
-            {!pbEditing && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-emerald)' }}>
-                <CheckCircle2 size={12} /> 修改即时持久化（重启不丢）
-              </span>
-            )}
-          </div>
-        </CardElevated>
-        )}
       </div>
 
       {/* 锁定红线 · 账户级（不属于任何单一策略，独立全宽展示）*/}
