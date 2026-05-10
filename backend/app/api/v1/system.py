@@ -137,6 +137,49 @@ async def update_exchange_credentials(
     raise HTTPException(status_code=500, detail="failed to read back credentials")
 
 
+@router.post("/consolidate")
+async def consolidate_balances(
+    _: CurrentUser,
+    request: Request,
+    exchange: str | None = None,
+) -> dict:
+    """把多钱包余额（USDM perp / cross-margin / funding）划转到 spot。
+
+    用户明确指令：避免多钱包余额计算偏差，平仓后自动归集到 spot。
+    本端点用于**手动立即**触发归集（reconciler 也会在每次平仓事件 + 5min 周期触发）。
+
+    Parameters
+    ----------
+    exchange: 仅归集指定 CEX；省略 = 全部
+    """
+    state = request.app.state
+    adapters = getattr(state, "adapters", {}) or {}
+    targets = [exchange] if exchange else None
+    try:
+        from app.services.balance_consolidator import consolidate_to_spot  # noqa: PLC0415
+        result = await consolidate_to_spot(adapters, targets)
+        # 清 reconciler cache 让 dashboard 立即重读
+        rec = getattr(state, "balance_reconciler", None)
+        if rec is not None and hasattr(rec, "balance_cache"):
+            rec.balance_cache.clear()
+    except Exception as exc:
+        from app.core.logging import get_logger  # noqa: PLC0415
+        get_logger(__name__).exception("manual_consolidate_failed")
+        raise HTTPException(
+            status_code=500, detail=f"consolidate failed: {str(exc)[:200]}",
+        ) from exc
+    return {
+        "status": "ok",
+        "result": result,
+        "summary": {
+            ex: {
+                "transfer_count": len(r.get("transfers", [])),
+                "error_count": len(r.get("errors", [])),
+            } for ex, r in result.items()
+        },
+    }
+
+
 async def _hot_reload_exchange(app_state, exchange: str) -> None:
     """关闭旧 adapter，构造新 adapter（带文件凭据），替换 app.state + broker dict。"""
     from app.core.config import get_settings  # noqa: PLC0415

@@ -187,6 +187,13 @@ class BalanceReconcilerService:
         self.recent_alerts: list[ReconcileAlert] = []
         # 已告警过的不一致（uuid: leg_index）防止刷屏
         self._alerted: set[tuple[str, int]] = set()
+        # 上一次 tick 看到的 OPEN positions（uuid 集合）— 用于检测平仓事件
+        # 任意 uuid 从 _last_open_uuids 消失（不在当前 OPEN 列表）→ 触发 consolidate
+        # 覆盖所有策略所有 CEX 所有 paper/live 模式所有平仓路径（统一 hook）
+        self._last_open_uuids: set[str] = set()
+        # consolidate 防抖：避免同一秒多笔平仓触发多次划转
+        self._last_consolidate_at: float = 0.0
+        self._consolidate_debounce_s: float = 30.0
 
     @property
     def is_running(self) -> bool:
@@ -270,14 +277,61 @@ class BalanceReconcilerService:
                 self.balance_cache[name] = data
 
     async def _fetch_binance_extra_wallets(self, adapter: Any) -> dict:
-        """Binance 特定：cross-margin USDT + USDM perp USDT 合并到 cache。
+        """Binance 特定：cross-margin / USDM perp / funding wallet 合并到 cache。
 
-        cache 增加两个 pseudo-asset:
+        cache 增加 pseudo-assets:
           - USDT_MARGIN: cross-margin netAsset
           - USDT_PERP: USDM perp wallet total
+          - USDT_FUNDING: funding wallet free
+          - USDT_SPOT_OTHERS: SPOT 钱包里所有非 USDT 资产（BNB/BTC/ETH 等）折算到 USDT
+            （之前 dashboard 漏算这部分，导致显示 $115 vs 实际 $145+30）
         """
-        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        from app.exchanges.models import InstrumentType, Symbol  # noqa: PLC0415
         out: dict = {}
+
+        # 0. SPOT 非 USDT 资产 USDT-equiv 折算
+        # 之前 cache 只算 SPOT 钱包的 USDT，BNB/BTC/ETH 等被漏。这里用 hub ticker 折算。
+        try:
+            spot_client = adapter._clients.get(InstrumentType.SPOT)
+            if spot_client is not None:
+                raw = await spot_client.fetch_balance()
+                others_usdt = Decimal("0")
+                _STABLES = {"USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD"}
+                non_zero = (raw.get("total") or {})
+                tasks = []
+                for asset, amt in non_zero.items():
+                    if asset in _STABLES:
+                        continue
+                    try:
+                        amt_dec = Decimal(str(amt or 0))
+                    except Exception:
+                        continue
+                    if amt_dec <= Decimal("0.0001"):  # 微尘埃
+                        continue
+                    # 优先 hub ticker（避免重复 fetch）；fallback 直接拉
+                    px: Decimal | None = None
+                    if self._hub is not None:
+                        try:
+                            tk = self._hub.get_ticker(
+                                "binance", InstrumentType.SPOT, Symbol(asset, "USDT"),
+                            )
+                            if tk is not None:
+                                raw_t = getattr(tk, "raw", None)
+                                if isinstance(raw_t, dict):
+                                    p = raw_t.get("last") or raw_t.get("close") or raw_t.get("bid")
+                                    if p is not None:
+                                        px = Decimal(str(p))
+                        except Exception:
+                            pass
+                    if px is not None and px > 0:
+                        others_usdt += amt_dec * px
+                if others_usdt > Decimal("0.01"):
+                    out["USDT_SPOT_OTHERS"] = {
+                        "free": str(others_usdt), "total": str(others_usdt),
+                        "used": "0",
+                    }
+        except Exception as e:
+            logger.debug("reconcile_spot_others_failed", error=str(e))
         try:
             spot_client = adapter._clients.get(InstrumentType.SPOT)
             if spot_client is not None:
@@ -399,6 +453,12 @@ class BalanceReconcilerService:
         ]
         for k in stale_keys:
             self._alerted.discard(k)
+
+        # 平仓事件追踪（不再触发自动归集 — 多策略并发场景下不安全）
+        # 改为正确计算多钱包余额（USDT_SPOT_OTHERS + USDT_MARGIN + USDT_PERP +
+        # USDT_FUNDING + USDT），dashboard 已含全部资产折算
+        # 归集仍可通过 POST /system/consolidate 手动触发（用户判断时机）
+        self._last_open_uuids = current_open_uuids
 
         new_alerts: list[ReconcileAlert] = []
         # 缓存 alert → (rec, leg_idx) 用于 #02 跨所单腿失踪后定位幸存腿
@@ -777,6 +837,33 @@ class BalanceReconcilerService:
                 error=str(e),
             )
             return False
+
+    async def _post_close_consolidate(self, closed_uuids: list[str]) -> None:
+        """平仓后归集：把多钱包 USDT 划转到 spot，简化资金管理。
+
+        防抖：30s 内多笔平仓只触发一次（避免连环划转）。
+        覆盖所有策略所有 CEX 所有 paper/live 模式（reconciler 自身判断 OPEN→CLOSED）。
+        """
+        now = asyncio.get_event_loop().time()
+        if (now - self._last_consolidate_at) < self._consolidate_debounce_s:
+            return
+        self._last_consolidate_at = now
+        try:
+            from app.services.balance_consolidator import consolidate_to_spot  # noqa: PLC0415
+            adapters = self._get_authed_adapters()
+            result = await consolidate_to_spot(adapters)
+            transfer_count = sum(len(r.get("transfers", [])) for r in result.values())
+            if transfer_count > 0:
+                # 清 cache 让下次 tick 立即重读
+                self.balance_cache.clear()
+            logger.info(
+                "consolidate_after_close",
+                closed_count=len(closed_uuids),
+                transfer_count=transfer_count,
+                exchanges=list(result.keys()),
+            )
+        except Exception:
+            logger.exception("consolidate_after_close_failed")
 
     async def _try_auto_close_remaining_leg(
         self,
