@@ -38,6 +38,32 @@ _unwind_cap_cache: dict[str, Any] = {"value": None, "ts": 0.0}
 _UNWIND_CAP_TTL_S = 60.0  # W4 60s TTL：避免每次 unwind 三次同步 yaml IO
 
 
+def _get_paper_only_instances_global() -> set[str]:
+    """读取 yaml 判断哪些 strategy_instance 当前永远跑 paper 模式（live_mode=False）。
+
+    paper 仓位仅在 DB 存在，交易所无真实持仓，reconciler 不应对账 leg。
+    """
+    out: set[str] = set()
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+        for path, instance in (
+            ("config/strategies/perp_basis_main.yaml", "perp_basis_main"),
+            ("config/strategies/funding_rate_main.yaml", "funding_rate_main"),
+            ("config/strategies/spot_perp_main.yaml", "spot_perp_main"),
+        ):
+            try:
+                with open(path) as f:
+                    cfg = _yaml.safe_load(f) or {}
+                pt = cfg.get("paper_trading", {}) or {}
+                if pt.get("enabled") and not pt.get("live_mode", False):
+                    out.add(instance)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
 def _resolve_auto_unwind_cap() -> Decimal:
     """读取三策略当前 notional_per_position 的最大值 × 2，作为 unwind cap。
 
@@ -357,7 +383,13 @@ class BalanceReconcilerService:
         # 缓存 alert → (rec, leg_idx) 用于 #02 跨所单腿失踪后定位幸存腿
         alert_to_pos: dict[int, tuple[Any, int]] = {}
 
+        # paper 模式仓位：DB 有但交易所无真实持仓 — 跳过 leg 对账避免误报
+        # #02 perp_basis 当前永远 paper（yaml.paper_trading.live_mode=false）
+        paper_only_instances = _get_paper_only_instances_global()
+
         for rec in open_records:
+            if rec.strategy_instance in paper_only_instances:
+                continue  # 跳过 paper 仓位 leg 对账
             legs = legs_by_pos.get(rec.id, [])
             for idx, leg in enumerate(legs):
                 alert = self._check_leg(rec, leg, idx)
