@@ -479,7 +479,7 @@ export default function BacktestPage() {
 
       <SpotPerpBacktestSection symbolBases={symbolBases} />
 
-      <PerpBasisBacktestSection symbolBases={symbolBases} />
+      <PerpBasisBacktestSection />
     </div>
   )
 }
@@ -732,7 +732,7 @@ function SpotPerpBacktestSection({ symbolBases }: { symbolBases: string[] }) {
 // ---------------------------------------------------------------------------
 
 
-function PerpBasisBacktestSection(_props: { symbolBases: string[] }) {
+function PerpBasisBacktestSection() {
   const { t } = useT()
   const [symbolsCsv, setSymbolsCsv] = useState('BTC/USDT,ETH/USDT,FIL/USDT,SOL/USDT,TIA/USDT')
   const [days, setDays] = useState(14)
