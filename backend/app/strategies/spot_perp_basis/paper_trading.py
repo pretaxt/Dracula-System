@@ -47,12 +47,14 @@ logger = get_logger(__name__)
 
 
 # 默认参数（兜底）— 实际优先读 config/strategies/spot_perp_main.yaml
-ENTRY_PCT = Decimal("0.30")       # |basis_pct| >= 0.30% 入场（fee 0.16% + 缓冲）
+ENTRY_PCT = Decimal("0.40")       # W1 0.30→0.40：fee maker 0.08% + slip 0.04% + profit 0.28%
 EXIT_PCT = Decimal("0.03")        # |basis_pct| <= 0.03% 收敛平仓
 MAX_HOLD_HOURS = Decimal("12")    # 12 小时强制平仓
 MAX_CONCURRENT = 3
 NOTIONAL_PER_POSITION = Decimal("50")
-DEFAULT_TAKER_FEE_RATE = Decimal("0.0004")   # taker 0.04%（与三策略对齐）
+DEFAULT_TAKER_FEE_RATE = Decimal("0.0002")   # W1 默认 maker 0.02%（binance/okx VIP0 maker 标准）
+# 旧 0.0004 (taker) + entry 0.30% → 单笔毛利仅 $0.02，slippage 即可吃光
+# 改为 maker 0.0002 + entry 0.40% → 单笔毛利 $0.20 - fee $0.04 - slip $0.04 = $0.12 真利润
 _OPEN_AND_CLOSE_LEG_COUNT = Decimal("4")     # spot+perp 开 2 腿 + 平 2 腿 = 4
 _FUNDING_REFRESH_EVERY_N_TICKS = 5    # 实时 funding 累计每 N 个 tick 刷新（5*60s=5 分钟）
 

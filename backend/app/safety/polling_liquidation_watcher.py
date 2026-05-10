@@ -110,7 +110,11 @@ class PollingLiquidationWatcher:
 
     async def _tick(self) -> None:
         """一次轮询：拉取交易所 perp 仓位 → 与期望集比对 → 缺失即触发回调。"""
-        expected: ExpectedPositions = set(self._get_expected())
+        # W5: getter 可能是 async（DB 查询），兼容 sync + async 两种返回
+        raw = self._get_expected()
+        if asyncio.iscoroutine(raw):
+            raw = await raw
+        expected: ExpectedPositions = set(raw)
 
         # 仅"上次 poll 已经看到 + 当前期望仍包含"的腿才算稳定追踪
         # 新建仓的腿可能交易所 fetch 还没反映 → 等下轮再算

@@ -49,13 +49,17 @@ class LiquidationWatcher:
         api_key: str,
         api_secret: str,
         on_liquidation: LiquidationCallback,
+        on_critical_failure: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret  # noqa: F841 — 保留供以后签名校验扩展
         self._callback = on_liquidation
+        self._on_critical_failure = on_critical_failure
         self._listen_key: Optional[str] = None
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        # W6 listenKey 健康度跟踪
+        self._consecutive_keepalive_failures = 0
 
     async def start(self) -> None:
         """非阻塞启动：在后台跑 WS 主循环 + listenKey 续期循环。"""
@@ -117,6 +121,8 @@ class LiquidationWatcher:
                 await asyncio.sleep(_RECONNECT_BACKOFF_S)
 
     async def _keepalive_loop(self) -> None:
+        # W6 listenKey halt-all：连续 N 次续签失败 → 触发 critical 回调（halt 所有策略）
+        max_failures = 3
         while self._running:
             await asyncio.sleep(_KEEPALIVE_INTERVAL_MIN * 60)
             if not self._running or not self._listen_key:
@@ -124,8 +130,33 @@ class LiquidationWatcher:
             try:
                 await self._put_listen_key()
                 logger.info("liquidation_watcher_keepalive_ok")
-            except Exception:
-                logger.exception("liquidation_watcher_keepalive_failed")
+                # 续签成功，重置失败计数
+                if self._consecutive_keepalive_failures > 0:
+                    logger.info(
+                        "liquidation_watcher_keepalive_recovered",
+                        previous_failures=self._consecutive_keepalive_failures,
+                    )
+                self._consecutive_keepalive_failures = 0
+            except Exception as exc:
+                self._consecutive_keepalive_failures += 1
+                logger.exception(
+                    "liquidation_watcher_keepalive_failed",
+                    consecutive_failures=self._consecutive_keepalive_failures,
+                )
+                if self._consecutive_keepalive_failures >= max_failures:
+                    msg = (
+                        f"binance listenKey 续签连续失败 "
+                        f"{self._consecutive_keepalive_failures} 次 — "
+                        f"用户数据流不可信，可能丢失强平事件"
+                    )
+                    logger.error("liquidation_watcher_critical_halt", reason=msg)
+                    if self._on_critical_failure is not None:
+                        try:
+                            await self._on_critical_failure(msg)
+                        except Exception:
+                            logger.exception("liquidation_watcher_critical_callback_failed")
+                    # 重置计数避免反复触发；继续运行让 ws_loop 试着重连
+                    self._consecutive_keepalive_failures = 0
 
     # ------------------------------------------------------------------
     # listenKey 管理

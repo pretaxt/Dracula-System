@@ -17,11 +17,11 @@ strategy_type: spot_perp
 enabled: true
 
 entry:
-  min_basis_pct: 0.30           # P2-13 入场阈值下调（fee 0.16% + slippage 0.05% + profit 0.09%）
+  min_basis_pct: 0.40           # W1 0.30→0.40：maker fee 0.08% + slippage 0.04% + profit 0.28%
   # c — 方向独立阈值（>0 时覆盖 min_basis_pct；0 或省略则回退）
   # discount 方向有 borrow 利息 + 付 funding 双层成本，必须 ≥ premium 阈值 + 0.20%
-  min_basis_pct_premium: 0.30   # P2-13 premium 方向覆盖 fee+slippage+profit
-  min_basis_pct_discount: 0.70  # P0-4 discount 方向防 borrow 0.01-0.03%/8h × 12h + funding 双成本
+  min_basis_pct_premium: 0.40   # W1 同步上调
+  min_basis_pct_discount: 0.80  # W1 同步上调（保持 +0.40% 利差覆盖 borrow+funding）
   scan_threshold_pct: 0.10      # scanner 候选门槛（API 暴露所有 ≥0.10% 的机会，不一定开仓）
   min_orderbook_depth_usd: 20000  # P2-19 long-tail spot 深度 cushion（5K→20K 防滑点放大）
   # b — 入场时机过滤（防接飞刀）：要求 |basis| 已从近 N 分钟峰值回落 ≥ M%

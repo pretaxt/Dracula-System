@@ -401,15 +401,23 @@ class PerpBasisPaperSession:
             if held < self._min_hold:
                 continue
 
-            # diff_apr 衰减（P2-15 自适应阈值）：
+            # diff_apr 衰减（P2-15 自适应阈值 + W3 floor 防 entry<25% 收紧 hysteresis）：
             # 旧固定 exit_diff=1% 在高 entry_diff（如 50%）时 hysteresis 过大；
-            # 新规则：effective_exit = max(exit_diff, 0.2 × entry_diff_apr_pct)
-            # 例：entry 50% → effective_exit = max(1%, 10%) = 10%；entry 12% → max(1%, 2.4%) = 2.4%
+            # 新规则：effective_exit = clamp(max(exit_diff, 0.2×entry), exit_diff, 0.5×entry)
+            # 例：entry 50% → max(1%, 10%) = 10%（hysteresis 40%，正常）
+            #     entry 12% → max(1%, 2.4%) = 2.4%，但 W3 floor 0.5×12% = 6% → effective_exit ≤ 6%
+            #              即 hysteresis ≥ 6%（保至少 50% 入场幅度的 hysteresis，防小 diff 早退）
+            #     entry 200% → 0.2×200=40%，floor 0.5×200=100%，clamp 后 max=40%
             if long_leg and short_leg:
                 key = (str(pos.symbol), long_leg.exchange, short_leg.exchange)
                 cur_diff = diff_by_pair.get(key)
                 entry_diff = pos.target_apr_pct or Decimal("0")
-                effective_exit = max(self._exit_diff, entry_diff * Decimal("0.2"))
+                # 上限 floor: 持仓 hysteresis 至少保留入场 diff 的一半
+                upper_floor = entry_diff * Decimal("0.5")
+                proposed = max(self._exit_diff, entry_diff * Decimal("0.2"))
+                effective_exit = min(proposed, upper_floor) if upper_floor > 0 else proposed
+                # 但 effective_exit 不应低于 self._exit_diff（保留绝对下限）
+                effective_exit = max(effective_exit, self._exit_diff)
                 if cur_diff is not None and cur_diff <= effective_exit:
                     to_close.append((pos, ExitReason.STRATEGY, "diff_decay"))
 

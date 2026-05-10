@@ -358,6 +358,14 @@ class PaperTradingSession:
                 pos = await self._executor.open_delta_neutral(
                     opp, size_usd=self._size
                 )
+                # B1 修复：开仓时初始化 _last_settled_funding_ms 为"上次已结算"的时间
+                # 让 _maybe_settle_funding 不会在仓位刚开 < pre_funding_window 内立即虚增
+                # 一笔 8h 整 funding。仅当 next_funding_time 真正翻到下一周期才结算。
+                interval_h = opp.funding_rate.funding_interval_hours or 8
+                interval_ms = interval_h * 3600 * 1000
+                last_settled_ms = (opp.funding_rate.next_funding_time or 0) - interval_ms
+                if last_settled_ms > 0:
+                    self._last_settled_funding_ms[pos.id] = last_settled_ms
                 logger.info(
                     "paper_position_opened",
                     symbol=str(opp.symbol),
@@ -534,6 +542,11 @@ class PaperTradingSession:
         self, pos, reason: ExitReason, log_event: str, log_extra: dict
     ) -> None:
         """统一的关仓 + 通知 + 日志包装。"""
+        # B2 修复：所有 close 路径统一清理 per-position 跟踪 dict（避免内存泄漏）
+        # 注意：先 pop 再 close — 即使 close 失败，重试时 dict 也已清，下次 reopen 同 pos.id
+        # 不会复用（uuid4 全局唯一），所以这里 pop 是安全且必要的
+        self._peak_profit_pct.pop(pos.id, None)
+        self._last_settled_funding_ms.pop(pos.id, None)
         try:
             await self._executor.close_position(pos.id, reason=reason)
             logger.info(
@@ -564,6 +577,9 @@ class PaperTradingSession:
         flagged = self._executor.check_all_positions(as_of=as_of)
         for pos, violations in flagged:
             reason = self._violations_to_reason(violations)
+            # B2 修复：RiskGuard close 路径同步清理 per-position dict
+            self._peak_profit_pct.pop(pos.id, None)
+            self._last_settled_funding_ms.pop(pos.id, None)
             try:
                 await self._executor.close_position(pos.id, reason=reason)
                 logger.info(

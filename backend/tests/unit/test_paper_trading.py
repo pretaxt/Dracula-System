@@ -284,6 +284,32 @@ class TestFundingSettlement:
         second_settle_ms = session._last_settled_funding_ms.get(pos_id, 0)
         assert second_settle_ms > first_settle_ms
 
+    @pytest.mark.asyncio
+    async def test_first_tick_no_funding_settle_after_open(self):
+        """B1 修复验证：开仓后首个 tick 不应立即虚增一笔 8h 整 funding。
+
+        旧 bug：`_last_settled_funding_ms[pos.id]` 默认 0 →
+        `last_settled_ms = next_ms - interval > 0` → 立即结算（即使仓位刚开 < 15min）。
+        新逻辑：开仓时初始化 `_last_settled_funding_ms[pos.id] = next_ms - interval`，
+        所以 `last_settled_ms == already` → 不结算。
+        """
+        opp = _make_opportunity()
+        session = _make_session(opportunities=[opp])
+        await session.run_once()  # 开仓
+        positions = list(session._manager.open_positions)
+        assert len(positions) == 1
+        pos = positions[0]
+        # 验证开仓后 funding_received 不应有正向积累（仓位刚开，未跨 funding 周期）
+        assert pos.funding_received == Decimal("0"), (
+            f"B1 fix: 开仓后首个 tick funding_received 应为 0，实际 {pos.funding_received}"
+        )
+        # 验证 _last_settled_funding_ms 已初始化为 next_funding_time - interval
+        expected_init = opp.funding_rate.next_funding_time - 8 * 3600 * 1000
+        actual_init = session._last_settled_funding_ms.get(pos.id, 0)
+        assert actual_init == expected_init, (
+            f"B1 fix: 开仓初始化应 = next_ms - interval = {expected_init}，实际 {actual_init}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # status()

@@ -34,7 +34,8 @@ exit:
   min_hold_hours: 24.0            # 至少持仓 24h，过滤短期噪音
   max_hold_hours: 240.0           # 持仓满 240h（10 天）强制平仓 — 让单笔吃满高 APR 周期
   min_apr_for_hold_pct: 10.0      # APR 跌破 10% 立即平仓（机会衰减）
-  profit_target_pct: 10.0         # 净收益达 10% 止盈（原 20% 几乎不可达，10% 在 365%+ APR 极端行情可触发）
+  profit_target_pct: 3.0          # W2 10%→3%：旧 10% 在 APR=50% 需 6.7 天积累（超 max_hold 240h），3% 在 2 天可达
+  trailing_drawdown_pct: 1.0      # W2 P2-20 trailing：peak ≥ 3% 后回撤 ≥ 1% 锁利退出（peak-1%）
 
 position:
   max_positions: 5                # 同时持仓上限 5 笔

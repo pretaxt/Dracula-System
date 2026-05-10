@@ -296,10 +296,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 raw_event.get("q", "?"), raw_event.get("ap", "?"),
             )
 
+        # W6 listenKey 连续续签失败 N 次 → halt 所有策略 + Telegram critical
+        async def _on_listen_key_critical_failure(msg: str) -> None:
+            try:
+                from app.notifications import notify_reconcile_alert  # noqa: PLC0415
+                notify_reconcile_alert(
+                    alert_type="listen_key_renewal_failed",
+                    severity="critical",
+                    exchange="binance",
+                    symbol="*",
+                    explanation=msg,
+                )
+            except Exception:
+                logger.exception("notify_listen_key_failure_failed")
+            # 停掉所有 paper session — fail-safe halt
+            try:
+                from app.services import strategy_control  # noqa: PLC0415
+                stopped: list[str] = []
+                if strategy_control.is_perp_basis_paper_running(app.state):
+                    if await strategy_control.stop_perp_basis_paper(app.state):
+                        stopped.append("#02")
+                # #01 paper session
+                fr = getattr(app.state, "paper_session", None)
+                fr_task = getattr(app.state, "paper_task", None)
+                if fr is not None and fr_task is not None and not fr_task.done():
+                    if await strategy_control.stop_paper(app.state):
+                        stopped.append("#01")
+                logger.error(
+                    "listen_key_critical_halted_strategies",
+                    stopped=stopped,
+                )
+            except Exception:
+                logger.exception("listen_key_critical_halt_failed")
+
         liquidation_watcher = LiquidationWatcher(
             api_key=settings.binance_api_key,
             api_secret=settings.binance_api_secret,
             on_liquidation=_on_liquidation,
+            on_critical_failure=_on_listen_key_critical_failure,
         )
         await liquidation_watcher.start()
         logger.info("liquidation_watcher_enabled")
@@ -327,8 +361,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _polling_targets = ["okx", "bybit", "htx", "bitget"]
 
         def _build_expected_getter(target_ex: str):
-            """每个交易所一个独立 getter，闭包捕获 target_ex。"""
-            def _get_expected() -> set[tuple[str, str]]:
+            """每个交易所一个独立 getter，闭包捕获 target_ex。
+
+            W5 后 getter 改 async — 因为 spot_perp 期望集需查 DB。
+            PollingLiquidationWatcher._tick 已兼容 sync + async return。
+            """
+            async def _get_expected() -> set[tuple[str, str]]:
                 out: set[tuple[str, str]] = set()
                 # #01 funding_rate
                 fr = getattr(app.state, "paper_session", None)
@@ -348,9 +386,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                                     and leg.exchange == target_ex
                                     and leg.size > 0):
                                 out.add((str(leg.symbol), leg.side.value))
-                # #04 spot_perp 在 DB 里跟踪 perp 腿（PositionLegRecord），polling 跨所
-                # 暂不查询，避免与 reconciler 重复 + 增加 DB 负担。
-                # spot_perp 主要在 binance 上跑（已有 WS watcher）
+                # W5 #04 spot_perp 纳入：DB 直读 PositionLegRecord
+                # 之前注释说"主要在 binance 上跑"但 OKX UTA discount 方向也开 perp，
+                # 不纳入会导致 OKX perp 强平裸奔到 reconciler 30s 兜底
+                try:
+                    from sqlalchemy import select  # noqa: PLC0415
+                    from app.core.database import get_session  # noqa: PLC0415
+                    from app.models.position import (  # noqa: PLC0415
+                        PositionLegRecord, PositionRecord,
+                    )
+                    async with get_session() as _sess:
+                        stmt = (
+                            select(PositionLegRecord)
+                            .join(
+                                PositionRecord,
+                                PositionLegRecord.position_id == PositionRecord.id,
+                            )
+                            .where(PositionRecord.strategy_instance == "spot_perp_main")
+                            .where(PositionRecord.status == "open")
+                            .where(PositionLegRecord.exchange == target_ex)
+                            .where(PositionLegRecord.instrument_type == "perpetual")
+                        )
+                        rows = (await _sess.execute(stmt)).scalars().all()
+                        for leg in rows:
+                            if leg.size and float(leg.size) > 0:
+                                # leg.side 已存为 "buy"/"sell" 字符串
+                                out.add((str(leg.symbol), str(leg.side).lower()))
+                except Exception:
+                    logger.exception("polling_get_expected_spot_perp_failed",
+                                     exchange=target_ex)
                 return out
             return _get_expected
 
@@ -584,6 +648,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("balance_reconciler_init_failed")
     app.state.balance_reconciler = balance_reconciler
     app.state.balance_reconciler_task = balance_reconciler_task
+
+    # B3-1: 注入 app.state 给 risk_circuit_breaker，保证 daily_dd 分母用真实账户
+    try:
+        from app.services.risk_circuit_breaker import set_app_state  # noqa: PLC0415
+        set_app_state(app.state)
+        logger.info("risk_circuit_breaker_app_state_injected")
+    except Exception:
+        logger.exception("risk_circuit_breaker_inject_failed")
 
     # --- #02 perp-basis runner (Phase A: monitor only) ---
     perp_basis_runner = None

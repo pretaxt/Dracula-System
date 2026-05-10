@@ -130,6 +130,7 @@ def build_paper_session(
     pre_funding_window_min = float(entry_cfg.get("pre_funding_window_minutes", 15.0))
     min_apr_for_hold = Decimal(str(exit_cfg.get("min_apr_for_hold_pct", "0")))
     profit_target = Decimal(str(exit_cfg.get("profit_target_pct", "0")))
+    trailing_drawdown = Decimal(str(exit_cfg.get("trailing_drawdown_pct", "1.0")))
     perp_margin_loss_threshold = Decimal(str(risk_cfg.get("perp_margin_loss_threshold_pct", "0")))
 
     return PaperTradingSession(
@@ -141,5 +142,6 @@ def build_paper_session(
         pre_funding_window_minutes=pre_funding_window_min,
         min_apr_for_hold_pct=min_apr_for_hold,
         profit_target_pct=profit_target,
+        trailing_drawdown_pct=trailing_drawdown,
         perp_margin_loss_threshold_pct=perp_margin_loss_threshold,
     )

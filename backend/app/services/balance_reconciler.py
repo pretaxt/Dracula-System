@@ -34,12 +34,24 @@ _AUTO_UNWIND_MAX_NOTIONAL_USD = Decimal("200")  # 兜底下限
 _auto_unwind_attempted: set[tuple[str, str]] = set()  # (exchange, symbol) 防重复尝试
 
 
+_unwind_cap_cache: dict[str, Any] = {"value": None, "ts": 0.0}
+_UNWIND_CAP_TTL_S = 60.0  # W4 60s TTL：避免每次 unwind 三次同步 yaml IO
+
+
 def _resolve_auto_unwind_cap() -> Decimal:
     """读取三策略当前 notional_per_position 的最大值 × 2，作为 unwind cap。
 
+    W4: 加 60s TTL 缓存（之前每次 unwind 三次同步 open(yaml)，reconciler tick 主循环里
+    无谓 IO 浪费）。PATCH 持久化的 override 在 60s 内生效，足够。
     fail-safe: yaml 读取失败时回退 _AUTO_UNWIND_MAX_NOTIONAL_USD ($200)。
-    每次调用都重读，让 PATCH 持久化的 override 立即生效。
     """
+    import time as _time  # noqa: PLC0415
+    now = _time.monotonic()
+    cached_val = _unwind_cap_cache.get("value")
+    cached_ts = _unwind_cap_cache.get("ts", 0.0) or 0.0
+    if cached_val is not None and (now - cached_ts) < _UNWIND_CAP_TTL_S:
+        return cached_val  # type: ignore[return-value]
+
     try:
         import yaml as _yaml  # noqa: PLC0415
         from app.services.runtime_overrides import load_overrides  # noqa: PLC0415
@@ -87,9 +99,14 @@ def _resolve_auto_unwind_cap() -> Decimal:
             pass
 
         if notionals:
-            return max(_AUTO_UNWIND_MAX_NOTIONAL_USD, max(notionals) * Decimal("2"))
+            cap = max(_AUTO_UNWIND_MAX_NOTIONAL_USD, max(notionals) * Decimal("2"))
+            _unwind_cap_cache["value"] = cap
+            _unwind_cap_cache["ts"] = now
+            return cap
     except Exception:
         pass
+    _unwind_cap_cache["value"] = _AUTO_UNWIND_MAX_NOTIONAL_USD
+    _unwind_cap_cache["ts"] = now
     return _AUTO_UNWIND_MAX_NOTIONAL_USD
 
 # T6/R12 残留挂单清理 — 超过此年龄（秒）仍 NEW/PARTIAL 的 limit 单视为残留，自动撤
