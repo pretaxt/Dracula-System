@@ -644,18 +644,54 @@ class PerpBasisPaperSession:
         return Symbol(s, "USDT")
 
     def _get_perp_price(self, exchange: str, symbol: Symbol) -> Decimal:
-        """从 MarketDataHub 实时取 perp 标记价。fail-safe: 取不到返回 0。"""
+        """从 MarketDataHub 实时取 perp 标记价。fail-safe: 取不到返回 0。
+
+        ccxt fetch_tickers 返回的 perp key 格式为 'TIA/USDT:USDT'，
+        但 Symbol __str__ 返回 'TIA/USDT'。hub 用 sym_str key 直接存的
+        ccxt 原始 key，所以这里两种 key 都试一下。
+        """
         if self._hub is None:
             return Decimal("0")
-        try:
-            ticker_entry = self._hub.get_ticker(
-                exchange, InstrumentType.PERPETUAL, symbol,
-            )
-            if ticker_entry is None:
+
+        def _extract_price(entry: Any) -> Decimal:
+            if entry is None:
                 return Decimal("0")
-            px = getattr(ticker_entry, "last", None) or getattr(ticker_entry, "bid", None)
-            if px is None:
-                return Decimal("0")
-            return Decimal(str(px))
-        except Exception:
+            # TickerEntry.raw 是 ccxt dict 或者 entry 本身有 last/bid 属性
+            raw = getattr(entry, "raw", None)
+            if isinstance(raw, dict):
+                px = raw.get("last") or raw.get("bid") or raw.get("close")
+                if px is not None:
+                    try:
+                        return Decimal(str(px))
+                    except Exception:
+                        pass
+            px = getattr(entry, "last", None) or getattr(entry, "bid", None)
+            if px is not None:
+                try:
+                    return Decimal(str(px))
+                except Exception:
+                    pass
             return Decimal("0")
+
+        # 直接 hub.get_ticker 试两种 symbol key 格式
+        for sym_arg in (symbol, type(symbol)(symbol.base, f"{symbol.quote}:{symbol.quote}")):
+            try:
+                entry = self._hub.get_ticker(exchange, InstrumentType.PERPETUAL, sym_arg)
+                px = _extract_price(entry)
+                if px > 0:
+                    return px
+            except Exception:
+                pass
+
+        # fallback：扫描 hub 该 exchange 的所有 perp tickers（更宽容）
+        try:
+            tickers = self._hub.get_tickers(exchange, InstrumentType.PERPETUAL)
+            base_quote = f"{symbol.base}/{symbol.quote}"
+            for sym_str, entry in tickers.items():
+                if sym_str.startswith(base_quote):
+                    px = _extract_price(entry)
+                    if px > 0:
+                        return px
+        except Exception:
+            pass
+        return Decimal("0")
