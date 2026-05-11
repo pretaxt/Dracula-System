@@ -15,6 +15,8 @@ from app.api.v1.schemas.strategies import (
     PerpBasisConfigResponse,
     PerpBasisOpportunitiesResponse,
     PerpBasisOpportunityOut,
+    PriceSpreadOpportunitiesResponse,
+    PriceSpreadOpportunityOut,
     SpotPerpConfigPatchRequest,
     SpotPerpConfigResponse,
     SpotPerpOpportunitiesResponse,
@@ -419,6 +421,42 @@ async def perp_basis_opportunities(
         exchange_pair_count=len(cfg.exchange_pairs),
         data=[
             PerpBasisOpportunityOut(**opp.to_dict())
+            for opp in runner.latest_opportunities
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# #03 price-spread: Phase A monitor — 跨所价格差实时机会
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/price-spread/opportunities",
+    response_model=PriceSpreadOpportunitiesResponse,
+)
+async def price_spread_opportunities(
+    _: CurrentUser, request: Request,
+) -> PriceSpreadOpportunitiesResponse:
+    """跨所 perp 价格差实时机会（每 30s 刷新）。
+
+    数据源：MarketDataHub tickers 缓存（同步无 IO，和 #02 一样快）。
+    spread_pct = (short_price - long_price) / long_price × 100
+    """
+    runner = getattr(request.app.state, "price_spread_runner", None)
+    if runner is None:
+        return PriceSpreadOpportunitiesResponse(
+            running=False, last_scan_at=None,
+            min_spread_pct="0", exchange_pair_count=0, data=[],
+        )
+    cfg = runner._scanner._config
+    return PriceSpreadOpportunitiesResponse(
+        running=runner.is_running,
+        last_scan_at=runner.last_scan_at,
+        min_spread_pct=str(cfg.min_spread_pct),
+        exchange_pair_count=len(cfg.exchange_pairs),
+        data=[
+            PriceSpreadOpportunityOut(**opp.to_dict())
             for opp in runner.latest_opportunities
         ],
     )

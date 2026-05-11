@@ -131,6 +131,32 @@ class PerpBasisOpportunitiesResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# #03 price-spread 跨所价格差套利
+# ---------------------------------------------------------------------------
+
+
+class PriceSpreadOpportunityOut(BaseModel):
+    symbol: str
+    long_exchange: str            # 低价端（做多）
+    short_exchange: str           # 高价端（做空）
+    long_price: str               # 低价端 last price
+    short_price: str              # 高价端 last price
+    spread_pct: str               # (short - long) / long × 100
+    volume_24h_usd_min: str       # 两侧最小成交额（USDT）
+    volume_24h_usd_long: str
+    volume_24h_usd_short: str
+    timestamp_ms: int
+
+
+class PriceSpreadOpportunitiesResponse(BaseModel):
+    running: bool
+    last_scan_at: datetime | None
+    min_spread_pct: str           # 当前入场门槛
+    exchange_pair_count: int
+    data: list[PriceSpreadOpportunityOut]
+
+
+# ---------------------------------------------------------------------------
 # spot-perp 策略配置（D.1.5 — UI 调阈值用）
 # ---------------------------------------------------------------------------
 

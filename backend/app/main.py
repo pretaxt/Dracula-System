@@ -793,6 +793,65 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.perp_basis_paper = perp_basis_paper
     app.state.perp_basis_paper_task = perp_basis_paper_task
 
+    # --- #03 price-spread runner ---
+    price_spread_runner = None
+    price_spread_task = None
+    if market_data_hub is not None:
+        try:
+            from decimal import Decimal as _PSDecimal  # noqa: PLC0415
+            from app.strategies.price_spread.runner import PriceSpreadRunner  # noqa: PLC0415
+            from app.strategies.price_spread.scanner import (  # noqa: PLC0415
+                PriceSpreadScanner,
+                PriceSpreadScannerConfig,
+                all_pairs as ps_all_pairs,
+            )
+            _ps_cfg_path = "config/strategies/price_spread_main.yaml"
+            try:
+                with open(_ps_cfg_path) as _f:
+                    _ps_yaml = yaml.safe_load(_f) or {}
+            except FileNotFoundError:
+                logger.warning("price_spread_yaml_not_found", path=_ps_cfg_path)
+                _ps_yaml = {}
+            _ps_entry = _ps_yaml.get("entry", {}) or {}
+            _ps_pos = _ps_yaml.get("position", {}) or {}
+            _ps_scan = _ps_yaml.get("scanning", {}) or {}
+            _ps_exchanges = list(_ps_pos.get("exchanges", []) or list(adapters.keys()))
+            _ps_exchanges = [e for e in _ps_exchanges if e in adapters]
+            _ps_pairs = ps_all_pairs(_ps_exchanges)
+            ps_scanner = PriceSpreadScanner(
+                hub=market_data_hub,
+                config=PriceSpreadScannerConfig(
+                    candidate_symbols=list(_ps_pos.get("candidate_symbols", []) or []),
+                    exchange_pairs=_ps_pairs,
+                    min_spread_pct=_PSDecimal(str(_ps_entry.get("min_spread_pct", "0.20"))),
+                    max_spread_pct=_PSDecimal(str(_ps_entry.get("max_spread_pct", "5.0"))),
+                    min_volume_24h_usd=_PSDecimal(
+                        str(_ps_entry.get("min_volume_24h_usd", "2000000"))
+                    ),
+                    max_opportunities=int(_ps_entry.get("max_opportunities", 50)),
+                    max_ticker_age_seconds=float(
+                        _ps_scan.get("max_ticker_age_seconds", 60)
+                    ),
+                ),
+            )
+            price_spread_runner = PriceSpreadRunner(
+                scanner=ps_scanner,
+                scan_interval_seconds=float(_ps_scan.get("scan_interval_seconds", 30)),
+            )
+            price_spread_task = asyncio.create_task(
+                price_spread_runner.run_forever(), name="price_spread_runner",
+            )
+            task_supervisor.register("price_spread_runner", price_spread_task)
+            logger.info(
+                "price_spread_runner_initialized",
+                exchanges=len(_ps_exchanges),
+                pairs=len(_ps_pairs),
+                symbols=len(_ps_pos.get("candidate_symbols", []) or []),
+            )
+        except Exception:
+            logger.exception("price_spread_runner_init_failed")
+    app.state.price_spread_runner = price_spread_runner
+    app.state.price_spread_task = price_spread_task
 
     # --- CEX-DEX 套利 runner ---
     cex_dex_runner = None
@@ -893,6 +952,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         perp_basis_task.cancel()
         try:
             await perp_basis_task
+        except asyncio.CancelledError:
+            pass
+    if price_spread_runner is not None:
+        price_spread_runner.stop()
+    if price_spread_task is not None:
+        price_spread_task.cancel()
+        try:
+            await price_spread_task
         except asyncio.CancelledError:
             pass
     if market_data_hub is not None:

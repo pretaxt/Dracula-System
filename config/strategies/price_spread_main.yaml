@@ -1,0 +1,96 @@
+# 策略 #03 — 跨所价格差套利 (price-spread)
+# 跨所同标的 perp 价格偏差 → 低价端 LONG + 高价端 SHORT → 等价格收敛平仓
+#
+# 与 #02 的区别:
+#   #02: 套利 funding rate 差（持仓数天/周，收资金费）
+#   #03: 套利 price gap（等价格收敛，通常分钟→小时级）
+#
+# 阶段路线:
+#   A (当前): scanner + runner + API monitor（监控数据分布，验证机会频率）
+#   B: 回测引擎接入
+#   C: paper_trading 跨所双 broker delta-neutral
+#   D: 实盘小额验证
+
+instance_name: price_spread_main
+strategy_type: price_spread
+enabled: true
+
+scanning:
+  scan_interval_seconds: 30          # 价格变化快，比 #02 一样快
+  max_ticker_age_seconds: 60         # ticker 陈旧超 60s 跳过（价格敏感）
+
+entry:
+  # Phase A 监控用低阈值（break-even ~0.25%，0.20% 是观察级）
+  # 生产入场建议 0.35%+（双边手续费 0.08% + 滑点 0.10% + 利润空间）
+  min_spread_pct: 0.20
+  max_spread_pct: 3.0                # 超过通常是数据脏点
+  min_volume_24h_usd: 2000000        # 单侧最低 24h 成交额（USDT）
+  max_opportunities: 50
+
+position:
+  exchanges:
+    - binance
+    - okx
+    - bybit
+    - htx
+  # 小/中盘代币（排除 BTC/ETH/BNB/XRP/DOGE/TRX/ADA 等主流）
+  # 选取原则：有价差空间 + 多交易所上市 + 足够流动性
+  candidate_symbols:
+    # DeFi 蓝筹
+    - AAVE
+    - UNI
+    - LINK
+    - CRV
+    - SNX
+    - COMP
+    - MKR
+    - LDO
+    - BAL
+    - SUSHI
+    - 1INCH
+    # Layer 1 / Layer 2 中盘
+    - NEAR
+    - FIL
+    - ATOM
+    - DOT
+    - APT
+    - SUI
+    - SEI
+    - RUNE
+    - INJ
+    - TIA
+    - DYDX
+    - ARB
+    - OP
+    - IMX
+    - PENDLE
+    # Infra / 数据
+    - PYTH
+    - JTO
+    - WLD
+    - AR
+    - RNDR
+    - GRT
+    - API3
+    - BAND
+    # GameFi / Metaverse
+    - AXS
+    - SAND
+    - MANA
+    - GALA
+    - ENJ
+    - CHZ
+    - ALICE
+    # 其他有价差记录的中盘
+    - AVAX
+    - ETC
+    - BCH
+    - LTC
+    - XMR
+    - ZEC
+    - IOTA
+    - KSM
+    - EGLD
+    - FLOW
+    - KAVA
+    - CELO
