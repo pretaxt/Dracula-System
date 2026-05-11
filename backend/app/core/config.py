@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     smtp_from_email: str = Field(default="")
     smtp_to_email: str = Field(default="")
 
+    # CEX-DEX 套利策略
+    cex_dex_wallet_private_key: str = Field(default="")
+    arbitrum_rpc_url: str = Field(default="")
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

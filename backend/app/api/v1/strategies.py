@@ -25,12 +25,15 @@ from app.api.v1.schemas.strategies import (
 )
 from app.services.runtime_overrides import save_spot_perp_overrides
 from app.services.strategy_control import (
+    is_cex_dex_running,
     is_spot_perp_running,
     patch_strategy_config,
+    start_cex_dex,
     start_paper,
     is_perp_basis_paper_running,
     start_perp_basis_paper,
     start_spot_perp,
+    stop_cex_dex,
     stop_perp_basis_paper,
     stop_paper,
     stop_spot_perp,
@@ -106,8 +109,70 @@ async def stop(_: CurrentUser, request: Request) -> StrategyActionResponse:
 async def update_config(
     _: CurrentUser, request: Request, body: ConfigPatchRequest
 ) -> StrategyConfig:
-    patch = body.model_dump(exclude_none=True)
-    cfg = patch_strategy_config(request.app.state, patch)
+    """#01 funding-rate 配置 PATCH — 完整路径：
+       1. 持久化到 overrides.json（重启可恢复）
+       2. 同步 scanner._config（下一 tick 生效，不等重启）
+       3. 同步 strategy_cfg（GET /status 返回最新值）
+    """
+    from app.services.runtime_overrides import save_overrides  # noqa: PLC0415
+    from decimal import Decimal as _Dec  # noqa: PLC0415
+
+    raw_patch = body.model_dump(exclude_none=True)
+    if not raw_patch:
+        # 空 patch 直接回当前
+        cfg = getattr(request.app.state, "strategy_cfg", {}) or {}
+    else:
+        # 1. 持久化 overrides（仅白名单字段会写）
+        overrides_patch: dict = {}
+        if "min_apr_pct" in raw_patch:
+            overrides_patch["min_apr_pct"] = raw_patch["min_apr_pct"]
+        if "max_concurrent_positions" in raw_patch:
+            overrides_patch["max_positions"] = raw_patch["max_concurrent_positions"]
+        # max_position_notional_usd 暂未在 overrides 白名单中，需要时再加
+        if overrides_patch:
+            try:
+                save_overrides(overrides_patch)
+            except Exception:
+                pass  # 持久化失败不阻断 in-memory 更新
+
+        # 2. 同步 scanner._config（APR 阈值）
+        new_apr = raw_patch.get("min_apr_pct")
+        for owner_name in ("paper_session", "runner"):
+            owner = getattr(request.app.state, owner_name, None)
+            scanner = getattr(owner, "_scanner", None) if owner else None
+            scfg = getattr(scanner, "_config", None) if scanner else None
+            if scfg is not None and new_apr is not None and hasattr(scfg, "min_apr_pct"):
+                try:
+                    scfg.min_apr_pct = _Dec(str(new_apr))
+                except Exception:
+                    pass
+
+        # 2b. 同步 live RiskLimits.max_positions — paper_session._executor._guard.limits
+        # 否则 max_concurrent_positions PATCH 看似成功但 RiskGuard 仍用 boot 期旧值。
+        new_max_pos = raw_patch.get("max_concurrent_positions")
+        if new_max_pos is not None:
+            try:
+                sess = getattr(request.app.state, "paper_session", None)
+                executor = getattr(sess, "_executor", None) if sess else None
+                guard = getattr(executor, "_guard", None) if executor else None
+                if guard is not None and hasattr(guard, "limits"):
+                    guard.limits.max_positions = int(new_max_pos)
+            except Exception:
+                pass
+
+        # 3. 同步 strategy_cfg（GET /status 读这里）
+        cfg = patch_strategy_config(request.app.state, raw_patch)
+        # patch_strategy_config 只做 flat update，把 min_apr_pct 写到 entry.* 嵌套
+        if new_apr is not None:
+            cfg.setdefault("entry", {})["min_apr_pct"] = str(new_apr)
+        if "max_concurrent_positions" in raw_patch:
+            cfg.setdefault("position", {})["max_positions"] = int(raw_patch["max_concurrent_positions"])
+        if "max_position_notional_usd" in raw_patch:
+            cfg.setdefault("position", {})["size_usd"] = str(raw_patch["max_position_notional_usd"])
+        if "scan_interval_seconds" in raw_patch:
+            cfg["scan_interval_seconds"] = float(raw_patch["scan_interval_seconds"])
+        request.app.state.strategy_cfg = cfg
+
     return StrategyConfig(
         min_apr_pct=str(cfg.get("entry", {}).get("min_apr_pct", "10.0")),
         max_position_notional_usd=str(cfg.get("position", {}).get("size_usd", "50")),
@@ -183,37 +248,56 @@ async def funding_rate_opportunities(
 async def perp_basis_exchange_balance(
     _: CurrentUser, request: Request,
 ) -> dict:
-    """#02-4: per-exchange perp 可用余额 — 跨所策略需要每个 exchange 都有 perp margin。
+    """#02-4: per-exchange 总可动用 USDT — 累加所有可划转到 perp 钱包的子账户。
+
+    设计：策略开仓前 ``_ensure_perp_margin`` 会自动跨钱包级联划转
+    （binance: spot/cross-margin/funding → perp；htx: spot → swap；
+     okx UTA 共享无需划转）。所以"可用"应该看 **所有 USDT 钱包累加**，
+    而不是单独 perp 钱包。
 
     数据源：reconciler.balance_cache（30s 周期更新）。
     """
+    # 与 perp_basis paper_trading._USABLE_USDT_KEYS 同义 — 单一真相
+    _USABLE = {
+        "binance": ("USDT_PERP", "USDT", "USDT_MARGIN", "USDT_FUNDING"),
+        "htx": ("USDT_HTX_SWAP", "USDT"),
+        "okx": ("USDT",),
+        "bybit": ("USDT",),
+        "bitget": ("USDT",),
+    }
     rec = getattr(request.app.state, "balance_reconciler", None)
     if rec is None or not getattr(rec, "balance_cache", None):
         return {"data": [], "ready": False}
     out: list[dict] = []
     for ex_name, assets in (rec.balance_cache or {}).items():
-        # 各 CEX perp 钱包对应的 cache key 不同：
-        # - binance: USDT_PERP（USDM 永续钱包）
-        # - htx: USDT_HTX_SWAP（UTA swap 钱包，CCXT 默认拿不到）
-        # - okx UTA / bybit UTA / bitget UTA: 共享 USDT
-        perp_usdt = (
-            (assets or {}).get("USDT_PERP")
-            or (assets or {}).get("USDT_HTX_SWAP")
-            or (assets or {}).get("USDT", {})
-        )
-        if not perp_usdt:
+        if not isinstance(assets, dict):
             continue
-        try:
-            free = float(perp_usdt.get("free") or 0)
-            total = float(perp_usdt.get("total") or 0)
-            out.append({
-                "exchange": ex_name,
-                "perp_usdt_free": str(round(free, 4)),
-                "perp_usdt_total": str(round(total, 4)),
-                "ready": free >= 10.0,  # 至少 $10 才能开 $50 × 5 leverage
-            })
-        except Exception:
-            pass
+        keys = _USABLE.get(ex_name, ("USDT",))
+        breakdown: dict[str, float] = {}
+        total_free = 0.0
+        total_total = 0.0
+        for k in keys:
+            info = assets.get(k)
+            if not isinstance(info, dict):
+                continue
+            try:
+                f = float(info.get("free") or 0)
+                t = float(info.get("total") or 0)
+            except Exception:
+                continue
+            if t > 0:
+                breakdown[k] = round(f, 4)
+                total_free += f
+                total_total += t
+        if total_total <= 0:
+            continue
+        out.append({
+            "exchange": ex_name,
+            "perp_usdt_free": str(round(total_free, 4)),
+            "perp_usdt_total": str(round(total_total, 4)),
+            "wallet_breakdown": breakdown,  # 显示各子钱包详情
+            "ready": total_free >= 10.0,    # 至少 $10 才能开 $50 × 5 leverage
+        })
     return {
         "data": sorted(out, key=lambda x: x["exchange"]),
         "ready": sum(1 for r in out if r["ready"]) >= 2,  # ≥ 2 个 exchange 就绪 = 跨所可用
@@ -488,6 +572,12 @@ async def start_any(
             paper_running=is_perp_basis_paper_running(state),
             timestamp=datetime.now(timezone.utc),
         )
+    if strategy_id == "cex-dex":
+        await start_cex_dex(state)
+        return StrategyActionResponse(
+            paper_running=is_cex_dex_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
     # 未实现策略:返回响应壳子,前端展示 "queued"
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
 
@@ -513,6 +603,12 @@ async def stop_any(
         await stop_perp_basis_paper(state)
         return StrategyActionResponse(
             paper_running=is_perp_basis_paper_running(state),
+            timestamp=datetime.now(timezone.utc),
+        )
+    if strategy_id == "cex-dex":
+        await stop_cex_dex(state)
+        return StrategyActionResponse(
+            paper_running=is_cex_dex_running(state),
             timestamp=datetime.now(timezone.utc),
         )
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))

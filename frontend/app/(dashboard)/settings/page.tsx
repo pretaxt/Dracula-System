@@ -9,8 +9,12 @@ import { getStrategyStatus } from '@/lib/api/strategies'
 import {
   getExchangeCredentials,
   updateExchangeCredentials,
+  getWeb3Credentials,
+  updateWeb3Credentials,
   type ExchangeCredential,
   type ExchangeCredentialPatch,
+  type Web3CredentialsMeta,
+  type Web3CredentialsPatch,
 } from '@/lib/api/system'
 
 const EXCHANGE_LABEL: Record<string, string> = {
@@ -33,6 +37,11 @@ export default function SettingsPage() {
     queryFn: getExchangeCredentials,
     refetchInterval: 60_000,
   })
+  const { data: web3Data } = useQuery({
+    queryKey: ['web3-credentials'],
+    queryFn: getWeb3Credentials,
+    refetchInterval: 60_000,
+  })
 
   const tradingMode = (stratStatus?.trading_mode ?? 'paper').toLowerCase()
   const isLive = tradingMode === 'live'
@@ -53,6 +62,9 @@ export default function SettingsPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* 交易所 API 凭据 */}
       <ExchangeCredentialsSection credentials={credsData?.data ?? []} />
+
+      {/* Web3 凭据 */}
+      <Web3CredentialsSection meta={web3Data ?? null} />
 
       {/* 关于系统 */}
       <CardElevated style={{ padding: 20 }} className="animate-in">
@@ -271,6 +283,174 @@ function CredentialEditModal({
               api_secret: apiSecret.trim(),
               ...(requiresPassphrase ? { passphrase: passphrase.trim() } : {}),
             })}
+            style={{ flex: 1 }}
+          >
+            {isPending ? '保存中…' : '保存'}
+          </Button>
+          <Button variant="secondary" onClick={onClose} style={{ flex: 1 }}>
+            取消
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// Web3 凭据管理 (CEX-DEX 套利)
+// ---------------------------------------------------------------------------
+
+function Web3CredentialsSection({ meta }: { meta: Web3CredentialsMeta | null }) {
+  const [showModal, setShowModal] = useState(false)
+  const qc = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: (patch: Web3CredentialsPatch) => updateWeb3Credentials(patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['web3-credentials'] })
+      setShowModal(false)
+    },
+  })
+
+  const configured = meta?.configured ?? false
+
+  return (
+    <CardElevated style={{ padding: 20 }} className="animate-in">
+      <SectionHeader
+        title="Web3 凭据 (CEX-DEX 套利)"
+        subtitle="ARBITRUM ONE"
+        right={
+          configured
+            ? <Badge tone="active"><CheckCircle2 size={10} style={{marginRight:4}}/>已配置</Badge>
+            : <Badge tone="paused"><AlertCircle size={10} style={{marginRight:4}}/>未配置</Badge>
+        }
+      />
+
+      <div style={{
+        padding: 16,
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--border-default)',
+        background: 'var(--bg-card)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+          <span style={{ color: 'var(--text-secondary)' }}>钱包地址</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: configured ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+            {meta?.wallet_address
+              ? `${meta.wallet_address.slice(0,8)}...${meta.wallet_address.slice(-6)}`
+              : '(未配置)'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+          <span style={{ color: 'var(--text-secondary)' }}>Arbitrum RPC</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: configured ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+            {meta?.rpc_url_preview || '(未配置)'}
+          </span>
+        </div>
+        {meta?.updated_at && (
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+            更新于 {new Date(meta.updated_at).toLocaleString()}
+          </div>
+        )}
+        <Button
+          variant="secondary"
+          onClick={() => setShowModal(true)}
+          style={{ marginTop: 4, fontSize: 13, alignSelf: 'flex-start' }}
+        >
+          <Edit3 size={11} style={{marginRight:6}}/>
+          {configured ? '更新凭据' : '配置凭据'}
+        </Button>
+      </div>
+
+      {showModal && (
+        <Web3CredentialModal
+          onClose={() => setShowModal(false)}
+          onSave={(patch) => mutation.mutate(patch)}
+          isPending={mutation.isPending}
+          error={mutation.error ? String(mutation.error) : null}
+        />
+      )}
+    </CardElevated>
+  )
+}
+
+
+function Web3CredentialModal({
+  onClose, onSave, isPending, error,
+}: {
+  onClose: () => void
+  onSave: (patch: Web3CredentialsPatch) => void
+  isPending: boolean
+  error: string | null
+}) {
+  const [privateKey, setPrivateKey] = useState('')
+  const [rpcUrl, setRpcUrl] = useState('')
+
+  const canSubmit = privateKey.trim().length >= 64 && rpcUrl.trim().startsWith('https://') 
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 520, maxWidth: '90vw',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-md)',
+          padding: 24,
+          display: 'flex', flexDirection: 'column', gap: 16,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 20, color: 'var(--text-primary)' }}>
+            Web3 凭据
+          </h3>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <Field
+          label="钱包私钥 (0x...)"
+          value={privateKey}
+          onChange={setPrivateKey}
+          placeholder="0x你的热钱包私钥"
+          type="password"
+        />
+        <Field
+          label="Arbitrum RPC URL"
+          value={rpcUrl}
+          onChange={setRpcUrl}
+          placeholder="https://arb-mainnet.g.alchemy.com/v2/..."
+        />
+
+        <div style={{ fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.7 }}>
+          ⚠️ 私钥以 <code>chmod 600</code> 写入 <code>/app/state/web3_credentials.json</code>。<br/>
+          🔒 热钱包仅存放 CEX-DEX 套利所需资金，不要充入大额资产。<br/>
+          🔄 保存后<strong>需重启 api 容器</strong>以使用新凭据。
+        </div>
+
+        {error && (
+          <div style={{ padding: 8, background: 'rgba(227,64,88,0.10)', color: 'var(--accent-blood)', fontSize: 13, borderRadius: 'var(--radius-sm)' }}>
+            ❌ {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <Button
+            variant="primary"
+            disabled={!canSubmit || isPending}
+            onClick={() => onSave({ private_key: privateKey.trim(), rpc_url: rpcUrl.trim() })}
             style={{ flex: 1 }}
           >
             {isPending ? '保存中…' : '保存'}

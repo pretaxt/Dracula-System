@@ -535,8 +535,19 @@ class LiveBroker:
             required_margin = notional / self._perp_leverage
             target = required_margin * Decimal("1.2")
 
-            raw = await usdm_client.fetch_balance()
-            current = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
+            # 优先用 adapter 自定义方法（htx UTA fetch_balance 报 4002，需走 v3 endpoint）
+            fetch_perp = getattr(self._adapter, "fetch_perp_usdt_balance", None)
+            if fetch_perp is not None:
+                try:
+                    current = await fetch_perp()
+                except Exception:
+                    current = Decimal("0")
+            else:
+                try:
+                    raw = await usdm_client.fetch_balance()
+                    current = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
+                except Exception:
+                    current = Decimal("0")
 
             if current >= target:
                 logger.debug(

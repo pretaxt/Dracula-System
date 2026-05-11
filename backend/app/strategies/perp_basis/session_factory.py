@@ -70,34 +70,42 @@ def build_perp_basis_paper_session(
     perp_leverage: Decimal = Decimal("5"),
     market_data_hub: Any = None,
     live_mode: bool = False,
+    reconciler: Any = None,
 ) -> PerpBasisPaperSession | None:
-    """从 yaml dict + adapters + scanner 构造 perp_basis paper session。
+    """从 yaml dict + adapters + scanner 构造 perp_basis session。
 
     paper 模式下用 _PerpPaperBrokerWrapper 给所有 adapter 包装 PaperBroker；
     live 模式仅给已鉴权的 adapter 建 LiveBroker。
+
+    无论 paper/live：preflight 一律读 reconciler 真实余额（fail-closed），
+    任何无 API key 或同步失败的交易所自动退出参选。
     """
     entry = cfg.get("entry", {}) or {}
     pos_cfg = cfg.get("position", {}) or {}
     exit_cfg = cfg.get("exit", {}) or {}
     scan_cfg = cfg.get("scanning", {}) or {}
 
+    # 无论 paper/live，未配 API key 的 adapter 不能参与 — 否则 preflight 必拒，
+    # 多余的 broker 只会让 scanner 提议无效组合浪费 tick。
+    eligible_adapters = {
+        n: a for n, a in adapters.items() if getattr(a, "_api_key", "")
+    }
     if live_mode:
         brokers: dict[str, Any] = {
             n: LiveBroker(adapter=a, fee_rate=fee_rate, perp_leverage=perp_leverage)
-            for n, a in adapters.items()
-            if getattr(a, "_api_key", "")
+            for n, a in eligible_adapters.items()
         }
     else:
-        # paper 模式：每个 adapter 都包一份 PaperBroker，无需 trading key
+        # paper 模式：仅对有 key 的 adapter 包 PaperBroker（避免 bitget 无 key 也开仓）
         brokers = {
             n: _PerpPaperBrokerWrapper(
                 exchange_name=n, fee_rate=fee_rate, perp_leverage=perp_leverage,
             )
-            for n in adapters.keys()
+            for n in eligible_adapters.keys()
         }
 
-    if not brokers:
-        return None
+    if len(brokers) < 2:
+        return None  # 跨所策略至少需 2 个 broker
 
     risk = cfg.get("risk", {}) or {}
     return PerpBasisPaperSession(
@@ -114,4 +122,5 @@ def build_perp_basis_paper_session(
         )),
         scan_interval_seconds=float(scan_cfg.get("scan_interval_seconds", 60)),
         market_data_hub=market_data_hub,
+        reconciler=reconciler,
     )

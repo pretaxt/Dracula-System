@@ -38,6 +38,9 @@ dependencies = [
 
     # Async HTTP (Telegram notifications)
     "httpx>=0.27.0",
+
+    # Web3 / Arbitrum DEX
+    "web3>=6.15.0",
 ]
 
 [project.optional-dependencies]

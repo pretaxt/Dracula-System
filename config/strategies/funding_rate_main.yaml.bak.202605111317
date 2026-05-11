@@ -46,7 +46,7 @@ scanning:
   scan_interval_seconds: 60       # scanner 周期（秒）；P0 策略保持 60s
   # 仅在任意标的的 funding 结算前 N 分钟内扫描，0=禁用（24h 不停扫）
   # 用每标的 next_funding_time 真实判断，不假设 8h 周期
-  window_only_minutes: 0
+  window_only_minutes: 15
   # 历史费率稳定性过滤：过去 lookback_periods 个 funding 结算中至少
   # min_positive_periods 个为正才视为"稳定"。降低 min_positive_periods 放宽门槛。
   funding_history_check:

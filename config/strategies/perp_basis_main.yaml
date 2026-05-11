@@ -29,9 +29,9 @@ exit:
   margin_warn_pct: 80              # 任一侧 margin 占用 ≥ 80% 触发 stop
 
 position:
-  max_concurrent: 5                # P2-14 从 2 提到 5：跨所 perp-only delta-neutral 风险低
+  max_concurrent: 2                # 实盘起步：先 2 笔同时持仓，观察 1-2 周后再放
   notional_per_position: 50        # USD 起步，与 #04 一致
-  exchanges: ["binance", "okx", "bitget", "bybit", "htx"]   # 全 5 家两两组合 → 10 pairs
+  exchanges: ["binance", "okx", "htx"]   # 仅含 trading key 已配置交易所 (3 家 → 3 pairs)
   candidate_symbols:               # 30 主流（与 #04 同源，避免长尾流动性）
     - BTC
     - ETH
@@ -71,7 +71,10 @@ risk:
   health_safe_diff_apr_max: 200.0     # diff_apr ≤ 200% → safe tier
   health_risky_diff_apr_max: 500.0    # 200% < diff_apr ≤ 500% → risky tier；>500% → dirty tier
 
-# Paper Trading（Phase C）
+# Live Trading（Phase D）
+# 切换为实盘：仅有 trading key 的交易所参与；preflight 读 reconciler 真实余额；
+# 任一 leg 余额不足或同步失败 → fail-closed 拒开。
 paper_trading:
-  enabled: true
-  scan_interval_seconds: 60           # paper tick 节奏（独立于 scanner）
+  enabled: true                       # 实盘启用：OKX hedge posSide 小写 + 跨钱包自动划转完整实现
+  live_mode: true                     # 实盘 LiveBroker（非 PaperBroker wrapper）
+  scan_interval_seconds: 60           # session tick 节奏（独立于 scanner）

@@ -282,106 +282,296 @@ class BalanceReconcilerService:
             if data is not None:
                 self.balance_cache[name] = data
 
-    async def _fetch_binance_extra_wallets(self, adapter: Any) -> dict:
-        """Binance 特定：cross-margin / USDM perp / funding wallet 合并到 cache。
-
-        cache 增加 pseudo-assets:
-          - USDT_MARGIN: cross-margin netAsset
-          - USDT_PERP: USDM perp wallet total
-          - USDT_FUNDING: funding wallet free
-          - USDT_SPOT_OTHERS: SPOT 钱包里所有非 USDT 资产（BNB/BTC/ETH 等）折算到 USDT
-            （之前 dashboard 漏算这部分，导致显示 $115 vs 实际 $145+30）
+    async def _binance_fold_assets_to_usdt(
+        self, spot_client: Any, assets: set[str],
+    ) -> dict[str, Decimal]:
+        """非稳定币资产 → USDT 价格映射。
+        优先 hub（避免重复 IO）；剩余资产用 ccxt 批量 fetch_tickers 拉一次。
         """
         from app.exchanges.models import InstrumentType, Symbol  # noqa: PLC0415
-        out: dict = {}
+        prices: dict[str, Decimal] = {}
+        missing: set[str] = set()
+        for a in assets:
+            if self._hub is not None:
+                try:
+                    tk = self._hub.get_ticker(
+                        "binance", InstrumentType.SPOT, Symbol(a, "USDT"),
+                    )
+                    if tk is not None:
+                        raw_t = getattr(tk, "raw", None)
+                        if isinstance(raw_t, dict):
+                            p = raw_t.get("last") or raw_t.get("close") or raw_t.get("bid")
+                            if p is not None:
+                                prices[a] = Decimal(str(p))
+                                continue
+                except Exception:
+                    pass
+            missing.add(a)
+        if missing and spot_client is not None:
+            # 过滤 Binance savings 等不可交易的 wrapper（LDxxx / LPxxx），
+            # 以及未在 markets 中的符号，否则 ccxt 整批 reject。
+            try:
+                if not getattr(spot_client, "markets", None):
+                    await spot_client.load_markets()
+                markets = getattr(spot_client, "markets", {}) or {}
+            except Exception:
+                markets = {}
+            valid: list[str] = []
+            for a in missing:
+                if a.startswith(("LD", "LP")):  # Binance Earn 标记
+                    continue
+                sym = f"{a}/USDT"
+                if not markets or sym in markets:
+                    valid.append(sym)
+            if valid:
+                try:
+                    tks = await spot_client.fetch_tickers(valid)
+                    for sym, tk in (tks or {}).items():
+                        base = sym.split("/")[0]
+                        p = tk.get("last") or tk.get("close")
+                        if p is not None and base in missing:
+                            try:
+                                prices[base] = Decimal(str(p))
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug("binance_batch_fetch_tickers_failed", error=str(e))
+        return prices
 
-        # 0. SPOT 非 USDT 资产 USDT-equiv 折算
-        # 之前 cache 只算 SPOT 钱包的 USDT，BNB/BTC/ETH 等被漏。这里用 hub ticker 折算。
-        try:
-            spot_client = adapter._clients.get(InstrumentType.SPOT)
-            if spot_client is not None:
-                raw = await spot_client.fetch_balance()
-                others_usdt = Decimal("0")
-                _STABLES = {"USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD"}
-                non_zero = (raw.get("total") or {})
-                tasks = []
-                for asset, amt in non_zero.items():
-                    if asset in _STABLES:
-                        continue
-                    try:
-                        amt_dec = Decimal(str(amt or 0))
-                    except Exception:
-                        continue
-                    if amt_dec <= Decimal("0.0001"):  # 微尘埃
-                        continue
-                    # 优先 hub ticker（避免重复 fetch）；fallback 直接拉
-                    px: Decimal | None = None
-                    if self._hub is not None:
-                        try:
-                            tk = self._hub.get_ticker(
-                                "binance", InstrumentType.SPOT, Symbol(asset, "USDT"),
-                            )
-                            if tk is not None:
-                                raw_t = getattr(tk, "raw", None)
-                                if isinstance(raw_t, dict):
-                                    p = raw_t.get("last") or raw_t.get("close") or raw_t.get("bid")
-                                    if p is not None:
-                                        px = Decimal(str(p))
-                        except Exception:
-                            pass
-                    if px is not None and px > 0:
-                        others_usdt += amt_dec * px
-                if others_usdt > Decimal("0.01"):
-                    out["USDT_SPOT_OTHERS"] = {
-                        "free": str(others_usdt), "total": str(others_usdt),
-                        "used": "0",
-                    }
-        except Exception as e:
-            logger.debug("reconcile_spot_others_failed", error=str(e))
-        try:
-            spot_client = adapter._clients.get(InstrumentType.SPOT)
-            if spot_client is not None:
-                ma = await spot_client.sapi_get_margin_account()
-                margin_usdt = Decimal("0")
-                for a in ma.get("userAssets", []):
-                    if a.get("asset") == "USDT":
-                        margin_usdt = Decimal(str(a.get("netAsset") or 0))
-                        break
-                out["USDT_MARGIN"] = {
-                    "free": str(margin_usdt), "total": str(margin_usdt), "used": "0",
+    async def _fetch_binance_extra_wallets(self, adapter: Any) -> dict:
+        """Binance 全钱包采集 — 现货 + 杠杆(全仓+逐仓) + 合约(U本位+币本位) + 资金账户。
+
+        cache 写入 pseudo-assets（每项独立可累加，dashboard 不重复）：
+
+        现货账户 (SPOT)：
+          USDT                  : SPOT USDT 由主 fetch_balance 写入
+          USDT_SPOT_OTHERS      : SPOT 非稳定币资产 → USDT-equiv
+
+        杠杆账户 (MARGIN)：
+          USDT_MARGIN           : 全仓杠杆 USDT netAsset
+          USDT_MARGIN_OTHERS    : 全仓杠杆非 USDT netAsset → USDT-equiv (BNB 抵押等)
+          USDT_MARGIN_ISOLATED  : 逐仓杠杆所有交易对净资产 → USDT-equiv
+
+        合约账户 (FUTURES)：
+          USDT_PERP             : U 本位合约 totalMarginBalance
+          USDT_PERP_COIN        : 币本位合约（如有）→ USDT-equiv
+
+        资金账户 (FUNDING)：
+          USDT_FUNDING          : 资金账户 USDT free
+          USDT_FUNDING_OTHERS   : 资金账户非稳定币 → USDT-equiv
+        """
+        from app.exchanges.models import InstrumentType  # noqa: PLC0415
+        _STABLES = {"USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD"}
+        out: dict = {}
+        spot_client = adapter._clients.get(InstrumentType.SPOT)
+        perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
+        if spot_client is None:
+            return out
+
+        # === Phase 1: 并发拉取所有钱包原始数据 ===
+        async def _safe(awaitable):
+            try:
+                return await awaitable
+            except Exception as e:
+                return e
+
+        async def _none():
+            return None
+
+        spot_bal_task = _safe(spot_client.fetch_balance())
+        perp_bal_task = _safe(perp_client.fetch_balance()) if perp_client else _none()
+        margin_acc_task = _safe(spot_client.sapi_get_margin_account())
+        isolated_task = (
+            _safe(spot_client.sapi_get_margin_isolated_account())
+            if hasattr(spot_client, "sapi_get_margin_isolated_account") else _none()
+        )
+        funding_task = _safe(spot_client.sapi_post_asset_get_funding_asset({}))
+        coin_perp_task = (
+            _safe(spot_client.dapi_private_v2_get_account())
+            if hasattr(spot_client, "dapi_private_v2_get_account") else _none()
+        )
+
+        spot_bal, perp_bal, margin_acc, iso_acc, funding_data, coin_acc = await asyncio.gather(
+            spot_bal_task, perp_bal_task, margin_acc_task, isolated_task,
+            funding_task, coin_perp_task,
+        )
+
+        # === Phase 2: 收集需要折算的非稳定币资产 ===
+        needed: set[str] = set()
+
+        def _collect(asset: str | None, amt: Any) -> Decimal:
+            try:
+                d = Decimal(str(amt or 0))
+            except Exception:
+                return Decimal("0")
+            if asset and asset not in _STABLES and abs(d) > Decimal("0.0001"):
+                needed.add(asset)
+            return d
+
+        if isinstance(spot_bal, dict):
+            for asset, amt in (spot_bal.get("total") or {}).items():
+                _collect(asset, amt)
+        if isinstance(margin_acc, dict):
+            for a in margin_acc.get("userAssets", []) or []:
+                _collect(a.get("asset"), a.get("netAsset"))
+        if isinstance(funding_data, list):
+            for a in funding_data:
+                _collect(a.get("asset"), a.get("free"))
+        # 逐仓 + 币本位的折算 BTC 估值需要 BTC ticker
+        if isinstance(iso_acc, dict) and Decimal(str(iso_acc.get("totalNetAssetOfBtc") or 0)) > 0:
+            needed.add("BTC")
+        if isinstance(coin_acc, dict):
+            for a in coin_acc.get("assets", []) or []:
+                _collect(a.get("asset"), a.get("walletBalance"))
+
+        prices = await self._binance_fold_assets_to_usdt(spot_client, needed)
+
+        # === Phase 3: SPOT 非 USDT ===
+        if isinstance(spot_bal, dict):
+            spot_others = Decimal("0")
+            for asset, amt in (spot_bal.get("total") or {}).items():
+                if asset in _STABLES:
+                    continue
+                try:
+                    amt_d = Decimal(str(amt or 0))
+                except Exception:
+                    continue
+                if amt_d <= Decimal("0.0001"):
+                    continue
+                px = prices.get(asset)
+                if px and px > 0:
+                    spot_others += amt_d * px
+            if spot_others > Decimal("0.01"):
+                out["USDT_SPOT_OTHERS"] = {
+                    "free": str(spot_others), "total": str(spot_others), "used": "0",
                 }
-        except Exception as e:
-            logger.debug("reconcile_margin_fetch_failed", error=str(e))
-        try:
-            perp_client = adapter._clients.get(InstrumentType.PERPETUAL)
-            if perp_client is not None:
-                raw = await perp_client.fetch_balance()
-                perp_total = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
-                perp_free = Decimal(str((raw.get("free") or {}).get("USDT") or 0))
+
+        # === Phase 4: 全仓杠杆 ===
+        if isinstance(margin_acc, dict):
+            margin_usdt = Decimal("0")
+            margin_others = Decimal("0")
+            for a in margin_acc.get("userAssets", []) or []:
+                asset = a.get("asset")
+                try:
+                    net = Decimal(str(a.get("netAsset") or 0))
+                except Exception:
+                    continue
+                if abs(net) < Decimal("0.0001"):
+                    continue
+                if asset == "USDT":
+                    margin_usdt = net
+                elif asset in _STABLES:
+                    margin_others += net  # 其他稳定币按 1:1
+                else:
+                    px = prices.get(asset)
+                    if px and px > 0:
+                        margin_others += net * px
+            out["USDT_MARGIN"] = {
+                "free": str(margin_usdt), "total": str(margin_usdt), "used": "0",
+            }
+            if abs(margin_others) > Decimal("0.01"):
+                out["USDT_MARGIN_OTHERS"] = {
+                    "free": str(margin_others), "total": str(margin_others), "used": "0",
+                }
+
+        # === Phase 5: 逐仓杠杆 ===
+        # Binance API: sapi_get_margin_isolated_account 返回 totalNetAssetOfBtc（已合计 BTC 估值）
+        if isinstance(iso_acc, dict):
+            try:
+                btc_total = Decimal(str(iso_acc.get("totalNetAssetOfBtc") or 0))
+            except Exception:
+                btc_total = Decimal("0")
+            if btc_total > Decimal("0.000001"):
+                btc_px = prices.get("BTC")
+                if btc_px and btc_px > 0:
+                    iso_usdt = btc_total * btc_px
+                    if iso_usdt > Decimal("0.01"):
+                        out["USDT_MARGIN_ISOLATED"] = {
+                            "free": str(iso_usdt), "total": str(iso_usdt), "used": "0",
+                        }
+
+        # === Phase 6: U 本位合约 (USDM) ===
+        if isinstance(perp_bal, dict):
+            info = perp_bal.get("info", {}) or {}
+            try:
+                # 优先 totalMarginBalance（含未实现盈亏），fallback totalWalletBalance
+                perp_total = Decimal(str(
+                    info.get("totalMarginBalance") or info.get("totalWalletBalance") or 0,
+                ))
+            except Exception:
+                perp_total = Decimal("0")
+            try:
+                perp_free = Decimal(str((perp_bal.get("free") or {}).get("USDT") or 0))
+            except Exception:
+                perp_free = Decimal("0")
+            if perp_total > Decimal("0.01") or perp_free > Decimal("0.01"):
                 out["USDT_PERP"] = {
                     "free": str(perp_free), "total": str(perp_total),
-                    "used": str(perp_total - perp_free),
+                    "used": str(max(Decimal("0"), perp_total - perp_free)),
                 }
-        except Exception as e:
-            logger.debug("reconcile_perp_fetch_failed", error=str(e))
-        # Funding wallet (Binance Pay) — sapi_post_asset_get_funding_asset
-        try:
-            spot_client = adapter._clients.get(InstrumentType.SPOT)
-            if spot_client is not None:
-                fw = await spot_client.sapi_post_asset_get_funding_asset({})
-                funding_usdt = Decimal("0")
-                for a in (fw or []):
-                    if a.get("asset") == "USDT":
-                        funding_usdt = Decimal(str(a.get("free") or 0))
-                        break
-                if funding_usdt > 0:
-                    out["USDT_FUNDING"] = {
-                        "free": str(funding_usdt),
-                        "total": str(funding_usdt),
-                        "used": "0",
-                    }
-        except Exception as e:
-            logger.debug("reconcile_funding_wallet_fetch_failed", error=str(e))
+
+        # === Phase 7: 币本位合约 (COIN-M) ===
+        if isinstance(coin_acc, dict):
+            coin_usdt = Decimal("0")
+            for a in coin_acc.get("assets", []) or []:
+                asset = a.get("asset")
+                try:
+                    wb = Decimal(str(a.get("walletBalance") or 0))
+                except Exception:
+                    continue
+                if abs(wb) < Decimal("0.0001"):
+                    continue
+                if asset in _STABLES:
+                    coin_usdt += wb
+                else:
+                    px = prices.get(asset)
+                    if px and px > 0:
+                        coin_usdt += wb * px
+            if coin_usdt > Decimal("0.01"):
+                out["USDT_PERP_COIN"] = {
+                    "free": str(coin_usdt), "total": str(coin_usdt), "used": "0",
+                }
+
+        # === Phase 8: 资金账户 (FUNDING) ===
+        if isinstance(funding_data, list):
+            funding_usdt = Decimal("0")
+            funding_others = Decimal("0")
+            for a in funding_data:
+                asset = a.get("asset")
+                try:
+                    free = Decimal(str(a.get("free") or 0))
+                    locked = Decimal(str(a.get("locked") or 0))
+                except Exception:
+                    continue
+                tot = free + locked
+                if tot <= Decimal("0.0001"):
+                    continue
+                if asset == "USDT":
+                    funding_usdt = tot
+                elif asset in _STABLES:
+                    funding_others += tot
+                else:
+                    px = prices.get(asset)
+                    if px and px > 0:
+                        funding_others += tot * px
+            if funding_usdt > 0:
+                out["USDT_FUNDING"] = {
+                    "free": str(funding_usdt), "total": str(funding_usdt), "used": "0",
+                }
+            if funding_others > Decimal("0.01"):
+                out["USDT_FUNDING_OTHERS"] = {
+                    "free": str(funding_others), "total": str(funding_others), "used": "0",
+                }
+
+        # 失败的 task 留 debug log
+        for label, val in (
+            ("spot_bal", spot_bal), ("perp_bal", perp_bal),
+            ("margin_acc", margin_acc), ("iso_acc", iso_acc),
+            ("funding", funding_data), ("coin_acc", coin_acc),
+        ):
+            if isinstance(val, Exception):
+                logger.debug("binance_wallet_fetch_failed", wallet=label, error=str(val))
+
         return out
 
     async def _fetch_htx_extra_wallets(self, adapter: Any) -> dict:
@@ -441,6 +631,8 @@ class BalanceReconcilerService:
                             "symbol": p.get("symbol"),
                             "side": p.get("side"),
                             "contracts": contracts,
+                            # contractSize = 每张合约代表的 base 数量（如 HTX TIA = 0.1）
+                            "contractSize": float(p.get("contractSize") or 1.0),
                             "entry_price": float(p.get("entryPrice") or 0),
                             "unrealized_pnl": float(p.get("unrealizedPnl") or 0),
                         })
@@ -511,6 +703,19 @@ class BalanceReconcilerService:
         # paper 模式仓位：DB 有但交易所无真实持仓 — 跳过 leg 对账避免误报
         # #02 perp_basis 当前永远 paper（yaml.paper_trading.live_mode=false）
         paper_only_instances = _get_paper_only_instances_global()
+
+        # 预先聚合：同一 (exchange, symbol) 下所有 OPEN perp leg 的期望总量
+        # 交易所只有一个合并仓位，而 DB 可能有多条平行仓位（如两个 #04 position 都开了 TIA）
+        from app.exchanges.models import InstrumentType as _IT  # noqa: PLC0415
+        _perp_expected: dict[tuple[str, str], Decimal] = {}
+        for _rec in open_records:
+            if _rec.strategy_instance in paper_only_instances:
+                continue
+            for _leg in legs_by_pos.get(_rec.id, []):
+                if _leg.instrument_type == _IT.PERPETUAL.value:
+                    _k = (_leg.exchange, _leg.symbol)
+                    _perp_expected[_k] = _perp_expected.get(_k, Decimal("0")) + _leg.size
+        self._perp_expected = _perp_expected
 
         for rec in open_records:
             if rec.strategy_instance in paper_only_instances:
@@ -608,9 +813,16 @@ class BalanceReconcilerService:
                         "explanation": "DB OPEN 但 perp 真实持仓缺失（已强平/被手动平）",
                     },
                 )
-            actual = abs(Decimal(str(match["contracts"])))
-            drift = abs(actual - leg.size)
-            tolerance = leg.size * _QTY_DRIFT_TOLERANCE_PCT / Decimal("100")
+            # contracts → 真实 token 数量（合约张数 × 每张 base 数，HTX TIA = 0.1/张）
+            _contract_size = Decimal(str(match.get("contractSize") or 1.0))
+            actual = abs(Decimal(str(match["contracts"])) * _contract_size)
+            # 用该 (exchange, symbol) 下所有 OPEN leg 的期望总量做对账
+            # 避免"两个 position 各期望 112 TIA，但交易所只有 224 TIA 合并仓位"的误报
+            expected_total = getattr(self, "_perp_expected", {}).get(
+                (leg.exchange, leg.symbol), leg.size
+            )
+            drift = abs(actual - expected_total)
+            tolerance = expected_total * _QTY_DRIFT_TOLERANCE_PCT / Decimal("100")
             if drift > tolerance:
                 self._alerted.add(key)
                 return ReconcileAlert(
@@ -621,9 +833,12 @@ class BalanceReconcilerService:
                     detail={
                         "position_uuid": rec.uuid,
                         "leg_idx": idx,
-                        "expected_size": str(leg.size),
-                        "actual_contracts": str(actual),
-                        "drift_pct": str(drift / leg.size * 100),
+                        "expected_total": str(expected_total),
+                        "expected_this_leg": str(leg.size),
+                        "actual_qty": str(actual),
+                        "actual_contracts": str(match["contracts"]),
+                        "contract_size": str(_contract_size),
+                        "drift_pct": str(drift / expected_total * 100),
                     },
                 )
 

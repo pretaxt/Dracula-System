@@ -87,20 +87,104 @@ class BinanceAdapter(CCXTAdapter):
     # ------------------------------------------------------------------
 
     async def top_up_perp_margin(self, amount: Decimal) -> None:
-        """从 spot 钱包划转 USDT 到 USDM 合约钱包（Universal Transfer API）。
+        """补 USDT 到 USDM 合约钱包，级联多源：spot → cross-margin → funding。
 
-        两个钱包是隔离的：spot wallet 和 USDM futures wallet 余额各自独立。
-        永续开仓需要 USDM wallet 有足够保证金，靠 CCXT transfer 实时补足。
+        Binance 4 个钱包隔离：spot / USDM future / cross-margin / funding。
+        策略 perp 开仓前 _ensure_perp_margin 调本方法补 shortfall。
+        级联顺序：
+          1. spot 钱包有足量 USDT → spot → future
+          2. spot 不够 → cross-margin → spot → future (两步)
+          3. 还不够 → funding → spot → future (两步)
+        每步失败 raise；上层 fail-closed 拒开。
         """
         if amount <= 0:
             return
         spot_client = self._clients[InstrumentType.SPOT]
-        await spot_client.transfer("USDT", float(amount), "spot", "future")
+        needed = Decimal(str(amount))
+
+        # 1. 看 spot 钱包 USDT free
+        spot_bal = await spot_client.fetch_balance()
+        spot_free = Decimal(str((spot_bal.get("free") or {}).get("USDT") or 0))
+
+        if spot_free >= needed:
+            await spot_client.transfer("USDT", float(needed), "spot", "future")
+            logger.info(
+                "binance_perp_margin_topped_up",
+                source="spot", amount=str(needed),
+            )
+            return
+
+        # 2. spot 不够，先从 cross-margin → spot
+        shortfall_for_spot = needed - spot_free
+        try:
+            ma = await spot_client.sapi_get_margin_account()
+            margin_free = Decimal("0")
+            for a in ma.get("userAssets", []):
+                if a.get("asset") == "USDT":
+                    margin_free = Decimal(str(a.get("free") or 0))
+                    break
+        except Exception:
+            margin_free = Decimal("0")
+
+        if margin_free >= shortfall_for_spot:
+            # cross-margin → spot
+            await spot_client.sapi_post_asset_transfer({
+                "type": "MARGIN_MAIN",
+                "asset": "USDT",
+                "amount": str(shortfall_for_spot),
+            })
+            logger.info(
+                "binance_cross_margin_to_spot",
+                amount=str(shortfall_for_spot),
+            )
+            # spot → future（整 needed）
+            await spot_client.transfer("USDT", float(needed), "spot", "future")
+            logger.info(
+                "binance_perp_margin_topped_up",
+                source="cross_margin", amount=str(needed),
+            )
+            return
+
+        # 3. cross-margin 也不够，尝试 funding wallet
+        try:
+            fw = await spot_client.sapi_post_asset_get_funding_asset({})
+            funding_free = Decimal("0")
+            for a in (fw or []):
+                if a.get("asset") == "USDT":
+                    funding_free = Decimal(str(a.get("free") or 0))
+                    break
+        except Exception:
+            funding_free = Decimal("0")
+
+        # 累加可动用 = spot + cross-margin + funding
+        total_available = spot_free + margin_free + funding_free
+        if total_available < needed:
+            raise RuntimeError(
+                f"binance: insufficient USDT across all wallets "
+                f"(spot={spot_free:.4f} cross_margin={margin_free:.4f} "
+                f"funding={funding_free:.4f}) for top_up {needed:.4f}"
+            )
+
+        # cross-margin 全划转
+        if margin_free > 0:
+            await spot_client.sapi_post_asset_transfer({
+                "type": "MARGIN_MAIN", "asset": "USDT",
+                "amount": str(margin_free),
+            })
+        # funding 划转剩余
+        remaining_after_margin = shortfall_for_spot - margin_free
+        if remaining_after_margin > 0 and funding_free > 0:
+            await spot_client.sapi_post_asset_transfer({
+                "type": "FUNDING_MAIN", "asset": "USDT",
+                "amount": str(min(funding_free, remaining_after_margin)),
+            })
+        # spot → future
+        await spot_client.transfer("USDT", float(needed), "spot", "future")
         logger.info(
             "binance_perp_margin_topped_up",
-            from_account="spot",
-            to_account="future",
-            amount=str(amount),
+            source="cross_margin+funding", amount=str(needed),
+            spot_free=str(spot_free), margin_free=str(margin_free),
+            funding_free=str(funding_free),
         )
 
     async def top_up_spot_margin(self, amount: Decimal) -> None:

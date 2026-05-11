@@ -1,0 +1,38 @@
+# 策略 #5 — CEX-DEX 套利 (Arbitrum One)
+# 阶段一：ETH/USDT 单对，验证执行逻辑与滑点误差
+
+instance_name: cex_dex_main
+strategy_type: cex_dex
+enabled: true
+
+scan_interval_seconds: 5
+
+execution:
+  mode: paper
+  max_trade_usd: 200          # 单笔上限 $200
+  max_daily_loss_usd: 50      # 日损熔断 $50（保守）
+  max_gas_gwei: 2.0           # Arbitrum gas 上限
+  min_net_profit_usd: 2.0     # 最低净利润门槛 $2（扣 gas + 手续费后）
+  max_slippage_bps: 25        # 最大滑点 25 bps
+  max_open_trades: 1          # 单对只允许 1 笔开仓
+
+cex:
+  exchange: binance
+  taker_fee_rate: 0.001       # Binance taker 0.1%
+
+# 阶段一：只做 ETH — 流动性最深，价差最稳
+pairs:
+  - base: ETH
+    quote: USDT
+    cex_symbol: ETH/USDT
+    pool_fee: 500              # Uniswap V3 ETH/USDT 0.05% 池（深度最好）
+    dex_base_token: WETH
+    dex_quote_token: USDT
+
+# 阶段二（待库存充足后启用）：
+# - base: ARB
+#   quote: USDT
+#   cex_symbol: ARB/USDT
+#   pool_fee: 3000
+#   dex_base_token: ARB
+#   dex_quote_token: USDT

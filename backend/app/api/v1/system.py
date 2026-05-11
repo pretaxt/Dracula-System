@@ -273,3 +273,52 @@ async def _hot_reload_exchange(app_state, exchange: str) -> None:
             adapter=new_adapter, fee_rate=fee_rate, perp_leverage=perp_lev,
         )
         logger.info("live_broker_hot_reloaded", exchange=exchange)
+
+
+# ---------------------------------------------------------------------------
+# Web3 / CEX-DEX 凭据
+# ---------------------------------------------------------------------------
+
+class Web3CredentialsMeta(BaseModel):
+    configured: bool
+    wallet_address: str | None = None
+    rpc_url_preview: str | None = None
+    updated_at: str | None = None
+
+
+class Web3CredentialsPatch(BaseModel):
+    private_key: str
+    rpc_url: str
+
+
+@router.get("/web3-credentials", response_model=Web3CredentialsMeta)
+async def get_web3_credentials(_: CurrentUser) -> Web3CredentialsMeta:
+    from app.services.web3_credentials import get_web3_credentials_meta  # noqa: PLC0415
+    return Web3CredentialsMeta(**get_web3_credentials_meta())
+
+
+@router.post("/web3-credentials", response_model=Web3CredentialsMeta)
+async def update_web3_credentials(
+    body: Web3CredentialsPatch,
+    _: CurrentUser,
+) -> Web3CredentialsMeta:
+    private_key = body.private_key.strip()
+    # 标准化：确保 0x 前缀
+    if private_key and not private_key.startswith("0x"):
+        private_key = "0x" + private_key
+    rpc_url = body.rpc_url.strip()
+
+    if len(private_key.lstrip("0x")) < 60:
+        raise HTTPException(status_code=422, detail="private_key 格式错误（十六进制私钥，长度须 ≥ 64 字符）")
+    if not rpc_url.startswith("https://"):
+        raise HTTPException(status_code=422, detail="rpc_url 须以 https:// 开头")
+
+    try:
+        from app.services.web3_credentials import save_web3_credentials  # noqa: PLC0415
+        save_web3_credentials(private_key, rpc_url)
+    except Exception as exc:
+        logger.exception("web3_credentials_save_failed")
+        raise HTTPException(status_code=500, detail=f"保存失败: {exc}") from exc
+
+    from app.services.web3_credentials import get_web3_credentials_meta  # noqa: PLC0415
+    return Web3CredentialsMeta(**get_web3_credentials_meta())

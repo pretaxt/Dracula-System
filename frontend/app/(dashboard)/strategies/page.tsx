@@ -5,6 +5,9 @@ import { useState } from 'react'
 import {
   getStrategyStatus,
   getSpotPerpConfig,
+  getPerpBasisConfig,
+  getCexDexStatus,
+  getCexDexWalletBalance,
   startStrategyById,
   stopStrategyById,
 } from '@/lib/api/strategies'
@@ -23,10 +26,20 @@ const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
   UNDERWATER: 'warn',
 }
 
+const STATUS_LABEL: Record<StrategyStatus, string> = {
+  RUNNING: '运行中',
+  PLANNED: '待启动',
+  MONITOR: '监控只读',
+  DISABLED: '已停用',
+  UNDERWATER: '回撤中',
+  PAPER: '模拟',
+}
+
 // catalog id → backend strategy_instance（dashboardSummary.strategy_performance.instance）
 const INSTANCE_MAP: Record<string, string> = {
   'funding-rate': 'funding_rate_main',
   'spot-perp':    'spot_perp_main',
+  'perp-basis':   'perp_basis_main',
 }
 
 type StrategyPerf = {
@@ -47,6 +60,19 @@ export default function StrategiesPage() {
   const { data } = useQuery({ queryKey: ['strategy'], queryFn: getStrategyStatus, refetchInterval: 10_000 })
   const { data: summary } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
   const { data: spCfg } = useQuery({ queryKey: ['spot-perp-config'], queryFn: getSpotPerpConfig, refetchInterval: 10_000, retry: false })
+  const { data: pbCfg } = useQuery({ queryKey: ['perp-basis-config'], queryFn: getPerpBasisConfig, refetchInterval: 10_000, retry: false })
+  const { data: cexDexStatus } = useQuery({
+    queryKey: ['cex-dex-status'],
+    queryFn: getCexDexStatus,
+    refetchInterval: 10_000,
+    retry: false,
+  })
+  const { data: cexDexWalletList } = useQuery({
+    queryKey: ['cex-dex-wallet-list'],
+    queryFn: getCexDexWalletBalance,
+    refetchInterval: 60_000,
+    retry: false,
+  })
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ['strategy'] })
     qc.invalidateQueries({ queryKey: ['spot-perp-config'] })
@@ -112,6 +138,57 @@ export default function StrategiesPage() {
           'positive' | 'negative' | undefined,
         positions: max > 0 ? `${open} / ${max}` : `${open}`,
         posLabel: '持仓',
+        status,
+      }
+    }
+
+    // #02 perp-basis：从 perp-basis/config paper_running 读真实运行状态
+    if (s.id === 'perp-basis') {
+      const openCnt = perf?.open_positions ?? 0
+      const totalPnl = perf ? parseFloat(perf.total_pnl) : 0
+      const max = pbCfg?.max_concurrent ?? 0
+      const notional = pbCfg?.notional_per_position ? parseFloat(pbCfg.notional_per_position) : 0
+      const deployed = openCnt * notional
+      const configMax = max * notional
+      const account = parseFloat(summary?.total_equity_usd ?? '0')
+      const status: StrategyStatus =
+        pbCfg?.paper_running ? 'RUNNING'
+        : pbCfg ? 'PLANNED'
+        : s.status
+      return {
+        capital: notional > 0
+          ? `$${deployed.toFixed(0)} / $${account.toFixed(0)} / $${configMax.toFixed(0)}`
+          : '—',
+        monthly: perf
+          ? (totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`)
+          : null,
+        monthlyTone: (totalPnl > 0 ? 'positive' : totalPnl < 0 ? 'negative' : undefined) as
+          'positive' | 'negative' | undefined,
+        positions: max > 0 ? `${openCnt} / ${max}` : `${openCnt}`,
+        posLabel: '持仓',
+        status,
+      }
+    }
+
+    // #05 cex-dex：从 cex-dex/status 读运行状态
+    if (s.id === 'cex-dex') {
+      const mode = cexDexStatus?.mode ?? 'unconfigured'
+      const running = cexDexStatus?.running ?? false
+      const dailyLoss = cexDexStatus?.daily_loss_usd ?? 0
+      const maxDailyLoss = cexDexStatus?.max_daily_loss_usd ?? 100
+      const status: StrategyStatus =
+        running && mode === 'live' ? 'RUNNING'
+        : running && mode === 'paper' ? 'PAPER'
+        : 'PLANNED'
+      const walletUsd = parseFloat(cexDexWalletList?.total_usd ?? '0')
+      return {
+        capital: walletUsd > 0 ? `$${walletUsd.toFixed(0)} (链)` : '—',
+        monthly: dailyLoss > 0
+          ? `-$${dailyLoss.toFixed(2)} / $${maxDailyLoss.toFixed(0)}`
+          : '$0.00',
+        monthlyTone: dailyLoss > 0 ? 'negative' as const : undefined,
+        positions: cexDexStatus?.open_trades?.toString() ?? '—',
+        posLabel: '成交',
         status,
       }
     }
@@ -237,7 +314,21 @@ export default function StrategiesPage() {
                   </p>
                 </div>
               </div>
-              <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {s.status === 'RUNNING' && (
+                  <span
+                    className="pulse-blood"
+                    aria-label="running"
+                    style={{
+                      display: 'inline-block', width: 8, height: 8,
+                      borderRadius: '50%', background: 'var(--accent-blood)',
+                      boxShadow: '0 0 6px var(--accent-blood)',
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+                <Badge tone={STATUS_TONE[s.status]}>{t(STATUS_LABEL[s.status])}</Badge>
+              </span>
             </div>
 
             {/* 3 列指标 — 移动端自动折叠 */}
@@ -313,7 +404,7 @@ export default function StrategiesPage() {
                 <Button variant="primary" style={{ flex: 1, fontSize: 14 }}>启用监控</Button>
               ) : s.status === 'MONITOR' ? (
                 <Button variant="secondary" style={{ flex: 1, fontSize: 14 }}>推送配置</Button>
-              ) : s.status === 'RUNNING' || s.status === 'UNDERWATER' ? (
+              ) : s.status === 'RUNNING' || s.status === 'UNDERWATER' || s.status === 'PAPER' ? (
                 <Button
                   variant="secondary"
                   onClick={() => {

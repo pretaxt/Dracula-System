@@ -47,10 +47,38 @@ def _is_paper_running(app_state) -> bool:
 
 
 async def _balance_handler(app_state) -> str:
-    adapters: dict[str, Any] = getattr(app_state, "adapters", {}) or {}
-    if not adapters:
-        return "⚠️ 尚未初始化任何交易所适配器。"
-    per_ex = await balance_service.get_per_exchange_equity(adapters)
+    """读 reconciler.balance_cache 与 dashboard 同源；正确处理 UTA 与 HTX swap。"""
+    rec = getattr(app_state, "balance_reconciler", None)
+    cache = getattr(rec, "balance_cache", None) if rec else None
+    # 与 dashboard_service usdt_keys 同义 — 累加所有 USDT 钱包
+    _USDT_KEYS = (
+        "USDT", "USDT_SPOT_OTHERS",
+        "USDT_MARGIN", "USDT_MARGIN_OTHERS", "USDT_MARGIN_ISOLATED",
+        "USDT_PERP", "USDT_PERP_COIN",
+        "USDT_FUNDING", "USDT_FUNDING_OTHERS",
+        "USDT_HTX_SWAP",
+    )
+    per_ex: dict[str, Decimal] = {}
+    if isinstance(cache, dict) and cache:
+        for ex_name, assets in cache.items():
+            if not isinstance(assets, dict):
+                continue
+            sub_total = Decimal("0")
+            for k in _USDT_KEYS:
+                info = assets.get(k)
+                if isinstance(info, dict):
+                    try:
+                        sub_total += Decimal(str(info.get("total") or 0))
+                    except Exception:
+                        pass
+            if sub_total > 0:
+                per_ex[ex_name] = sub_total
+    if not per_ex:
+        # fallback：reconciler 不可用时用旧 path
+        adapters: dict[str, Any] = getattr(app_state, "adapters", {}) or {}
+        if not adapters:
+            return "⚠️ 尚未初始化任何交易所适配器。"
+        per_ex = await balance_service.get_per_exchange_equity(adapters)
     total = sum(per_ex.values(), Decimal("0"))
     lines = ["<b>💰 账户余额</b>"]
     for name, val in sorted(per_ex.items()):
@@ -162,14 +190,21 @@ async def _read_perp_basis_open_rows() -> tuple[int, list[str]]:
         )
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
-            # 读 legs 拼出 long/short 交易所
+            # 读 legs 拼出 long/short 交易所（DB 存的是 buy/sell，需映射）
             leg_stmt = select(PositionLegRecord).where(
                 PositionLegRecord.position_id == r.id,
             )
             legs = (await session.execute(leg_stmt)).scalars().all()
-            long_ex = next((l.exchange for l in legs if (l.side or "").lower() == "long"), "?")
-            short_ex = next((l.exchange for l in legs if (l.side or "").lower() == "short"), "?")
-            sym = str(r.symbol)
+            long_ex = next(
+                (l.exchange for l in legs if (l.side or "").lower() in ("buy", "long")),
+                "?",
+            )
+            short_ex = next(
+                (l.exchange for l in legs if (l.side or "").lower() in ("sell", "short")),
+                "?",
+            )
+            # PositionRecord 没有 symbol 字段；symbol 临时存在 notes
+            sym = (r.notes or "?").split("\n", 1)[0].split("@", 1)[0].strip() or "?"
             entry_diff = r.target_apr_pct or Decimal("0")
             upnl = r.unrealized_pnl or Decimal("0")
             funding = r.funding_received or Decimal("0")
@@ -251,13 +286,38 @@ async def _status_handler(app_state) -> str:
     except Exception:
         pb_count = -1
 
-    adapters = getattr(app_state, "adapters", {}) or {}
+    # 与 /balance 同源 — reconciler.balance_cache (UTA + htx_swap 正确)
+    rec = getattr(app_state, "balance_reconciler", None)
+    cache = getattr(rec, "balance_cache", None) if rec else None
+    _USDT_KEYS = (
+        "USDT", "USDT_SPOT_OTHERS",
+        "USDT_MARGIN", "USDT_MARGIN_OTHERS", "USDT_MARGIN_ISOLATED",
+        "USDT_PERP", "USDT_PERP_COIN",
+        "USDT_FUNDING", "USDT_FUNDING_OTHERS",
+        "USDT_HTX_SWAP",
+    )
     per_ex: dict[str, Decimal] = {}
-    if adapters:
-        try:
-            per_ex = await balance_service.get_per_exchange_equity(adapters)
-        except Exception:
-            logger.exception("status_balance_fetch_failed")
+    if isinstance(cache, dict) and cache:
+        for ex_name, assets in cache.items():
+            if not isinstance(assets, dict):
+                continue
+            sub = Decimal("0")
+            for k in _USDT_KEYS:
+                info = assets.get(k)
+                if isinstance(info, dict):
+                    try:
+                        sub += Decimal(str(info.get("total") or 0))
+                    except Exception:
+                        pass
+            if sub > 0:
+                per_ex[ex_name] = sub
+    if not per_ex:
+        adapters = getattr(app_state, "adapters", {}) or {}
+        if adapters:
+            try:
+                per_ex = await balance_service.get_per_exchange_equity(adapters)
+            except Exception:
+                logger.exception("status_balance_fetch_failed")
     total = sum(per_ex.values(), Decimal("0")) if per_ex else None
 
     mode_emoji = "🔴 LIVE" if mode == "live" else "🟡 PAPER"

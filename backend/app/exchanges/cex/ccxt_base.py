@@ -388,24 +388,111 @@ class CCXTAdapter(ExchangeAdapter):
             if self._exchange_id == "binance":
                 params["sideEffectType"] = side_effect
         if position_side and instrument == InstrumentType.PERPETUAL:
-            # positionSide 仅 PERPETUAL Hedge 模式有效；spot 传会被拒
-            # Binance Hedge 模式必填；One-way 模式忽略此字段
-            params["positionSide"] = position_side.upper()
-            # reduceOnly 不能与 hedge 模式同时存在（hedge 用 positionSide 区分）
+            # positionSide 仅 PERPETUAL Hedge 模式有效；spot 传会被拒。
+            # 各交易所大小写要求不同（实测）:
+            #   binance: UPPERCASE "LONG"/"SHORT"
+            #   okx hedge (long_short_mode): lowercase "long"/"short"
+            #     → ccxt OKX 内部翻译为 posSide=<value>，OKX one-way 模式不接受 posSide
+            #       此账户为 long_short_mode hedge，必填 posSide
+            #   htx swap: 用 offset 区分 open/close，不传 positionSide
+            #   bybit: 用 positionIdx，不在此处理
+            if self._exchange_id == "binance":
+                params["positionSide"] = position_side.upper()
+                # reduceOnly 不能与 binance hedge 模式同时存在（hedge 用 positionSide 区分）
+                params.pop("reduceOnly", None)
+            elif self._exchange_id == "okx":
+                params["positionSide"] = position_side.lower()
+                # OKX hedge 模式下 ccxt 把 positionSide 翻译为 posSide；
+                # reduceOnly 仍可保留（OKX 接受 reduceOnly + posSide 组合用于平仓）
+        # HTX swap 必填 offset（hedge mode 下不传会报 1499 "Unavailable to place
+        # orders in one-way mode"）。open = 加仓，close = 平仓。reduce_only 等价 close。
+        # leverRate 提供仓位杠杆（HTX swap 默认 1x，$50 notional 会要 $50 保证金）。
+        # ⚠ 千万不要传 marginMode：ccxt 会把它解释为 SPOT super-margin 路由到
+        # /v1/order/orders/place（spot endpoint），HTX 报 "symbol-not-support (NT)"。
+        if (
+            self._exchange_id == "htx"
+            and instrument == InstrumentType.PERPETUAL
+        ):
+            params.setdefault("offset", "close" if reduce_only else "open")
+            params.setdefault("leverRate", 5)
+            # HTX 用 offset:close 替代 reduceOnly，移除避免冲突
             params.pop("reduceOnly", None)
+            # 同样移除 marginMode（如果上游 spot 路径误带）
+            params.pop("marginMode", None)
         if extra_params:
             params.update(extra_params)
 
+        # PERPETUAL 用 ccxt 的 unified symbol 格式 "BASE/QUOTE:QUOTE"（linear swap）
+        # 而非 "BASE/QUOTE"（spot）。否则 ccxt 路由到 spot market 报 "symbol-not-support"
+        # (HTX) / wrong endpoint (binance perp 通常宽松接受，但 HTX 必须显式)。
+        ccxt_symbol = symbol.to_ccxt()
+        if instrument == InstrumentType.PERPETUAL:
+            ccxt_symbol = f"{symbol.base}/{symbol.quote}:{symbol.quote}"
+
+        # PERPETUAL contract_size 转换：策略统一传 base asset 数量（如 111 TIA），
+        # 但 HTX/OKX swap 的 ccxt amount = 合约张数（1 张 = contract_size base）。
+        # 不转换会导致跨所同名义量失衡（HTX contract_size=0.1 → 111 amount = 11.1 TIA = $5
+        # 而 binance 111 amount = 111 TIA = $50）→ Delta-neutral 完全失衡。
+        # binance USDM 大多数 contract_size=1，无影响；htx 几乎全部 0.1；okx 视 symbol。
+        contract_size = Decimal("1")
+        if instrument == InstrumentType.PERPETUAL:
+            try:
+                if not getattr(client, "markets", None):
+                    await client.load_markets()
+                mkt = client.market(ccxt_symbol) if client.markets else None
+                if mkt:
+                    cs_raw = mkt.get("contractSize")
+                    if cs_raw:
+                        contract_size = Decimal(str(cs_raw))
+            except Exception:
+                pass
+
+        amount_to_send = size / contract_size if contract_size != 1 else size
+
+        # 按交易所 lot size 取整（PERPETUAL 用 :USDT 符号 ccxt 才认）
+        try:
+            rounded = client.amount_to_precision(ccxt_symbol, float(amount_to_send))
+            amount_to_send = Decimal(str(rounded))
+        except Exception:
+            pass
+
         raw = await self._call_with_retry(
             client.create_order,
-            symbol.to_ccxt(),
+            ccxt_symbol,
             order_type.value,
             side.value,
-            float(size),
+            float(amount_to_send),
             float(price) if price is not None else None,
             params,
         )
-        return self._raw_to_order(raw, symbol, instrument)
+
+        # HTX/OKX swap POST 响应仅返回 order_id，filled/average 缺失。
+        # 对 MARKET 单立即查 fetch_order 拿真实成交数据，避免下游误判 "未成交"。
+        if (
+            order_type == OrderType.MARKET
+            and self._exchange_id in ("htx", "okx")
+            and instrument == InstrumentType.PERPETUAL
+            and raw
+            and not raw.get("filled")
+            and raw.get("id")
+        ):
+            try:
+                # 给 htx 撮合一点点时间（市价单几乎瞬时成交）
+                import asyncio as _aio  # noqa: PLC0415
+                await _aio.sleep(0.3)
+                detail = await client.fetch_order(raw["id"], ccxt_symbol)
+                if detail:
+                    # 合并 fill 信息
+                    raw["filled"] = detail.get("filled") or raw.get("filled")
+                    raw["average"] = detail.get("average") or raw.get("average")
+                    raw["status"] = detail.get("status") or raw.get("status")
+                    raw["amount"] = detail.get("amount") or raw.get("amount")
+            except Exception:
+                # fallback：市价单几乎必成交，假设 filled = amount
+                raw["filled"] = raw.get("amount") or amount_to_send
+                raw["status"] = "closed"
+
+        return self._raw_to_order(raw, symbol, instrument, contract_size)
 
     async def cancel_order(self, order_id: str, symbol: Symbol) -> bool:
         raise NotImplementedError(
@@ -480,11 +567,18 @@ class CCXTAdapter(ExchangeAdapter):
         raw: Dict[str, Any],
         symbol: Symbol,
         instrument: InstrumentType,
+        contract_size: Decimal = Decimal("1"),
     ) -> Order:
         if not raw:
             raise DataError(
                 "Empty order response", exchange=self._exchange_id
             )
+        # 反转 contract_size：ccxt 返回 amount/filled 是合约张数，转回 base asset 数量
+        # 这样 strategy 端 leg.size 始终是 TIA/BTC 等真实币种数量（跨所一致）。
+        amt_raw = _to_decimal(raw.get("amount"))
+        filled_raw = _to_decimal(raw.get("filled"))
+        size_out = amt_raw * contract_size
+        filled_out = filled_raw * contract_size
         return Order(
             order_id=str(raw.get("id") or ""),
             client_order_id=str(raw.get("clientOrderId") or ""),
@@ -492,9 +586,9 @@ class CCXTAdapter(ExchangeAdapter):
             instrument=instrument,
             side=_map_side(raw.get("side") or "buy"),
             order_type=_map_order_type(raw.get("type") or "limit"),
-            size=_to_decimal(raw.get("amount")),
+            size=size_out,
             price=_to_decimal(raw.get("price")),
-            filled=_to_decimal(raw.get("filled")),
+            filled=filled_out,
             avg_fill_price=_to_decimal(raw.get("average")),
             status=_map_order_status(raw.get("status")),
             timestamp=int(raw.get("timestamp") or 0),

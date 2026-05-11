@@ -131,12 +131,21 @@ async def get_summary(
             cache = reconciler.balance_cache
             total = Decimal("0")
             per_ex_local: dict[str, Decimal] = {}
-            # binance: USDT (spot) + USDT_MARGIN + USDT_PERP + USDT_FUNDING + USDT_SPOT_OTHERS
+            # binance 全 4 类账户:
+            #   现货: USDT (spot) + USDT_SPOT_OTHERS (BNB/BTC/ETH 等折算)
+            #   杠杆: USDT_MARGIN (全仓 USDT) + USDT_MARGIN_OTHERS (全仓非 USDT 抵押)
+            #         + USDT_MARGIN_ISOLATED (逐仓 BTC-equiv → USDT)
+            #   合约: USDT_PERP (U 本位) + USDT_PERP_COIN (币本位折算)
+            #   资金: USDT_FUNDING (USDT) + USDT_FUNDING_OTHERS (非稳定币折算)
             # htx: USDT (spot) + USDT_HTX_SWAP（UTA swap 钱包，CCXT 默认拿不到走专用 API）
             # OKX UTA / bybit / bitget UTA 共享 trading account，仅 USDT
             usdt_keys = (
-                "USDT", "USDT_MARGIN", "USDT_PERP", "USDT_FUNDING",
-                "USDT_SPOT_OTHERS", "USDT_HTX_SWAP",
+                "USDT",
+                "USDT_SPOT_OTHERS",
+                "USDT_MARGIN", "USDT_MARGIN_OTHERS", "USDT_MARGIN_ISOLATED",
+                "USDT_PERP", "USDT_PERP_COIN",
+                "USDT_FUNDING", "USDT_FUNDING_OTHERS",
+                "USDT_HTX_SWAP",
             )
             for ex_name, assets in cache.items():
                 ex_total = Decimal("0")
@@ -154,14 +163,15 @@ async def get_summary(
                 }
         except Exception:
             pass
-    # 降级：reconciler 不可用 → lazy fetch
-    if real_balance is None and adapters:
-        real_balance = await get_total_equity_usd(adapters)
-        per_ex = await get_per_exchange_equity(adapters)
-        per_exchange_equity = {
-            ex: str(round(v, 2)) for ex, v in per_ex.items()
-        }
+    # ⚠ 不再 fallback 到 balance_service.get_per_exchange_equity ─
+    # 该旧路径 OKX 双倍 + HTX 漏 swap，会让 reconciler 启动 30s 内的 cold-start
+    # 窗口产生异常 concentration (sym_conc 68%、ex_conc 269% 等)。
+    # 现在 reconciler 未就绪 → real_balance 保持 None → 下游用 net_pnl 兜底，
+    # concentration 指标分母用 sum(open notional)，circuit_breaker 不会误熔断。
     total_equity = real_balance if real_balance is not None else _initial_capital() + net_pnl
+    # reconciler 未就绪标记 — 让 concentration 计算放弃（避免 _initial_capital 兜底
+    # 太小导致 sym_conc/ex_conc 假阳性触发 circuit_breaker）。
+    balance_data_ready = real_balance is not None
 
     # 余额同步诊断字段：列出"无 trading 凭据"的 CEX，UI 提示用户去 设置 → 交易所凭据
     missing_credentials_exchanges: list[str] = []
@@ -201,8 +211,13 @@ async def get_summary(
     strategy_perf = await _get_strategy_performance(session)
 
     sharpe_30d = _annualized_sharpe(series, total_equity)
-    max_ex_conc = _max_exchange_concentration(per_exchange_equity, total_equity)
-    max_sym_conc = await _max_symbol_concentration(session)
+    # reconciler 未就绪 → 不计算 concentration（避免误熔断），等下个 30s 周期
+    if balance_data_ready:
+        max_ex_conc = _max_exchange_concentration(per_exchange_equity, total_equity)
+        max_sym_conc = await _max_symbol_concentration(session, total_equity)
+    else:
+        max_ex_conc = Decimal("0")
+        max_sym_conc = Decimal("0")
 
     # 运维指标（5min 滑窗 in-memory）
     api_p95_ms = round(metrics.http_latency_p95_ms(), 1)
@@ -305,18 +320,35 @@ def _annualized_sharpe(series: list[dict], total_equity: Decimal) -> Decimal:
 def _max_exchange_concentration(
     per_exchange: dict[str, str], total_equity: Decimal
 ) -> Decimal:
-    """单交易所最大占比 %，total_equity 缺失或 0 → 0。"""
+    """单交易所最大占比 %，total_equity 缺失或 0 → 0。
+
+    分母用 max(total_equity, sum(per_exchange)) 防止两条数据源不一致
+    （reconciler 启动瞬间 fallback 到旧 path，OKX 双倍 / HTX 漏 swap → 比值 > 100%）。
+    """
     if not per_exchange or total_equity <= 0:
         return Decimal("0")
     try:
-        max_eq = max(Decimal(str(v)) for v in per_exchange.values())
+        values = [Decimal(str(v)) for v in per_exchange.values()]
+        max_eq = max(values)
+        sum_eq = sum(values, Decimal("0"))
     except (ValueError, ArithmeticError):
         return Decimal("0")
-    return max_eq / total_equity * Decimal("100")
+    # 用两者较大值作分母 — 自我校正：若 per_exchange 总和 > total_equity（双倍计算
+    # 等异常），用 sum_eq 让比值始终 ≤ 100%。
+    denom = max(total_equity, sum_eq)
+    pct = max_eq / denom * Decimal("100")
+    # 终极兜底：超 100% 强制截到 100%（不可能的物理状态）
+    return min(pct, Decimal("100"))
 
 
-async def _max_symbol_concentration(session: AsyncSession) -> Decimal:
-    """单币种最大占比 % (max symbol open notional / total open notional)。"""
+async def _max_symbol_concentration(
+    session: AsyncSession, total_equity: Decimal | None = None,
+) -> Decimal:
+    """单币种最大占比 % = max(per-symbol notional) / 账户总权益 × 100。
+
+    分母用 **账户总权益**（不是 sum of open notionals），否则单笔持仓永远 100%。
+    20% 阈值 = 单币种最大风险敞口 ≤ 总权益的 20%（如 $500 账户单 TIA ≤ $100）。
+    """
     rows = (
         await session.execute(
             select(PositionRecord.notes, PositionRecord.notional_usd).where(
@@ -327,18 +359,27 @@ async def _max_symbol_concentration(session: AsyncSession) -> Decimal:
     if not rows:
         return Decimal("0")
     by_sym: dict[str, Decimal] = {}
-    total = Decimal("0")
     for notes, notional in rows:
         if notional is None:
             continue
-        # notes 首行是 symbol（兼容 D.1+ 多行 + 旧记录）
         sym = (notes or "").split("\n", 1)[0].split("@", 1)[0].strip() or "?"
         n = Decimal(str(notional))
         by_sym[sym] = by_sym.get(sym, Decimal("0")) + n
-        total += n
-    if total <= 0 or not by_sym:
+    if not by_sym:
         return Decimal("0")
-    return max(by_sym.values()) / total * Decimal("100")
+    # 异常防护：若 total_equity 偏小（reconciler 启动瞬间 fallback 只读到部分
+    # 交易所余额），分母至少取 max(total_equity, sum of all positions notional)。
+    # 同时 100% 是物理上限，保证不出现 >100% 假报警。
+    max_sym = max(by_sym.values())
+    total_open = sum(by_sym.values())
+    denom_candidates = [
+        d for d in (total_equity, total_open) if d and d > 0
+    ]
+    denom = max(denom_candidates) if denom_candidates else Decimal("0")
+    if denom <= 0:
+        return Decimal("0")
+    pct = max_sym / denom * Decimal("100")
+    return min(pct, Decimal("100"))
 
 
 # ---------------------------------------------------------------------------

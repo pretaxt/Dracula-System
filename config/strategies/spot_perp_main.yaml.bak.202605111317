@@ -41,159 +41,40 @@ exit:
 position:
   max_positions: 3              # 同时持仓上限（含 paper 试样）
   size_usd: 50.0                # D.1 实盘 notional（也可被 .env SPOT_PERP_NOTIONAL_USD 覆盖）
-  exchanges: ["binance", "okx", "htx"] # 三交易所并行扫描
-  direction_filter: "both"   # D.1 仅 premium；D.2 改为 "both" 并接 spot margin
-  candidate_symbols:            # Binance top-150 liquid contracts (by 24h volume, excl. majors/stables/leveraged)
-    - SUI
-    - ZEC
-    - TON
-    - LAYER
-    - TAO
-    - ONDO
-    - FIL
-    - UNI
-    - AAVE
-    - WLD
-    - ASTER
-    - APT
-    - ENA
-    - NEAR
-    - SAHARA
-    - SEI
-    - CHIP
-    - BCH
+  exchanges: ["binance", "okx"] # 双交易所并行扫描
+  direction_filter: "premium"   # D.1 仅 premium；D.2 改为 "both" 并接 spot margin
+  candidate_symbols:            # 30 主流 USDT 永续候选币（市值 / 流动性靠前）
+    - BTC
+    - ETH
+    - SOL
+    - BNB
+    - XRP
+    - DOGE
+    - TRX
+    - ADA
+    - AVAX
+    - LINK
     - DOT
-    - XLM
-    - PUMP
-    - PENGU
-    - TRUMP
-    - LDO
-    - HBAR
-    - SAGA
-    - ICP
-    - QTUM
-    - DASH
-    - TIA
-    - WIF
-    - BIO
-    - FET
-    - DOGS
-    - GIGGLE
+    - NEAR
+    - BCH
+    - LTC
+    - UNI
+    - APT
     - ARB
-    - ATOM
-    - MOVE
-    - JUP
-    - ENS
-    - VIRTUAL
-    - WAL
-    - ORDI
-    - WLFI
-    - ETC
-    - KITE
-    - XPL
     - OP
-    - CRV
-    - STRK
-    - RENDER
-    - JTO
-    - ORCA
-    - ALGO
-    - PENDLE
+    - SUI
+    - ATOM
+    - FIL
+    - ETC
+    - AAVE
     - INJ
-    - XMR
-    - ZRO
-    - CFG
-    - ZBT
-    - NIL
-    - MEGA
-    - GALA
-    - ZEN
-    - CHZ
-    - DYM
-    - SAND
-    - JASMY
-    - ETHFI
-    - KAT
-    - SPK
-    - NOT
-    - APE
-    - EIGEN
-    - POL
-    - LIT
-    - HAEDAL
-    - CETUS
-    - CAKE
-    - BERA
-    - BOME
-    - CVC
-    - REZ
-    - BABY
-    - AR
-    - NEO
-    - GTC
-    - NEIRO
-    - BANANA
-    - AXS
-    - PLUME
-    - PARTI
-    - FF
-    - TST
-    - EGLD
-    - PNUT
-    - GRT
-    - TURBO
-    - HUMA
-    - MANA
-    - ENJ
-    - DEXE
-    - ZK
-    - BLUR
-    - ME
-    - IO
-    - VANA
-    - DYDX
-    - VET
-    - MINA
-    - OPEN
+    - ICP
+    - XLM
     - RUNE
-    - MOVR
-    - MITO
-    - SOPH
-    - PYTH
-    - SUSHI
-    - HIVE
-    - TRB
-    - MMT
-    - STX
-    - MORPHO
-    - LPT
-    - BSV
-    - ROBO
-    - IOTA
-    - HEMI
-    - NIGHT
-    - OPN
-    - CFX
-    - LINEA
-    - ROSE
-    - STG
-    - COMP
-    - ENSO
-    - THETA
-    - ALLO
-    - AIXBT
-    - HOLO
-    - EDU
-    - DUSK
-    - STORJ
-    - TNSR
-    - GMT
-    - ARKM
-    - MEME
-    - SKY
-    - AVNT
-    - IMX
-    - KAITO
+    - SEI
+    - LDO
+    - TIA
+
 scanning:
   scan_interval_seconds: 30     # P2-18 60→30s：basis 收敛快，30s tick 与 #02 一致
 

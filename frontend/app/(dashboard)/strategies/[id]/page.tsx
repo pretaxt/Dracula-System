@@ -17,6 +17,16 @@ import {
   getPerpBasisExchangeBalance,
   getSpotPerpConfig,
   patchSpotPerpConfig,
+  getCexDexStatus,
+  getCexDexConfig,
+  getCexDexOpportunities,
+  getCexDexWalletBalance,
+  getCexDexCexBalance,
+  getCexDexSpreads,
+  getCexDexPaperHistory,
+  patchCexDexConfig,
+  type CexDexSpreadEntry,
+  type CexDexPaperTrade,
 } from '@/lib/api/strategies'
 import { getRiskLimits, patchRiskLimits } from '@/lib/api/risk'
 import { getDashboardSummary } from '@/lib/api/dashboard'
@@ -24,6 +34,15 @@ import { getDashboardSummary } from '@/lib/api/dashboard'
 const INSTANCE_MAP: Record<string, string> = {
   'funding-rate': 'funding_rate_main',
   'spot-perp':    'spot_perp_main',
+}
+
+const STATUS_LABEL: Record<StrategyStatus, string> = {
+  RUNNING: '运行中',
+  PLANNED: '待启动',
+  MONITOR: '监控只读',
+  DISABLED: '已停用',
+  UNDERWATER: '回撤中',
+  PAPER: '模拟',
 }
 
 const STATUS_TONE: Record<StrategyStatus, BadgeTone> = {
@@ -100,6 +119,48 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     refetchInterval: 30_000,
     enabled: params.id === 'spot-perp',
   })
+  const { data: cexDexStat } = useQuery({
+    queryKey: ['cex-dex-stat-detail'],
+    queryFn: getCexDexStatus,
+    refetchInterval: 5_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexCfg } = useQuery({
+    queryKey: ['cex-dex-cfg-detail'],
+    queryFn: getCexDexConfig,
+    refetchInterval: 30_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexOpps } = useQuery({
+    queryKey: ['cex-dex-opps'],
+    queryFn: getCexDexOpportunities,
+    refetchInterval: 5_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexWallet } = useQuery({
+    queryKey: ['cex-dex-wallet'],
+    queryFn: getCexDexWalletBalance,
+    refetchInterval: 30_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexCexBal } = useQuery({
+    queryKey: ['cex-dex-cex-balance'],
+    queryFn: getCexDexCexBalance,
+    refetchInterval: 60_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexSpreads } = useQuery({
+    queryKey: ['cex-dex-spreads'],
+    queryFn: getCexDexSpreads,
+    refetchInterval: 5_000,
+    enabled: params.id === 'cex-dex',
+  })
+  const { data: cexDexHistory } = useQuery({
+    queryKey: ['cex-dex-paper-history'],
+    queryFn: getCexDexPaperHistory,
+    refetchInterval: 10_000,
+    enabled: params.id === 'cex-dex',
+  })
   const queryClient = useQueryClient()
   const patchPbCfg = useMutation({
     mutationFn: patchPerpBasisConfig,
@@ -109,7 +170,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     },
   })
   const patchFrCfg = useMutation({
-    mutationFn: (patch: Record<string, unknown>) => patchRiskLimits(patch, false),
+    mutationFn: (patch: Record<string, unknown>) => patchRiskLimits(patch, true),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['risk-limits-for-fr'] })
       queryClient.invalidateQueries({ queryKey: ['risk'] })
@@ -121,6 +182,13 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spot-perp-cfg'] })
       queryClient.invalidateQueries({ queryKey: ['spot-perp-opps'] })
+    },
+  })
+  const patchCdCfg = useMutation({
+    mutationFn: patchCexDexConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cex-dex-cfg-detail'] })
+      queryClient.invalidateQueries({ queryKey: ['cex-dex-stat-detail'] })
     },
   })
   // PATCH 表单 local state
@@ -150,6 +218,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     notional_per_position: '',
     stop_basis_widening_pct: '',
     scan_threshold_pct: '',
+  })
+  const [cdForm, setCdForm] = useState({
+    min_net_profit_usd: '',
+    max_trade_usd: '',
+    max_daily_loss_usd: '',
+    max_gas_gwei: '',
   })
   const { data: summary } = useQuery({
     queryKey: ['dashboard'],
@@ -183,9 +257,19 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
       ? live.paper_running
         ? 'RUNNING'
         : 'PLANNED'
-      : strategy.id === 'spot-perp' && spotPerpOpps
-      ? spotPerpOpps.running
-        ? 'MONITOR'
+      : strategy.id === 'perp-basis' && perpBasisCfg
+      ? perpBasisCfg.paper_running
+        ? 'RUNNING'
+        : 'PLANNED'
+      : strategy.id === 'spot-perp' && spotPerpCfg
+      ? spotPerpCfg.session_running
+        ? 'RUNNING'
+        : 'PLANNED'
+      : strategy.id === 'cex-dex' && cexDexStat
+      ? cexDexStat.running && cexDexStat.mode === 'live'
+        ? 'RUNNING'
+        : cexDexStat.running
+        ? 'PAPER'
         : 'PLANNED'
       : strategy.status
 
@@ -221,7 +305,21 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             >
               {t(strategy.zhName)}
             </h1>
-            <Badge tone={STATUS_TONE[status]}>{status}</Badge>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0, whiteSpace: 'nowrap' }}>
+              {status === 'RUNNING' && (
+                <span
+                  className="pulse-blood"
+                  aria-label="running"
+                  style={{
+                    display: 'inline-block', width: 8, height: 8,
+                    borderRadius: '50%', background: 'var(--accent-blood)',
+                    boxShadow: '0 0 6px var(--accent-blood)',
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              <Badge tone={STATUS_TONE[status]}>{t(STATUS_LABEL[status])}</Badge>
+            </span>
             <Badge tone="info">{strategy.phase}</Badge>
           </div>
           <p
@@ -265,6 +363,53 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             const pnl = parseFloat(perf.total_pnl)
             liveMonthly = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`
             liveMonthlyTone = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : undefined
+          } else {
+            liveMonthly = '$0.00'
+          }
+        } else if (strategy.id === 'perp-basis' && perpBasisCfg) {
+          // #02 perp-basis：用 perpBasisCfg + perf 同步显示三段
+          const sizeUsd = parseFloat(perpBasisCfg.notional_per_position ?? '50')
+          const maxPos = perpBasisCfg.max_concurrent ?? 0
+          // perf.open_positions = leg 数，跨所策略每仓 2 legs → 实际仓数 = legs / 2
+          const legCnt = perf?.open_positions ?? 0
+          const openCnt = Math.floor(legCnt / 2) || legCnt  // 兼容旧记录
+          const deployed = openCnt * sizeUsd
+          const account = parseFloat(summary?.total_equity_usd ?? '0')
+          const configMax = maxPos * sizeUsd
+          liveCapital = `$${deployed.toFixed(0)} / $${account.toFixed(0)} / $${configMax.toFixed(0)}`
+          livePositions = `${openCnt} / ${maxPos}`
+          if (perf) {
+            const pnl = parseFloat(perf.total_pnl)
+            liveMonthly = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`
+            liveMonthlyTone = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : undefined
+          } else {
+            liveMonthly = '$0.00'
+          }
+        } else if (strategy.id === 'spot-perp' && spotPerpCfg) {
+          // #04 spot-perp：同 #02 模式
+          const sizeUsd = parseFloat(spotPerpCfg.notional_per_position ?? '50')
+          const maxPos = spotPerpCfg.max_concurrent ?? 0
+          const openCnt = perf?.open_positions ?? 0
+          const deployed = openCnt * sizeUsd
+          const account = parseFloat(summary?.total_equity_usd ?? '0')
+          const configMax = maxPos * sizeUsd
+          liveCapital = `$${deployed.toFixed(0)} / $${account.toFixed(0)} / $${configMax.toFixed(0)}`
+          livePositions = `${openCnt} / ${maxPos}`
+          if (perf) {
+            const pnl = parseFloat(perf.total_pnl)
+            liveMonthly = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`
+            liveMonthlyTone = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : undefined
+          } else {
+            liveMonthly = '$0.00'
+          }
+        } else if (strategy.id === 'cex-dex' && cexDexStat) {
+          const walletUsd = parseFloat(cexDexWallet?.total_usd ?? '0')
+          const accountUsd = parseFloat(String(summary?.total_equity_usd ?? '0'))
+          liveCapital = `$${walletUsd.toFixed(0)} (链) / $${accountUsd.toFixed(0)} (CEX)`
+          livePositions = String(cexDexStat.open_trades)
+          if (cexDexStat.daily_loss_usd > 0) {
+            liveMonthly = `-$${cexDexStat.daily_loss_usd.toFixed(2)}`
+            liveMonthlyTone = 'negative'
           } else {
             liveMonthly = '$0.00'
           }
@@ -969,6 +1114,24 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 }}>
                   {t('可用')} ${parseFloat(b.perp_usdt_free).toFixed(2)} · {b.ready ? t('已就绪') : t('< $10 不足')}
                 </div>
+                {/* wallet_breakdown 明细 */}
+                {b.wallet_breakdown && Object.keys(b.wallet_breakdown).length > 0 && (
+                  <div style={{
+                    marginTop: 10, paddingTop: 8,
+                    borderTop: '1px solid var(--border-subtle)',
+                    display: 'flex', flexDirection: 'column', gap: 3,
+                  }}>
+                    {Object.entries(b.wallet_breakdown as Record<string, number>).map(([wk, wv]) => (
+                      <div key={wk} style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        fontFamily: 'var(--font-mono)', fontSize: 11,
+                      }}>
+                        <span style={{ color: 'var(--text-tertiary)' }}>{wk}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>${Number(wv).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {(perpBasisBal?.data ?? []).length === 0 && (
@@ -1274,6 +1437,484 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             }}>
               {t('仅填空字段会被更新，下一 tick (≤30s) 生效')}
             </span>
+          </div>
+        </CardElevated>
+      )}
+
+      {/* #05 cex-dex: 运行状态卡 */}
+      {strategy.id === 'cex-dex' && cexDexStat && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader title={t('运行状态')} subtitle="ARBITRUM ONE · CEX-DEX RUNNER" />
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: 12, marginTop: 8,
+          }}>
+            {[
+              { label: '执行模式', value: cexDexStat.mode.toUpperCase(),
+                color: cexDexStat.mode === 'live' ? 'var(--accent-blood)' : cexDexStat.mode === 'paper' ? 'var(--accent-emerald)' : 'var(--text-tertiary)' },
+              { label: 'ETH 价格', value: `$${cexDexStat.eth_usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}` },
+              { label: '今日亏损', value: `-$${cexDexStat.daily_loss_usd.toFixed(2)}`,
+                color: cexDexStat.daily_loss_usd > 0 ? 'var(--accent-blood)' : 'var(--text-primary)' },
+              { label: '日损上限', value: `$${cexDexStat.max_daily_loss_usd.toFixed(0)}` },
+              { label: '未结成交', value: String(cexDexStat.open_trades) },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{
+                padding: '12px 16px',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-card)',
+              }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{label}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: color ?? 'var(--text-primary)' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {cexDexStat.last_scan_at && (
+            <div style={{ marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+              上次扫描: {new Date(cexDexStat.last_scan_at).toLocaleTimeString('en-US', { hour12: false })}
+            </div>
+          )}
+          {cexDexStat.daily_loss_usd >= cexDexStat.max_daily_loss_usd && cexDexStat.max_daily_loss_usd > 0 && (
+            <div style={{ marginTop: 12, padding: '10px 14px',
+              background: 'rgba(227,64,88,0.12)', borderRadius: 'var(--radius-sm)',
+              fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-blood)' }}>
+              🚨 日损熔断已触发 — 今日停止执行
+            </div>
+          )}
+        </CardElevated>
+      )}
+
+      {/* #05 cex-dex: Arbitrum 钱包余额 */}
+      {strategy.id === 'cex-dex' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('Arbitrum 钱包余额')}
+            subtitle="ON-CHAIN WALLET · ARBITRUM ONE"
+            right={
+              cexDexWallet?.wallet_address
+                ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+                    {cexDexWallet.wallet_address.slice(0, 8)}…{cexDexWallet.wallet_address.slice(-6)}
+                  </span>
+                : <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)' }}>未配置</span>
+            }
+          />
+          {!cexDexWallet?.configured ? (
+            <div style={{ padding: '16px 0', fontFamily: 'var(--font-mono)', fontSize: 13,
+              color: 'var(--text-tertiary)' }}>
+              Web3 凭据未配置 → 前往设置页配置钱包私钥
+            </div>
+          ) : (
+            <>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                gap: 10, marginBottom: 16,
+              }}>
+                {(cexDexWallet.balances ?? []).map((b) => (
+                  <div key={b.token} style={{
+                    padding: '12px 14px',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-card)',
+                  }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
+                      textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>{b.token}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, color: 'var(--text-primary)',
+                      fontWeight: 600 }}>{parseFloat(b.amount).toFixed(4)}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
+                      marginTop: 2 }}>≈ ${b.usd}</div>
+                  </div>
+                ))}
+                {(cexDexWallet.balances ?? []).length === 0 && (
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 0' }}>
+                    链上余额为零（钱包未充值）
+                  </div>
+                )}
+              </div>
+              <div style={{
+                padding: '10px 14px',
+                background: 'var(--bg-card)',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-default)',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-secondary)' }}>
+                  链上总估值 (USD)
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700,
+                  color: parseFloat(cexDexWallet.total_usd) > 0 ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
+                  ${parseFloat(cexDexWallet.total_usd).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                </span>
+              </div>
+
+              {/* CEX side inventory */}
+              <div style={{ marginTop: 16, borderTop: '1px solid var(--border-subtle)', paddingTop: 14 }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-gold)',
+                  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                  CEX 侧库存 (Binance Spot)
+                </div>
+                {cexDexCexBal?.configured ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {[
+                      { label: 'ETH', amount: cexDexCexBal.eth, usd: `$${(parseFloat(cexDexCexBal.eth) * parseFloat(cexDexCexBal.eth_price)).toFixed(2)}` },
+                      { label: 'USDT', amount: cexDexCexBal.usdt, usd: `$${parseFloat(cexDexCexBal.usdt).toFixed(2)}` },
+                    ].map((b) => (
+                      <div key={b.label} style={{ padding: '10px 14px', border: '1px solid var(--border-default)',
+                        borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)' }}>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
+                          textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>{b.label}</div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 15, color: 'var(--text-primary)', fontWeight: 600 }}>{parseFloat(b.amount).toFixed(4)}</div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>≈ {b.usd}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>CEX 未连接</div>
+                )}
+                {cexDexCexBal?.configured && (
+                  <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--bg-card)',
+                    borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-secondary)' }}>CEX 总估值</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 17, fontWeight: 700,
+                      color: parseFloat(cexDexCexBal.total_usd) > 0 ? 'var(--accent-gold)' : 'var(--text-tertiary)' }}>
+                      ${parseFloat(cexDexCexBal.total_usd).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </CardElevated>
+      )}
+
+      {/* #05 cex-dex: 实时机会扫描 */}
+      {strategy.id === 'cex-dex' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('实时价差机会')}
+            subtitle="LIVE CEX-DEX OPPORTUNITIES · 5s SCAN"
+            right={
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13,
+                color: cexDexOpps?.running ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
+                {cexDexOpps?.running ? `● ${t('扫描中')}` : `○ ${t('未启动')}`}
+                {cexDexOpps?.last_scan_at && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    {new Date(cexDexOpps.last_scan_at).toLocaleTimeString('en-US', { hour12: false })}
+                  </span>
+                )}
+              </span>
+            }
+          />
+          {(cexDexOpps?.data ?? []).length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)',
+              fontSize: 14, color: 'var(--text-tertiary)' }}>
+              {cexDexOpps?.running
+                ? `当前净利 < $${cexDexOpps.min_net_profit_usd} 门槛，无触发机会`
+                : t('扫描器未运行')}
+            </div>
+          ) : (
+            <div className="table-scroll-x">
+              <table className="data-table" style={{ width: '100%', borderCollapse: 'separate',
+                borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+                <thead>
+                  <tr>
+                    {['币对', '方向', 'CEX 价格', 'DEX 价格', '价差 bps', 'gas 估算', '净利润'].map((h, i) => (
+                      <th key={i} style={{
+                        textAlign: i <= 1 ? 'left' : 'right',
+                        padding: '10px 12px', color: 'var(--text-tertiary)',
+                        fontWeight: 500, fontSize: 12, letterSpacing: '0.08em',
+                        textTransform: 'uppercase', borderBottom: '1px solid var(--border-default)',
+                        background: 'var(--bg-deepest)',
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(cexDexOpps?.data ?? []).map((o, idx) => {
+                    const net = parseFloat(o.net_profit_usd)
+                    const netColor = net > 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)'
+                    const dirLabel = o.direction === 'cex_cheap' ? '↑ CEX 低买' : '↓ DEX 低买'
+                    const dirColor = o.direction === 'cex_cheap' ? 'var(--accent-emerald)' : 'var(--accent-gold)'
+                    return (
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{o.pair}</td>
+                        <td style={{ padding: '12px', color: dirColor, fontWeight: 500 }}>{dirLabel}</td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                          ${parseFloat(o.cex_price).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-primary)' }}>
+                          ${parseFloat(o.dex_price).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                          {parseFloat(o.raw_spread_bps).toFixed(1)}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: 'var(--text-muted)' }}>
+                          ${parseFloat(o.estimated_gas_usd).toFixed(4)}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right', color: netColor, fontWeight: 600 }}>
+                          ${net.toFixed(3)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardElevated>
+      )}
+
+
+      {/* #05 cex-dex: 实时价差仪表盘 */}
+      {strategy.id === 'cex-dex' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('价差监控')}
+            subtitle={`LIVE SPREAD · 扫描 ${cexDexSpreads?.scan_count ?? 0} 次`}
+            right={
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+                触发门槛 ≥ ~13 bps (净利 ${cexDexSpreads?.threshold_usd ?? 2})
+              </span>
+            }
+          />
+          {(cexDexSpreads?.data ?? []).map((s: CexDexSpreadEntry) => {
+            const bestSpread = Math.max(s.spread_cex_cheap_bps, s.spread_dex_cheap_bps)
+            const TRIGGER_BPS = 13
+            const pct = Math.max(0, Math.min(100, (bestSpread / TRIGGER_BPS) * 100))
+            const color = bestSpread >= TRIGGER_BPS ? 'var(--accent-emerald)' : bestSpread >= 8 ? 'var(--accent-gold)' : 'var(--text-muted)'
+            return (
+              <div key={s.pair} style={{ marginTop: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>{s.pair}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color }}>
+                    {bestSpread.toFixed(1)} bps
+                    {bestSpread >= TRIGGER_BPS && <span style={{ marginLeft: 6, color: 'var(--accent-emerald)' }}>🔥 触发</span>}
+                  </span>
+                </div>
+                <div style={{ height: 6, background: 'var(--bg-card)', borderRadius: 3, overflow: 'hidden',
+                  border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ height: '100%', width: `${pct}%`, background: color,
+                    transition: 'width 0.4s ease', borderRadius: 3 }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6,
+                  fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <span>CEX bid {s.cex_bid.toFixed(2)} / ask {s.cex_ask.toFixed(2)}</span>
+                  <span>DEX buy {s.dex_buy.toFixed(2)} / sell {s.dex_sell.toFixed(2)}</span>
+                </div>
+              </div>
+            )
+          })}
+          {(cexDexSpreads?.data ?? []).length === 0 && (
+            <div style={{ padding: 16, fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-tertiary)' }}>
+              等待首次扫描...
+            </div>
+          )}
+        </CardElevated>
+      )}
+
+
+      {/* #05 cex-dex: paper 历史记录 */}
+      {strategy.id === 'cex-dex' && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader
+            title={t('Paper 记录')}
+            subtitle={`SIMULATED TRADES · 共 ${cexDexHistory?.total ?? 0} 次触发`}
+          />
+          {(cexDexHistory?.data ?? []).length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)',
+              fontSize: 14, color: 'var(--text-tertiary)' }}>
+              暂无 paper 触发记录（运行中，等待价差 ≥ 13 bps）
+            </div>
+          ) : (
+            <div className="table-scroll-x">
+              <table className="data-table" style={{ width: '100%', borderCollapse: 'separate',
+                borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    {['时间', '币对', '方向', '价差 bps', '净利润', '规模'].map((h, i) => (
+                      <th key={i} style={{
+                        textAlign: i <= 2 ? 'left' : 'right', padding: '8px 12px',
+                        color: 'var(--text-tertiary)', fontWeight: 500, fontSize: 11,
+                        letterSpacing: '0.08em', textTransform: 'uppercase',
+                        borderBottom: '1px solid var(--border-default)', background: 'var(--bg-deepest)',
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(cexDexHistory?.data ?? []).map((t: CexDexPaperTrade, idx: number) => (
+                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 12 }}>
+                        {new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+                      </td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text-primary)', fontWeight: 600 }}>{t.pair}</td>
+                      <td style={{ padding: '10px 12px', color: t.direction === 'cex_cheap' ? 'var(--accent-emerald)' : 'var(--accent-gold)' }}>
+                        {t.direction === 'cex_cheap' ? '↑ CEX 低买' : '↓ DEX 低买'}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                        {t.spread_bps.toFixed(1)}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600,
+                        color: t.net_profit_usd > 0 ? 'var(--accent-emerald)' : 'var(--accent-blood)' }}>
+                        ${t.net_profit_usd.toFixed(3)}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)' }}>
+                        ${t.trade_usd}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardElevated>
+      )}
+
+      {/* #05 cex-dex: 配置 + 模式切换 */}
+      {strategy.id === 'cex-dex' && cexDexCfg && (
+        <CardElevated style={{ padding: 24 }}>
+          <SectionHeader title={t('配置')} subtitle="CEX-DEX CONFIG PATCH" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 20 }}>
+            {/* 当前配置展示 */}
+            <div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-gold)',
+                textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                当前值
+              </div>
+              {[
+                { k: '执行模式', v: cexDexCfg.execution_mode },
+                { k: '净利门槛', v: `$${cexDexCfg.min_net_profit_usd}` },
+                { k: '单笔规模', v: `$${cexDexCfg.max_trade_usd}` },
+                { k: '日损上限', v: `$${cexDexCfg.max_daily_loss_usd}` },
+                { k: 'gas 上限', v: `${cexDexCfg.max_gas_gwei} Gwei` },
+                { k: '滑点保护', v: `${cexDexCfg.max_slippage_bps} bps` },
+                { k: 'CEX 交易所', v: cexDexCfg.cex_exchange },
+                { k: '扫描间隔', v: `${cexDexCfg.scan_interval_seconds}s` },
+              ].map(({ k, v }) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13,
+                  padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            {/* 交易对列表 */}
+            <div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-gold)',
+                textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                交易对
+              </div>
+              {(cexDexCfg.pairs ?? []).map((p) => (
+                <div key={p.cex_symbol} style={{ display: 'flex', justifyContent: 'space-between',
+                  fontSize: 13, padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>
+                    {p.cex_symbol}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    pool fee {p.pool_fee / 10000}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* PATCH 表单 */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 20 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-gold)',
+              textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+              热更新（留空 = 不改）
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+              {[
+                { key: 'min_net_profit_usd', label: '净利门槛 ($)' },
+                { key: 'max_trade_usd', label: '单笔规模 ($)' },
+                { key: 'max_daily_loss_usd', label: '日损上限 ($)' },
+                { key: 'max_gas_gwei', label: 'gas 上限 (Gwei)' },
+              ].map(({ key, label }) => (
+                <div key={key}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)',
+                    marginBottom: 4 }}>{label}</div>
+                  <input
+                    type="number"
+                    value={cdForm[key as keyof typeof cdForm]}
+                    onChange={(e) => setCdForm((f) => ({ ...f, [key]: e.target.value }))}
+                    placeholder={String(cexDexCfg[key as keyof typeof cexDexCfg] ?? '')}
+                    style={{
+                      width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border-default)',
+                      borderRadius: 4, padding: '6px 10px', color: 'var(--text-primary)',
+                      fontFamily: 'var(--font-mono)', fontSize: 13, boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            {/* 模式切换 */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+                执行模式切换
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['paper', 'live'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => {
+                      if (mode === 'live' && !confirm('切换到 LIVE 模式将触发真实链上交易和 CEX 下单。确认？')) return
+                      patchCdCfg.mutate({ execution_mode: mode })
+                    }}
+                    style={{
+                      padding: '6px 16px',
+                      background: cexDexCfg.execution_mode === mode
+                        ? (mode === 'live' ? 'var(--accent-blood)' : 'var(--accent-emerald)')
+                        : 'var(--bg-card)',
+                      color: cexDexCfg.execution_mode === mode ? '#fff' : 'var(--text-secondary)',
+                      border: `1px solid ${cexDexCfg.execution_mode === mode
+                        ? (mode === 'live' ? 'var(--accent-blood)' : 'var(--accent-emerald)')
+                        : 'var(--border-default)'}`,
+                      borderRadius: 4, cursor: 'pointer',
+                      fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
+                      letterSpacing: '0.06em',
+                    }}
+                  >
+                    {mode.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              {cexDexCfg.execution_mode === 'live' && (
+                <div style={{ marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 12,
+                  color: 'var(--accent-blood)' }}>
+                  ⚠ LIVE 模式 — 真实下单中
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button
+                onClick={() => {
+                  const patch: Record<string, number> = {}
+                  if (cdForm.min_net_profit_usd) patch.min_net_profit_usd = parseFloat(cdForm.min_net_profit_usd)
+                  if (cdForm.max_trade_usd) patch.max_trade_usd = parseFloat(cdForm.max_trade_usd)
+                  if (cdForm.max_daily_loss_usd) patch.max_daily_loss_usd = parseFloat(cdForm.max_daily_loss_usd)
+                  if (cdForm.max_gas_gwei) patch.max_gas_gwei = parseFloat(cdForm.max_gas_gwei)
+                  if (Object.keys(patch).length === 0) return
+                  patchCdCfg.mutate(patch)
+                  setCdForm({ min_net_profit_usd: '', max_trade_usd: '', max_daily_loss_usd: '', max_gas_gwei: '' })
+                }}
+                disabled={patchCdCfg.isPending || Object.values(cdForm).every((v) => !v)}
+                style={{
+                  padding: '8px 16px',
+                  background: 'var(--accent-emerald)', color: '#fff',
+                  border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  opacity: patchCdCfg.isPending ? 0.5 : 1, letterSpacing: '0.06em',
+                }}
+              >
+                {patchCdCfg.isPending ? t('应用中...') : t('应用 PATCH')}
+              </button>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                热更新立即生效（下次 tick）
+              </span>
+            </div>
           </div>
         </CardElevated>
       )}

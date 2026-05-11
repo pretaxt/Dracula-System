@@ -32,10 +32,11 @@ export const dict: Record<string, string> = {
   '系统状态': 'SYSTEM STATUS',
   '运行中': 'RUNNING',
   '已停止': 'STOPPED',
-  // 下面保留是因为 strategy status badge 等用 'RUNNING'/'STOPPED' 作 enum 字符串，
-  // 中英模式都保持英文徽章
-  'RUNNING': 'RUNNING',
-  'STOPPED': 'STOPPED',
+  '待启动': 'PLANNED',
+  '监控只读': 'MONITOR',
+  '已停用': 'DISABLED',
+  '回撤中': 'UNDERWATER',
+  '模拟': 'PAPER',
 
   // ===== 总览 KPI =====
   '总资本': 'Total Capital',

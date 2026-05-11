@@ -16,7 +16,7 @@ import {
 } from '@/lib/api/backtest'
 import { getSymbols } from '@/lib/api/system'
 
-const FALLBACK_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
+const FALLBACK_SYMBOLS = ['HIGH', 'CHIP', 'API3', 'ENSO', 'COMP']
 const EXCHANGES = ['binance', 'okx']
 
 function SymbolPicker({ value, onChange, options }: {
@@ -225,6 +225,8 @@ export default function BacktestPage() {
       .map(s => s.split('/')[0])
   }, [symbolsData])
 
+  const [activeTab, setActiveTab] = useState<string>('funding-rate')
+
   async function handleRun() {
     setLoading(true)
     setError(null)
@@ -269,8 +271,46 @@ export default function BacktestPage() {
     letterSpacing: '0.05em',
   }
 
+  const TABS = [
+    { id: 'funding-rate', label: '#01 资金费率套利' },
+    { id: 'perp-basis',   label: '#02 跨所基差套利' },
+    { id: 'spot-perp',    label: '#04 期现套利' },
+  ]
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Tab 导航 */}
+      <div style={{
+        display: 'flex', gap: 4,
+        background: 'var(--surface-2)',
+        border: '1px solid var(--border)',
+        borderRadius: 8, padding: 4,
+      }}>
+        {TABS.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              flex: 1, padding: '8px 16px',
+              background: activeTab === tab.id
+                ? 'linear-gradient(135deg, var(--accent-blood) 0%, #c12944 100%)'
+                : 'transparent',
+              color: activeTab === tab.id ? '#fff' : 'var(--text-secondary)',
+              border: 'none', borderRadius: 6,
+              cursor: 'pointer', fontFamily: 'var(--font-mono)',
+              fontSize: 13, fontWeight: activeTab === tab.id ? 700 : 400,
+              letterSpacing: '0.04em',
+              boxShadow: activeTab === tab.id ? '0 2px 8px rgba(227,64,88,0.35)' : 'none',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'funding-rate' && (
+      <>
       <CardElevated style={{ padding: 20 }}>
         <SectionHeader title={t('历史回测')} subtitle={t('资金费率套利策略历史绩效模拟')} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginTop: 16 }}>
@@ -476,10 +516,16 @@ export default function BacktestPage() {
           )}
         </>
       )}
+      </>
+      )}
 
-      <SpotPerpBacktestSection symbolBases={symbolBases} />
+      {activeTab === 'spot-perp' && (
+        <SpotPerpBacktestSection />
+      )}
 
-      <PerpBasisBacktestSection />
+      {activeTab === 'perp-basis' && (
+        <PerpBasisBacktestSection />
+      )}
     </div>
   )
 }
@@ -490,9 +536,9 @@ export default function BacktestPage() {
 // ---------------------------------------------------------------------------
 
 
-function SpotPerpBacktestSection({ symbolBases }: { symbolBases: string[] }) {
+function SpotPerpBacktestSection() {
   const { t } = useT()
-  const [symbols, setSymbols] = useState<string[]>(['BTC', 'ETH', 'SOL'])
+  const [symbols, setSymbols] = useState<string[]>(['SUI', 'ZEC', 'TON', 'LAYER', 'TAO', 'ONDO', 'FIL', 'UNI', 'AAVE', 'WLD', 'ASTER', 'APT', 'ENA', 'NEAR', 'SAHARA', 'SEI', 'CHIP', 'BCH', 'DOT', 'XLM', 'PUMP', 'PENGU', 'TRUMP', 'LDO', 'HBAR', 'SAGA', 'ICP', 'QTUM', 'DASH', 'TIA'])
   const [exchange, setExchange] = useState('binance')
   const [days, setDays] = useState(7)
   const [timeframe, setTimeframe] = useState('1m')
@@ -574,7 +620,7 @@ function SpotPerpBacktestSection({ symbolBases }: { symbolBases: string[] }) {
       <div style={{ marginTop: 16 }}>
         <label style={labelStyle}>{t('标的（多选）')}</label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {symbolBases.slice(0, 30).map(s => {
+          {['SUI', 'ZEC', 'TON', 'LAYER', 'TAO', 'ONDO', 'FIL', 'UNI', 'AAVE', 'WLD', 'ASTER', 'APT', 'ENA', 'NEAR', 'SAHARA', 'SEI', 'CHIP', 'BCH', 'DOT', 'XLM', 'PUMP', 'PENGU', 'TRUMP', 'LDO', 'HBAR', 'SAGA', 'ICP', 'QTUM', 'DASH', 'TIA', 'WIF', 'BIO', 'FET', 'DOGS', 'GIGGLE', 'ARB', 'ATOM', 'MOVE', 'JUP', 'ENS', 'VIRTUAL', 'WAL', 'ORDI', 'WLFI', 'ETC', 'KITE', 'XPL', 'OP', 'CRV', 'STRK', 'RENDER', 'JTO', 'ORCA', 'ALGO', 'PENDLE', 'INJ', 'XMR', 'ZRO', 'CFG', 'ZBT', 'NIL', 'MEGA', 'GALA', 'ZEN', 'CHZ', 'DYM', 'SAND', 'JASMY', 'ETHFI', 'KAT', 'SPK', 'NOT', 'APE', 'EIGEN', 'POL', 'LIT', 'HAEDAL', 'CETUS', 'CAKE', 'BERA', 'BOME', 'CVC', 'REZ', 'BABY', 'AR', 'NEO', 'GTC', 'NEIRO', 'BANANA', 'AXS', 'PLUME', 'PARTI', 'FF', 'TST', 'EGLD', 'PNUT', 'GRT', 'TURBO', 'HUMA', 'MANA', 'ENJ', 'DEXE', 'ZK', 'BLUR', 'ME', 'IO', 'VANA', 'DYDX', 'VET', 'MINA', 'OPEN', 'RUNE', 'MOVR', 'MITO', 'SOPH', 'PYTH', 'SUSHI', 'HIVE', 'TRB', 'MMT', 'STX', 'MORPHO', 'LPT', 'BSV', 'ROBO', 'IOTA', 'HEMI', 'NIGHT', 'OPN', 'CFX', 'LINEA', 'ROSE', 'STG', 'COMP', 'ENSO', 'THETA', 'ALLO', 'AIXBT', 'HOLO', 'EDU', 'DUSK', 'STORJ', 'TNSR', 'GMT', 'ARKM', 'MEME', 'SKY', 'AVNT', 'IMX', 'KAITO'].map(s => {
             const active = symbols.includes(s)
             return (
               <button

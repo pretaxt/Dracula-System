@@ -35,12 +35,24 @@ class HTXAdapter(CCXTAdapter):
             "enableRateLimit": True,
         }
         # CCXT 的 HTX 正在 huobi → htx 的过渡期；尝试 htx，回退 huobi
+        # 关键 option：createMarketBuyOrderRequiresPrice=False 让 market BUY 用 base
+        # 数量（不是 quote 成本），与本系统所有策略 size 语义一致；不设则 ccxt 抛
+        # "requires the price argument" 拒单 → 跨所开仓 long 腿失败 + 单腿暴露。
+        _common_opts = {"createMarketBuyOrderRequiresPrice": False}
         try:
-            perp_client = ccxt.htx({**config, "options": {"defaultType": "swap"}})
-            spot_client = ccxt.htx({**config, "options": {"defaultType": "spot"}})
+            perp_client = ccxt.htx({
+                **config, "options": {"defaultType": "swap", **_common_opts},
+            })
+            spot_client = ccxt.htx({
+                **config, "options": {"defaultType": "spot", **_common_opts},
+            })
         except Exception:
-            perp_client = ccxt.huobi({**config, "options": {"defaultType": "swap"}})
-            spot_client = ccxt.huobi({**config, "options": {"defaultType": "spot"}})
+            perp_client = ccxt.huobi({
+                **config, "options": {"defaultType": "swap", **_common_opts},
+            })
+            spot_client = ccxt.huobi({
+                **config, "options": {"defaultType": "spot", **_common_opts},
+            })
         if testnet:
             try:
                 perp_client.set_sandbox_mode(True)
@@ -54,10 +66,58 @@ class HTXAdapter(CCXTAdapter):
         }
 
     async def top_up_perp_margin(self, amount: "Decimal") -> None:
-        logger.debug("htx_top_up_perp_noop", amount=str(amount))
+        """从 spot 钱包划转 USDT 到 USDT-M swap（linear）钱包。
+
+        HTX spot 与 swap 在 UTA 单币种保证金模式下仍然隔离；perp 下单需要
+        swap 钱包有足够 cross_margin_static 余额。
+        ccxt 统一接口：transfer(currency, amount, from, to)
+        """
+        if amount <= 0:
+            return
+        spot_client = self._clients[InstrumentType.SPOT]
+        try:
+            r = await spot_client.transfer("USDT", float(amount), "spot", "swap")
+            logger.info(
+                "htx_perp_margin_topped_up",
+                from_account="spot", to_account="swap",
+                amount=str(amount),
+                tran_id=(r or {}).get("info", {}).get("data") if isinstance(r, dict) else None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "htx_top_up_perp_failed",
+                amount=str(amount), error=str(exc)[:200],
+            )
+            raise
 
     async def top_up_spot_margin(self, amount: "Decimal") -> None:
         logger.debug("htx_top_up_spot_noop", amount=str(amount))
+
+    async def fetch_perp_usdt_balance(self) -> "Decimal":
+        """读 HTX swap (linear perp) USDT 可用余额（UTA v3 endpoint）。
+
+        ccxt 默认的 fetch_balance 在 UTA 模式下报 4002，必须用 v3 unified_account_info。
+        live_broker._ensure_perp_margin 会优先调本方法获得真实 perp 钱包余额。
+        """
+        from decimal import Decimal as _D  # noqa: PLC0415
+        try:
+            perp_client = self._clients[InstrumentType.PERPETUAL]
+            if not hasattr(perp_client, "contract_private_get_linear_swap_api_v3_unified_account_info"):
+                return _D("0")
+            r = await perp_client.contract_private_get_linear_swap_api_v3_unified_account_info()
+            data = r.get("data") if isinstance(r, dict) else None
+            if not isinstance(data, list):
+                return _D("0")
+            for a in data:
+                if a.get("margin_asset") != "USDT":
+                    continue
+                # withdraw_available 是可划转出的可用余额（最严苛）
+                wa = a.get("withdraw_available") or a.get("margin_balance") or 0
+                return _D(str(wa))
+            return _D("0")
+        except Exception as exc:
+            logger.debug("htx_fetch_perp_balance_failed", error=str(exc)[:200])
+            return _D("0")
 
     async def fetch_spot_margin_usdt_balance(self) -> "Decimal":
         from decimal import Decimal as _D  # noqa: PLC0415

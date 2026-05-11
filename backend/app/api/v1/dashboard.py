@@ -1,6 +1,8 @@
 """Dashboard 路由 — GET /dashboard/summary。"""
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Request
 
 from app.api.deps import CurrentUser, DbSession
@@ -13,9 +15,21 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/summary", response_model=DashboardSummary)
 async def summary(_: CurrentUser, db: DbSession, request: Request) -> DashboardSummary:
     adapters = getattr(request.app.state, "adapters", None)
-    # R6: 优先用 reconciler cache，避免 lazy fetch 阻塞用户访问
     reconciler = getattr(request.app.state, "balance_reconciler", None)
     data = await get_summary(db, adapters=adapters, reconciler=reconciler)
+
+    # 叠加链上 Arbitrum 钱包余额（CEX-DEX runner 每 5min 缓存刷新）
+    cex_dex_runner = getattr(request.app.state, "cex_dex_runner", None)
+    web3_balance_usd: Decimal = Decimal("0")
+    if cex_dex_runner is not None:
+        web3_balance_usd = getattr(cex_dex_runner, "_wallet_balance_usd", Decimal("0"))
+    if web3_balance_usd > 0:
+        total = Decimal(data["total_equity_usd"]) + web3_balance_usd
+        data["total_equity_usd"] = str(round(total, 2))
+        equity_by_exchange = dict(data.get("equity_by_exchange") or {})
+        equity_by_exchange["arbitrum"] = str(round(web3_balance_usd, 2))
+        data["equity_by_exchange"] = equity_by_exchange
+
     return DashboardSummary(
         net_pnl_usd=data["net_pnl_usd"],
         realized_pnl_usd=data["realized_pnl_usd"],

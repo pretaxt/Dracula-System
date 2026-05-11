@@ -113,6 +113,8 @@ export function Badge({ tone = 'info', children, style }: { tone?: BadgeTone; ch
         background: s.bg,
         color: s.color,
         border: `1px solid ${s.border}`,
+        whiteSpace: 'nowrap',       // 防止中文徽章 "运行中" 被换行
+        flexShrink: 0,              // 父 flex 容器收缩时不被压缩
         ...style,
       }}
     >

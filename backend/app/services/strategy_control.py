@@ -228,3 +228,90 @@ async def stop_perp_basis_paper(app_state) -> bool:
         app_state.perp_basis_paper = None
         app_state.perp_basis_paper_task = None
         return True
+
+
+# ---------------------------------------------------------------------------
+# CEX-DEX 启停
+# ---------------------------------------------------------------------------
+
+_CD_YAML_PATH = "config/strategies/cex_dex_main.yaml"
+
+
+def is_cex_dex_running(app_state) -> bool:
+    task = getattr(app_state, "cex_dex_task", None)
+    return task is not None and not task.done()
+
+async def start_cex_dex(app_state) -> bool:
+    """启动 CEX-DEX runner（幂等）。已运行返回 False。"""
+    async with _lock:
+        if is_cex_dex_running(app_state):
+            return False
+
+        runner = getattr(app_state, "cex_dex_runner", None)
+        if runner is not None:
+            # Runner 对象存在但 task 已结束 → 直接 re-schedule run_forever
+            task = asyncio.create_task(runner.run_forever(), name="cex_dex_runner")
+            app_state.cex_dex_task = task
+            return True
+
+        # 完整初始化
+        import os as _os  # noqa: PLC0415
+        import yaml as _yaml  # noqa: PLC0415
+        try:
+            if not _os.path.exists(_CD_YAML_PATH):
+                return False
+            with open(_CD_YAML_PATH) as _f:
+                cd_yaml = _yaml.safe_load(_f) or {}
+            if not cd_yaml.get("enabled", False):
+                return False
+
+            from app.strategies.cex_dex.config import CexDexConfig  # noqa: PLC0415
+            from app.strategies.cex_dex.runner import CexDexRunner  # noqa: PLC0415
+            from web3 import AsyncWeb3  # noqa: PLC0415
+
+            _web3_creds: dict = {}
+            try:
+                from app.services.web3_credentials import load_web3_credentials  # noqa: PLC0415
+                _web3_creds = load_web3_credentials()
+            except Exception:
+                pass
+
+            from app.core.config import get_settings  # noqa: PLC0415
+            _s = get_settings()
+            private_key = _web3_creds.get("private_key") or _s.cex_dex_wallet_private_key
+            rpc_url = _web3_creds.get("rpc_url") or _s.arbitrum_rpc_url
+            if not rpc_url or not private_key:
+                return False
+
+            cfg = CexDexConfig.from_yaml(cd_yaml)
+            w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url))
+            adapters = getattr(app_state, "adapters", {})
+            adapter = adapters.get(cfg.cex_exchange) or next(iter(adapters.values()), None)
+            if not adapter:
+                return False
+
+            runner = CexDexRunner(config=cfg, w3=w3, cex_adapter=adapter, private_key=private_key)
+            task = asyncio.create_task(runner.run_forever(), name="cex_dex_runner")
+            app_state.cex_dex_runner = runner
+            app_state.cex_dex_task = task
+            return True
+        except Exception:
+            return False
+
+
+async def stop_cex_dex(app_state) -> bool:
+    """停止 CEX-DEX runner（保留 runner 对象便于重启）。"""
+    async with _lock:
+        runner = getattr(app_state, "cex_dex_runner", None)
+        if runner is None:
+            return False
+        runner.stop()
+        task = getattr(app_state, "cex_dex_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        app_state.cex_dex_task = None
+        return True

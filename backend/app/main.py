@@ -776,6 +776,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     cfg=_pb_yaml, adapters=adapters, scanner=pb_scanner,
                     market_data_hub=market_data_hub,
                     live_mode=_pb_live_mode,
+                    reconciler=balance_reconciler,
                 )
                 logger.info(
                     "perp_basis_paper_mode",
@@ -793,6 +794,50 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("perp_basis_paper_init_failed")
     app.state.perp_basis_paper = perp_basis_paper
     app.state.perp_basis_paper_task = perp_basis_paper_task
+
+
+    # --- CEX-DEX 套利 runner ---
+    cex_dex_runner = None
+    cex_dex_task = None
+    _cd_yaml_path = "config/strategies/cex_dex_main.yaml"
+    # 优先从 state 文件读 web3 凭据，兜底 .env
+    _web3_creds = {}
+    try:
+        from app.services.web3_credentials import load_web3_credentials  # noqa: PLC0415
+        _web3_creds = load_web3_credentials()
+    except Exception:
+        pass
+    _cd_private_key = _web3_creds.get("private_key") or settings.cex_dex_wallet_private_key
+    _cd_rpc_url = _web3_creds.get("rpc_url") or settings.arbitrum_rpc_url
+
+    if __import__("os").path.exists(_cd_yaml_path) and _cd_rpc_url and _cd_private_key:
+        try:
+            from web3 import AsyncWeb3  # noqa: PLC0415
+            from app.strategies.cex_dex.config import CexDexConfig  # noqa: PLC0415
+            from app.strategies.cex_dex.runner import CexDexRunner  # noqa: PLC0415
+            with open(_cd_yaml_path) as f:
+                _cd_yaml = yaml.safe_load(f) or {}
+            if _cd_yaml.get("enabled", False):
+                _cd_cfg = CexDexConfig.from_yaml(_cd_yaml)
+                _cd_w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_cd_rpc_url))
+                _cd_adapter = adapters.get(_cd_cfg.cex_exchange) or next(iter(adapters.values()), None)
+                if _cd_adapter:
+                    cex_dex_runner = CexDexRunner(
+                        config=_cd_cfg, w3=_cd_w3,
+                        cex_adapter=_cd_adapter,
+                        private_key=_cd_private_key,
+                    )
+                    cex_dex_task = asyncio.create_task(
+                        cex_dex_runner.run_forever(), name="cex_dex_runner"
+                    )
+                    task_supervisor.register("cex_dex_runner", cex_dex_task)
+                    logger.info("cex_dex_runner_task_created", mode=_cd_cfg.execution_mode)
+                else:
+                    logger.warning("cex_dex_no_adapter_available")
+        except Exception:
+            logger.exception("cex_dex_runner_init_failed")
+    app.state.cex_dex_runner = cex_dex_runner
+    app.state.cex_dex_task = cex_dex_task
 
     # --- Telegram 双向命令 bot（C 项）---
     telegram_bot = None
@@ -836,6 +881,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
+    if cex_dex_runner is not None:
+        cex_dex_runner.stop()
+    if cex_dex_task is not None:
+        cex_dex_task.cancel()
+        try:
+            await cex_dex_task
+        except asyncio.CancelledError:
+            pass
     if perp_basis_runner is not None:
         perp_basis_runner.stop()
     if perp_basis_task is not None:

@@ -174,6 +174,7 @@ class SpotPerpConfigPatchRequest(BaseModel):
     notional_per_position: str | None = None
     direction_filter: str | None = None
     scan_threshold_pct: str | None = None
+    candidate_symbols: list[str] | None = None
 
     @field_validator("entry_pct", "entry_pct_premium", "entry_pct_discount",
                      "exit_pct", "scan_threshold_pct",

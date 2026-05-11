@@ -65,6 +65,7 @@ class PerpBasisPaperSession:
         stop_price_divergence_pct: Decimal = Decimal("5.0"),
         scan_interval_seconds: float = 60.0,
         market_data_hub: Any = None,
+        reconciler: Any = None,
     ) -> None:
         self._scanner = scanner
         self._brokers = brokers
@@ -78,6 +79,8 @@ class PerpBasisPaperSession:
         self._stop_price_div = stop_price_divergence_pct
         self._interval = scan_interval_seconds
         self._hub = market_data_hub  # #02-2: funding 累计 + 价格查询数据源
+        # 真实余额唯一真相源 — preflight 必须读这里，不读 broker 的 fake adapter
+        self._reconciler = reconciler
         self._running = False
         # 用 PositionManager 持久化（X5 模式 — 重启 restore 完整）
         self._manager = PositionManager(strategy_type=_STRATEGY_TYPE)
@@ -308,46 +311,89 @@ class PerpBasisPaperSession:
         except Exception:
             pass
 
+    # 各交易所 USDT 可动用钱包 keys（按可划转性归并 — perp 开仓前 _ensure_perp_margin
+    # 会自动从其他钱包 cascade 划转到 perp 钱包）。
+    # 注意：non-USDT 资产（BNB / BTC 等）不计入，因为划转需先 swap，是破坏性操作。
+    _USABLE_USDT_KEYS: dict[str, tuple[str, ...]] = {
+        # binance: 4 钱包都 USDT，开仓前 top_up_perp_margin 级联划转
+        "binance": ("USDT_PERP", "USDT", "USDT_MARGIN", "USDT_FUNDING"),
+        # htx: UTA 单币种保证金 — spot + swap 隔离，top_up 划转 spot→swap
+        "htx": ("USDT_HTX_SWAP", "USDT"),
+        # okx UTA: trading account 已包含 spot+swap (cross 共享)
+        "okx": ("USDT",),
+        # bybit / bitget UTA：同 okx
+        "bybit": ("USDT",),
+        "bitget": ("USDT",),
+    }
+
+    def _read_real_perp_free(self, exchange: str) -> Decimal | None:
+        """读真实可动用 USDT 总额（所有钱包累加）。返回 None = fail-closed 信号。
+
+        与单 perp 钱包不同：本方法累加所有可划转 USDT 到 perp 钱包的余额。
+        实际开仓时 _ensure_perp_margin 会调 adapter.top_up_perp_margin 完成划转。
+        """
+        if self._reconciler is None:
+            return None
+        cache = getattr(self._reconciler, "balance_cache", None) or {}
+        assets = cache.get(exchange)
+        if not isinstance(assets, dict) or not assets:
+            return None
+        usdt_keys = self._USABLE_USDT_KEYS.get(exchange, ("USDT",))
+        total = Decimal("0")
+        for key in usdt_keys:
+            info = assets.get(key)
+            if not isinstance(info, dict):
+                continue
+            try:
+                free = Decimal(str(info.get("free") or 0))
+            except Exception:
+                continue
+            if free > 0:
+                total += free
+        return total if total > 0 else None
+
     async def _preflight_dual(
         self, broker_long, long_req, broker_short, short_req,
     ) -> None:
+        """每腿独立验真实余额；任一失败立即 raise (fail-closed)。
+
+        - 没有 reconciler 或没有该交易所的余额缓存 → 拒开（无 API key 或同步失败）
+        - 真实可用 < 名义/杠杆 × 1.05 buffer → 拒开
+        - 不再相信 broker._adapter.fetch_balance（paper broker 返回 fake $1M）
+        """
         for broker, req in [(broker_long, long_req), (broker_short, short_req)]:
+            ex = req.exchange
             try:
                 await broker._ensure_perp_margin(req)
             except Exception:
                 pass
-            try:
-                client = broker._adapter._clients.get(InstrumentType.PERPETUAL)
-                if client is None:
-                    continue
-                raw = await client.fetch_balance()
-                free = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
-                notional = req.size * req.reference_price
-                required = notional / broker._perp_leverage * Decimal("1.05")
-                if free < required:
-                    raise InsufficientBalanceError(
-                        f"{broker._adapter.exchange_id} perp insufficient: "
-                        f"free={free} required={required:.4f}"
-                    )
-            except InsufficientBalanceError:
-                raise
-            except Exception:
-                logger.warning("perp_basis_preflight_check_skipped",
-                               exchange=req.exchange)
+            free = self._read_real_perp_free(ex)
+            if free is None:
+                raise InsufficientBalanceError(
+                    f"{ex}: real balance unavailable "
+                    f"(no API key or reconciler not synced) — fail-closed"
+                )
+            notional = req.size * req.reference_price
+            required = notional / broker._perp_leverage * Decimal("1.05")
+            if free < required:
+                raise InsufficientBalanceError(
+                    f"{ex} perp insufficient: free={free:.4f} required={required:.4f}"
+                )
 
     async def _cross_unwind(self, broker, original_req, original_result) -> None:
         try:
+            # 反向 side（BUY→SELL，SELL→BUY）但 position_side 保持不变 —
+            # binance hedge 模式平 SHORT bucket 必须 positionSide=SHORT + reduceOnly，
+            # 之前误把 position_side 也翻转 → 等于在另一个 bucket 反向开新仓，
+            # 累积成单腿残留持仓（已观察到 binance TIA 短头 $150 累积）。
             opposite_side = Side.SELL if original_req.side == Side.BUY else Side.BUY
-            opposite_position_side = (
-                "SHORT" if original_req.position_side == "LONG" else "LONG"
-            )
             unwind_req = OrderRequest(
                 symbol=original_req.symbol, side=opposite_side,
                 size=original_result.filled_size,
                 reference_price=original_result.avg_price,
                 exchange=original_req.exchange,
                 instrument_type=InstrumentType.PERPETUAL,
-                reduce_only=True, position_side=opposite_position_side,
+                reduce_only=True, position_side=original_req.position_side,
             )
             await broker.execute(unwind_req)
             logger.info("perp_basis_cross_unwind_success",

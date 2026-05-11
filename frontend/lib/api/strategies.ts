@@ -194,6 +194,7 @@ export type PerpBasisExchangeBalance = {
   perp_usdt_free: string
   perp_usdt_total: string
   ready: boolean
+  wallet_breakdown?: Record<string, number>
 }
 
 export async function getPerpBasisExchangeBalance(): Promise<{
@@ -261,5 +262,155 @@ export async function getSpotPerpConfig(): Promise<SpotPerpConfig> {
 
 export async function patchSpotPerpConfig(patch: SpotPerpConfigPatch): Promise<SpotPerpConfig> {
   const { data } = await apiClient.patch<SpotPerpConfig>('/strategies/spot-perp/config', patch)
+  return data
+}
+
+
+// ---------------------------------------------------------------------------
+// #05 CEX-DEX 套利 (Arbitrum One)
+// ---------------------------------------------------------------------------
+
+export type CexDexStatus = {
+  running: boolean
+  mode: 'paper' | 'live' | 'unconfigured'
+  open_trades: number
+  daily_loss_usd: number
+  max_daily_loss_usd: number
+  eth_usd: number
+  last_scan_at: string | null
+}
+
+export type CexDexConfig = {
+  execution_mode: string
+  scan_interval_seconds: number
+  max_trade_usd: number
+  max_daily_loss_usd: number
+  max_gas_gwei: number
+  min_net_profit_usd: number
+  max_slippage_bps: number
+  cex_exchange: string
+  pairs: { base: string; quote: string; pool_fee: number; cex_symbol: string }[]
+}
+
+export type CexDexOpportunity = {
+  pair: string
+  direction: 'cex_cheap' | 'dex_cheap'
+  cex_price: string
+  dex_price: string
+  raw_spread_bps: string
+  estimated_gas_usd: string
+  net_profit_usd: string
+  trade_usd: string
+}
+
+export type CexDexOpportunitiesResponse = {
+  running: boolean
+  mode: string
+  last_scan_at: string | null
+  min_net_profit_usd: number
+  eth_usd: number
+  data: CexDexOpportunity[]
+}
+
+export type CexDexConfigPatch = Partial<{
+  execution_mode: 'paper' | 'live'
+  min_net_profit_usd: number
+  max_trade_usd: number
+  max_daily_loss_usd: number
+  max_gas_gwei: number
+}>
+
+export async function getCexDexStatus(): Promise<CexDexStatus> {
+  const { data } = await apiClient.get<CexDexStatus>('/strategies/cex-dex/status')
+  return data
+}
+
+export async function getCexDexConfig(): Promise<CexDexConfig> {
+  const { data } = await apiClient.get<CexDexConfig>('/strategies/cex-dex/config')
+  return data
+}
+
+export async function patchCexDexConfig(patch: CexDexConfigPatch): Promise<CexDexConfig> {
+  const { data } = await apiClient.patch<CexDexConfig>('/strategies/cex-dex/config', patch)
+  return data
+}
+
+export async function getCexDexOpportunities(): Promise<CexDexOpportunitiesResponse> {
+  const { data } = await apiClient.get<CexDexOpportunitiesResponse>('/strategies/cex-dex/opportunities')
+  return data
+}
+
+
+export type CexDexWalletBalance = {
+  configured: boolean
+  wallet_address: string | null
+  balances: { token: string; amount: string; usd: string }[]
+  total_usd: string
+}
+
+export async function getCexDexWalletBalance(): Promise<CexDexWalletBalance> {
+  const { data } = await apiClient.get<CexDexWalletBalance>('/strategies/cex-dex/wallet-balance')
+  return data
+}
+
+// ── CEX-DEX 新增类型 ──────────────────────────────────────────────────────────
+
+export type CexDexCexBalance = {
+  configured: boolean
+  eth: string
+  usdt: string
+  eth_price: string
+  total_usd: string
+}
+
+export type CexDexSpreadEntry = {
+  pair: string
+  cex_bid: number
+  cex_ask: number
+  dex_buy: number
+  dex_sell: number
+  spread_cex_cheap_bps: number
+  spread_dex_cheap_bps: number
+  gas_usd: number
+  ts: string
+}
+
+export type CexDexSpreadsResponse = {
+  data: CexDexSpreadEntry[]
+  threshold_usd: number
+  max_trade_usd: number
+  last_scan_at: string | null
+  scan_count: number
+}
+
+export type CexDexPaperTrade = {
+  timestamp: string
+  pair: string
+  direction: 'cex_cheap' | 'dex_cheap'
+  cex_price: number
+  dex_price: number
+  spread_bps: number
+  net_profit_usd: number
+  gas_usd: number
+  trade_usd: number
+}
+
+export type CexDexPaperHistoryResponse = {
+  data: CexDexPaperTrade[]
+  total: number
+}
+
+export async function getCexDexCexBalance(): Promise<CexDexCexBalance> {
+  const { data } = await apiClient.get<CexDexCexBalance>('/strategies/cex-dex/cex-balance')
+  return data
+}
+
+export async function getCexDexSpreads(): Promise<CexDexSpreadsResponse> {
+  const { data } = await apiClient.get<CexDexSpreadsResponse>('/strategies/cex-dex/spreads')
+  return data
+}
+
+export async function getCexDexPaperHistory(): Promise<CexDexPaperHistoryResponse> {
+  const { data } = await apiClient.get<CexDexPaperHistoryResponse>('/strategies/cex-dex/paper-history')
   return data
 }

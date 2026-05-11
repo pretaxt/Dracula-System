@@ -97,3 +97,7 @@ temp/
 notes/
 TODO.local.md
 SCRATCHPAD.md
+
+# Runtime state files (contain credentials)
+state/
+*.bak.*

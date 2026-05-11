@@ -79,3 +79,25 @@ export async function updateExchangeCredentials(
   )
   return data
 }
+
+export type Web3CredentialsMeta = {
+  configured: boolean
+  wallet_address: string | null
+  rpc_url_preview: string | null
+  updated_at: string | null
+}
+
+export type Web3CredentialsPatch = {
+  private_key: string
+  rpc_url: string
+}
+
+export async function getWeb3Credentials(): Promise<Web3CredentialsMeta> {
+  const { data } = await apiClient.get<Web3CredentialsMeta>('/system/web3-credentials')
+  return data
+}
+
+export async function updateWeb3Credentials(patch: Web3CredentialsPatch): Promise<Web3CredentialsMeta> {
+  const { data } = await apiClient.post<Web3CredentialsMeta>('/system/web3-credentials', patch)
+  return data
+}
