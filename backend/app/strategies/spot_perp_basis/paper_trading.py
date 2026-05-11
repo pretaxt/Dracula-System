@@ -249,6 +249,9 @@ class SpotPerpPaperSession:
         # b — 入场时机过滤：每 symbol 维护近 N 分钟的 |basis| 滑窗
         # key = symbol_pair (e.g. "BTC/USDT"), value = list of (timestamp_ms, abs_basis_pct)
         self._basis_peak_cache: dict[str, list[tuple[int, Decimal]]] = {}
+        # 实盘开仓失败暂封：key = (symbol, exchange, direction)，value = 封禁截止 timestamp
+        # InsufficientBalance / margin 错误后暂时跳过该 (symbol, direction) 避免无限重试
+        self._open_blocked_until: dict[tuple, float] = {}
         # 显式 notional 参数兼容旧调用，覆盖 cfg
         if notional_per_position is not None:
             self._cfg = self._cfg.apply_overrides(
@@ -510,6 +513,17 @@ class SpotPerpPaperSession:
                             allowed=df,
                         )
                         continue
+                    # 暂封检查：InsufficientBalance 等不可重试错误会封 30 分钟
+                    _block_key = (opp.symbol, opp.exchange, opp.direction)
+                    _block_until = self._open_blocked_until.get(_block_key, 0.0)
+                    if now.timestamp() < _block_until:
+                        logger.debug(
+                            "spot_perp_live_skip_blocked",
+                            symbol=opp.symbol,
+                            direction=opp.direction,
+                            unblock_in_s=int(_block_until - now.timestamp()),
+                        )
+                        continue
                     meta = await self._open_live(opp)
                     if meta is None:
                         # 实盘下单失败，跳过（不写 row）；下次 tick 再试
@@ -635,9 +649,42 @@ class SpotPerpPaperSession:
 
         try:
             spot_r, perp_r = await broker.execute_pair(spot_req, perp_req)
-        except Exception:
-            logger.exception("spot_perp_live_open_failed",
-                             symbol=opp.symbol, direction=direction)
+        except Exception as _exc:
+            import time as _time  # noqa: PLC0415
+            from app.exchanges.errors import (  # noqa: PLC0415
+                InsufficientBalanceError, OrderRejectedError, SymbolNotFoundError,
+            )
+            _exc_str = str(_exc).lower()
+            # 不可重试场景分类：
+            # 1. 余额/借币不足（OKX InsufficientFunds / Binance -3045 / 通用关键词）
+            _is_balance_err = (
+                isinstance(_exc, InsufficientBalanceError)
+                or (isinstance(_exc, OrderRejectedError) and any(kw in _exc_str for kw in [
+                    "not have enough asset",   # Binance -3045
+                    "insufficient",            # 通用
+                    "margin",                  # 保证金不足
+                    "-3045",                   # Binance 明确码
+                ]))
+            )
+            # 2. 交易所不支持该 symbol（HTX "base-symbol-trade-disabled"）→ 封更久
+            _is_symbol_err = isinstance(_exc, SymbolNotFoundError) or (
+                "trade-disabled" in _exc_str or "symbol" in _exc_str and "disabled" in _exc_str
+            )
+
+            if _is_balance_err or _is_symbol_err:
+                _block_key = (opp.symbol, opp.exchange, direction)
+                _block_minutes = 30 if _is_balance_err else 720  # symbol 不可用封 12h
+                self._open_blocked_until[_block_key] = _time.time() + _block_minutes * 60
+                logger.warning(
+                    "spot_perp_live_open_blocked",
+                    symbol=opp.symbol, exchange=opp.exchange, direction=direction,
+                    reason="balance" if _is_balance_err else "symbol_disabled",
+                    blocked_minutes=_block_minutes,
+                    exc=str(_exc)[:120],
+                )
+            else:
+                logger.exception("spot_perp_live_open_failed",
+                                 symbol=opp.symbol, direction=direction)
             return None
 
         meta = {

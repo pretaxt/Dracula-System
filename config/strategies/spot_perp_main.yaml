@@ -28,7 +28,7 @@ entry:
   # 例：peak_window=10min, dropoff=0.05% → |basis| 必须先到过 0.35% 然后回落到 0.30% 才开（entry=0.30%）
   # 0 = 禁用（旧行为：见到阈值即入场）
   peak_window_minutes: 10       # 滑窗时长（分钟）
-  min_peak_dropoff_pct: 0.05    # 最少回落幅度（pct）
+  min_peak_dropoff_pct: 0    # 最少回落幅度（pct）
 
 exit:
   basis_convergence_pct: 0.10   # 收敛平仓阈值（D.2.b 实战调优 0.03→0.10 防噪音）
