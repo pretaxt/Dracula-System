@@ -287,6 +287,19 @@ class FundingRateScanner:
         log = logger.bind(exchange=exchange_name, symbol=str(symbol))
         sem = self._exchange_sems.get(exchange_name)
 
+        # 早退 1：hub 资金费率缓存过滤（HTX 等 bulk API 支持，已知 symbol 集合准确）
+        if self._hub is not None and hasattr(self._hub, "known_funding_symbols"):
+            _known = self._hub.known_funding_symbols(exchange_name)
+            if _known and str(symbol) not in _known:
+                return None
+
+        # 早退 2：hub ticker 缓存过滤（对 bulk 资金费率 API 不支持的交易所如 Bybit 尤为关键）
+        # 若 ticker hub 已填充但 symbol 无 perp ticker，说明该 symbol 在此交易所不存在
+        if self._hub is not None and hasattr(self._hub, "known_perp_symbols"):
+            _perp_known = self._hub.known_perp_symbols(exchange_name)
+            if _perp_known and str(symbol) not in _perp_known:
+                return None
+
         try:
             # Step 1: 拉取资金费率（hub-first，避免 3565 次重复 HTTP）
             funding: Optional[FundingRate] = None
@@ -323,11 +336,37 @@ class FundingRateScanner:
             # Step 1.5: 24h 交易量过滤（防止流动性陷阱）
             if self._config.min_volume_24h_usd > 0:
                 try:
-                    ticker = await adapter.fetch_ticker(symbol, InstrumentType.PERPETUAL)
-                    if ticker.volume_24h < self._config.min_volume_24h_usd:
+                    volume_24h: Optional[Decimal] = None
+                    hub_hit = False  # hub 是否命中（命中则不走 HTTP）
+                    # hub-first：优先从 ticker cache 读取，避免 HTTP
+                    # （OKX 等 perp ticker quoteVolume=None，改用 baseVolume×last 估算；
+                    #   无论如何只要 hub 命中就不回落 HTTP 避免 fetch_ticker 挂起）
+                    if self._hub is not None:
+                        try:
+                            te = self._hub.get_ticker(exchange_name, InstrumentType.PERPETUAL, symbol)
+                            if te is not None:
+                                hub_hit = True
+                                raw_vol = te.raw.get("quoteVolume")
+                                if raw_vol is not None:
+                                    volume_24h = Decimal(str(raw_vol))
+                                else:
+                                    # OKX swap: quoteVolume=None, baseVolume in base asset
+                                    base_vol = te.raw.get("baseVolume")
+                                    last = te.raw.get("last") or te.raw.get("close")
+                                    if base_vol is not None and last is not None:
+                                        volume_24h = Decimal(str(base_vol)) * Decimal(str(last))
+                        except Exception:
+                            pass
+                    if not hub_hit:
+                        ticker = await adapter.fetch_ticker(symbol, InstrumentType.PERPETUAL)
+                        volume_24h = ticker.volume_24h
+                    if volume_24h is None:
+                        # hub 命中但缺量数据：跳过此过滤（宁可放行，不挂 HTTP）
+                        pass
+                    elif volume_24h < self._config.min_volume_24h_usd:
                         log.debug(
                             "volume_too_low",
-                            volume_24h_usd=float(ticker.volume_24h),
+                            volume_24h_usd=float(volume_24h),
                             required=float(self._config.min_volume_24h_usd),
                         )
                         return None

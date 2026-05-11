@@ -33,6 +33,7 @@ def build_paper_session(
     symbols: list[Symbol],
     scan_interval_seconds: float = 60.0,
     live_mode: bool = False,
+    market_data_hub: object | None = None,
 ) -> PaperTradingSession:
     """从策略配置字典构建 PaperTradingSession。
 
@@ -125,6 +126,7 @@ def build_paper_session(
         adapters=adapters,
         symbols=symbols,
         config=ScannerConfig.from_yaml(cfg),
+        market_data_hub=market_data_hub,  # hub 注入：跳过未知 symbol → 消除 timeout spam
     )
 
     pre_funding_window_min = float(entry_cfg.get("pre_funding_window_minutes", 15.0))

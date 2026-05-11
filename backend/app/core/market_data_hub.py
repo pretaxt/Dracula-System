@@ -177,6 +177,22 @@ class MarketDataHub:
             return None
         return entry
 
+    def known_perp_symbols(self, exchange: str) -> frozenset:
+        """返回 ticker cache 中已知的永续合约 symbol 集合（简化格式 BASE/QUOTE）。
+
+        用于 scanner 的第二层 early-exit：若 ticker hub 已填充但 symbol 不在其中，
+        说明该 symbol 在此交易所不存在永续合约，可直接跳过以避免 HTTP 挂起。
+        对 Bybit 特别有效：bulk 资金费率 API 不支持 linear，ticker hub 反而完整。
+        """
+        cache = self._cache.get(exchange.lower())
+        if cache is None:
+            return frozenset()
+        # 只返回简化 key（不含 : 的），避免重复计算 :USDT 格式
+        return frozenset(
+            s for (i, s) in cache.tickers
+            if i == InstrumentType.PERPETUAL.value and ":" not in s
+        )
+
     def get_tickers(
         self, exchange: str, instrument: InstrumentType,
         max_age_seconds: float = _DEFAULT_STALE_TICKER_SECONDS,
@@ -202,6 +218,15 @@ class MarketDataHub:
         if entry is None or entry.is_stale(max_age_seconds):
             return None
         return entry
+
+
+    def known_funding_symbols(self, exchange: str) -> frozenset[str]:
+        """返回 hub 已缓存该交易所资金费率的 symbol 字符串集合。
+        hub 尚未填充时返回空集（调用方兜底全扫）。"""
+        cache = self._cache.get(exchange.lower())
+        if cache is None or not cache.funding_rates:
+            return frozenset()
+        return frozenset(cache.funding_rates.keys())
 
     def health(self) -> dict[str, dict[str, Any]]:
         """运维监控用。返回各 exchange 的 fetch 状态。"""
@@ -278,16 +303,25 @@ class MarketDataHub:
             for sym_str, t in raw.items():
                 if not isinstance(t, dict):
                     continue
-                cache.tickers[(inst.value, sym_str)] = TickerEntry(
-                    raw=t, fetched_at=now,
-                )
+                entry = TickerEntry(raw=t, fetched_at=now)
+                cache.tickers[(inst.value, sym_str)] = entry
+                # CCXT perp symbols use "BASE/QUOTE:QUOTE" format (e.g. "AR/USDT:USDT").
+                # Also index by the simplified "BASE/QUOTE" key so callers using
+                # str(Symbol) can hit the cache without knowing the settlement suffix.
+                if inst == InstrumentType.PERPETUAL and ":" in sym_str:
+                    simple_key = sym_str.split(":")[0]
+                    cache.tickers[(inst.value, simple_key)] = entry
                 total_fetched += 1
         cache.last_ticker_fetch_at = now
         cache.last_ticker_count = total_fetched
         if total_fetched > 0:
+            # Debug: count simple keys stored for perp
+            simple_perp_count = sum(
+                1 for (i, s) in cache.tickers if i == InstrumentType.PERPETUAL.value and ":" not in s
+            )
             logger.debug(
                 "hub_tickers_refreshed",
-                exchange=exchange, count=total_fetched,
+                exchange=exchange, count=total_fetched, simple_perp_keys=simple_perp_count,
             )
 
     async def _fetch_funding_once(self, exchange: str) -> None:

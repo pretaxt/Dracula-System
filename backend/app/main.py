@@ -202,6 +202,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     paper_session: PaperTradingSession | None = None
     paper_task: asyncio.Task | None = None  # type: ignore[type-arg]
 
+    # --- Market Data Hub (前置初始化：消除 late-bind 竞态，确保 scanner 第一次扫描就有 hub) ---
+    # 必须在 runner 创建前初始化，否则 asyncio.create_task 后的 _scan_one 任务
+    # 在 event loop yield 时就开始执行，此时 self._hub 仍为 None，导致 3000+ 无效 HTTP 请求。
+    market_data_hub = None
+    if adapters:
+        try:
+            from app.core.market_data_hub import MarketDataHub, set_market_data_hub  # noqa: PLC0415
+            market_data_hub = MarketDataHub(adapters=adapters)
+            await market_data_hub.start()
+            set_market_data_hub(market_data_hub)
+            logger.info("market_data_hub_initialized")
+        except Exception:
+            logger.exception("market_data_hub_init_failed")
+
     if adapters:
         # --- Dynamic symbol universe: union of all USDT perpetuals from active adapters ---
         # 启动时一次性拉取（每个 adapter ~一次 API call）；不再硬编码白名单。
@@ -231,6 +245,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             config=scanner_config,
             scan_interval_seconds=fr_scan_interval,
             window_only_minutes=fr_window_min,
+            market_data_hub=market_data_hub,  # 前置注入，消除 late-bind 竞态
         )
         runner_task = asyncio.create_task(runner.run_forever(), name="funding_rate_runner")
         task_supervisor.register("funding_rate_runner", runner_task)
@@ -244,6 +259,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 symbols=scan_symbols,
                 scan_interval_seconds=fr_scan_interval,
                 live_mode=_live_mode,
+                market_data_hub=market_data_hub,  # 前置注入，消除 late-bind 竞态
             )
             logger.info("trading_mode", mode=settings.trading_mode, live=_live_mode)
             # 重启时从 DB 恢复仓位，避免去重失效导致重复开仓
@@ -616,28 +632,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         (w for w in polling_watchers if w._exchange_name == "okx"), None,
     )
 
-    # --- Market Data Hub (跨策略共享行情，去重 API 调用) ---
-    market_data_hub = None
-    if adapters:
-        try:
-            from app.core.market_data_hub import MarketDataHub, set_market_data_hub  # noqa: PLC0415
-            market_data_hub = MarketDataHub(adapters=adapters)
-            await market_data_hub.start()
-            set_market_data_hub(market_data_hub)
-            logger.info("market_data_hub_initialized")
-        except Exception:
-            logger.exception("market_data_hub_init_failed")
+    # --- Market Data Hub (已在 runner 创建前初始化，此处仅注册 app.state) ---
+    # hub 实例在上方 runner 创建之前已完成 start()，runner._scanner._hub 通过构造函数注入，
+    # 不再需要 late-bind。
     app.state.market_data_hub = market_data_hub
-
-    # P0-α: 把 hub 注入 funding_rate scanner（之前 runner 在 hub 创建前实例化，
-    # 这里做 late-bind，让 scanner 复用 hub 的 bulk funding cache，从 5-6 分钟
-    # 全量扫描降到 30-90 秒）
-    if runner is not None and market_data_hub is not None:
-        try:
-            runner._scanner._hub = market_data_hub
-            logger.info("funding_rate_scanner_hub_attached")
-        except Exception:
-            logger.exception("funding_rate_scanner_hub_attach_failed")
 
     # --- BalanceReconcilerService (实时余额 + 持仓对账，单腿告警) ---
     balance_reconciler = None
