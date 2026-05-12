@@ -33,7 +33,7 @@ DAILY_DD_HALT_PCT = Decimal("-3.0")      # 单日 PnL ≤ -3% 即熔断
 WEEKLY_DD_HALT_PCT = Decimal("-8.0")     # 周 PnL ≤ -8% 即熔断
 MIN_MARGIN_USAGE_PCT = Decimal("50.0")   # DB 口径 margin_used / equity ≥ 50% 即熔断
 MAX_EXCHANGE_CONCENTRATION_PCT = Decimal("50.0")
-MAX_SYMBOL_CONCENTRATION_PCT = Decimal("35.0")
+MAX_SYMBOL_CONCENTRATION_PCT = Decimal("45.0")  # 调整自 35%: $200 notional / ~$547 equity = 36.55%，原阈值每笔必触发
 # B3-3 binance USDM 真实保证金率（来自交易所 fetch_balance）
 # MMR ≥ 80% 距强平线 100% 仅 20%，1-2% 滑点即可穿透 — 立即熔断
 MAX_BINANCE_MMR_PCT = Decimal("80.0")
