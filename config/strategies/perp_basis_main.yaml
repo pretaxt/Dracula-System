@@ -16,65 +16,111 @@ scanning:
   max_funding_age_seconds: 180     # hub funding 老于此值则跳过
 
 entry:
-  # P0-5 入场门槛重新校准：3% 净空间仅 1.25% 易被滑点吃掉、50% override 过严导致 idle
-  # break-even 数学：4 legs × 0.04% taker = 0.16% fee；持 6 个 funding period 时 break-even
-  # 需 diff_apr ≥ 6×1095×0.0016/6 ≈ 12%，留 30% 缓冲 → 推荐 12% 下限
-  min_diff_apr_pct: 12.0
+  # 优化 v3（2026-05-12）：
+  # break-even 数学：4 legs × 0.055% avg taker = 0.22% fee round-trip
+  #  notional 持 3 个 8h period → 需 diff_apr ≥ 3×0.0022×1095 ≈ 7.2%
+  # 加 3x 缓冲 → 门槛 75%（大仓位下噪声更低，过滤更严格）
+  # 入场额外检查：两所实时价格偏差 < 0.7%（代码层实现）
+  min_diff_apr_pct: 75.0
   max_opportunities: 50
 
 exit:
-  exit_diff_apr_pct: 1.0           # 收敛平仓
+  exit_diff_apr_pct: 1.0           # 绝对下限（实际退出点由代码自适应：max(exit_diff, entry×20%)，如 entry=75% → 实退 15%）
   max_hold_hours: 240              # 10 天兜底
-  min_hold_hours: 4                # 最少持仓覆盖至少一个 funding 结算（防小波动早退）
-  margin_warn_pct: 80              # 任一侧 margin 占用 ≥ 80% 触发 stop
+  min_hold_hours: 10                # 最少持仓 10h（覆盖至少 1 个完整 8h funding 结算，保本保底）
+  margin_warn_pct: 80              # ⚠️ TODO: 未实现 — session_factory 未传入此参数，当前无效
+  # 连续衰减快速退出（代码层实现）：
+  # diff_apr 连续 N 个 tick 下降 且 当前 < entry × 40% → 提前平仓
+  consecutive_decline_exit_ticks: 3    # 连续衰减 3 tick (3min)
+  consecutive_decline_pct: 0.40       # 跌至入场时的 40% 触发
 
 position:
-  max_concurrent: 2                # 实盘起步：先 2 笔同时持仓，观察 1-2 周后再放
-  notional_per_position: 50        # USD 起步，与 #04 一致
-  exchanges: ["binance", "okx", "htx"]   # 仅含 trading key 已配置交易所 (3 家 → 3 pairs)
-  candidate_symbols:               # 30 主流（与 #04 同源，避免长尾流动性）
-    - BTC
-    - ETH
+  max_concurrent: 3                # 从 2 升至 3（bybit 加入后 6 pairs，机会更多）
+  notional_per_position: 200       # USD 从 →（fee ratio 进一步降低，break-even APR 更低）
+  # 4 家交易所 → 6 pairs（binance-okx/binance-htx/binance-bybit/okx-htx/okx-bybit/htx-bybit）
+  # bybit 的 bulk funding 不支持 linear，已有 per-symbol fallback（hub 60s 刷新 50 symbols）
+  exchanges: [binance, okx, htx, bybit]
+  candidate_symbols:
+    # === 主流 Alts — 多所均有充足流动性，回测正收益 ===
+    # （BTC/ETH/BNB/XRP/DOGE/TRX/ADA 已被机构 cash-and-carry 压薄，排除）
     - SOL
-    - BNB
-    - XRP
-    - DOGE
-    - TRX
-    - ADA
     - AVAX
     - LINK
     - DOT
     - NEAR
-    - BCH
-    - LTC
     - UNI
-    - APT
+    - APT         # 回测 TOP6：HTX↑ OKX↓，90d .41，83% 胜率
     - ARB
     - OP
     - SUI
     - ATOM
     - FIL
-    - ETC
-    - AAVE
-    - INJ
+    - AAVE        # 回测 TOP10：HTX↑，100% 胜率，5笔稳定
+    - INJ         # 回测 TOP8：HTX↑ OKX↓，7笔 71% 胜率
     - ICP
-    - XLM
     - RUNE
     - SEI
     - LDO
-    - TIA
+    - TIA         # 回测 TOP3-5：HTX↑ Binance/OKX↓，100% 胜率
+    - ETC
+    # === 中盘验证（具备跨所 APR 差，回测可用）===
+    - PEPE        # 高量 meme，多所均有 funding
+    - WLD         # 回测 TOP1-2：Binance/OKX↑ HTX↓，90d .89，频繁机会
+    - JUP         # 当前实时 112% APR 差，已持仓
+    - DYDX
+    - CRV
+    - GMX
+    - SNX
+    - GRT
+    - JTO         # 2023年底上线，Binance/OKX/Bybit 均有流动性，跨所 APR 差已实盘验证
+    - BOME        # Solana meme，脉冲型高资金费差，已实盘收到 funding
+    # === Meme / 高资金费差 ===
+    - WIF         # dogwifhat，Binance/OKX/Bybit/HTX，meme 高频 funding spike
+    - SHIB        # 经典 meme，4所均有，HTX↑ Binance↓ 常见
+    - FLOKI       # HTX 覆盖好，中国散户偏爱，funding 差大
+    - BONK        # Solana meme，Binance/OKX/Bybit
+    # === HTX 结构性溢价精确命中（/scanner/htx-premium 验证，2026-05-12）===
+    # 筛选依据：14天 persistence ≥ 95%，avg diff_apr ≥ 40%，break-even ≤ 45h
+    - ENJ         # ★SCREENER STRONG: 14d avg 48.19% APR diff vs Binance, 96.4% persistence, break-even 40.0h（HTX 零售长仓偏好，游戏 NFT 赛道）
+    - APE         # ★SCREENER STRONG: 14d avg 44.54% APR diff vs Binance, 95.2% persistence, break-even 43.3h（ApeCoin，HTX 零售热点）
+    # === Gaming / Metaverse（HTX 零售行情与全球错位）===
+    - SAND        # Sandbox，4所均有，HTX 结构高溢价
+    - MANA        # Decentraland，4所均有
+    - AXS         # Axie Infinity，4所均有，HTX↑ 频繁
+    - IMX         # zkEVM Gaming L2，Binance/OKX/Bybit
+    # === AI / 基础设施 ===
+    - RNDR        # GPU 渲染，Binance/OKX/Bybit，AI 行情 funding 不稳定
+    - FET         # AI Agents，Binance/OKX/Bybit
+    - HBAR        # 企业级区块链，多所均有
+    - CFX         # Conflux，HTX "主场" 代币，funding 经常显著高于 Binance/OKX
+    # === Bitcoin 生态 ===
+    - STX         # Bitcoin L2，Binance/OKX/Bybit/HTX
+    - ORDI        # BTC Ordinals，Binance/OKX/Bybit，funding 脉冲极强
+    # === DeFi 蓝筹（未在列表中）===
+    - VET         # VeChain，4所均有，HTX 中国供应链叙事溢价
+    - KAVA        # DeFi，Binance/OKX/Bybit/HTX
+    - COMP        # ★SCREENER STRONG: 14d avg 53.77% APR diff vs Binance, 100% persistence, break-even 35.8h（HTX 结构性溢价 #1）
+    # === 新兴 L2 / ZK（已足够成熟）===
+    - PYTH        # Oracle，Binance/OKX/Bybit（2年历史，已成熟）
+    - STRK        # Starknet，Binance/OKX/Bybit
+    - ZRO         # LayerZero，Binance/OKX/Bybit
+    # === 已剔除（无长期回测价值）===
+    # JTO/PYTH/STRK/ALT: 太新，多所无历史 funding 数据
+    # LPT/1INCH/ENS/BLUR: 无跨所 APR 差，无套利机会
+    # MANTA/ZETA/BOME/LISTA/IO/ZK: 低流动性投机币，fund 数据不可靠
 
-# 风险控制（#02 独有 5 项）
+# 风险控制（#02 独有）
 risk:
-  stop_price_divergence_pct: 5.0      # |long_price - short_price| / mid > 5% 强平（防交易所故障/数据脏点）
+  # 优化 v3： 仓位下 1.2% = .40 损失上限，约 3-5 个 funding 期收益
+  stop_price_divergence_pct: 1.2
+  # 入场时价格偏差上限（代码层实现）：开仓时两所价差 > 0.7% 则跳过
+  max_entry_price_divergence_pct: 0.7
   max_abs_apr_pct: 500.0              # 单腿 |APR| 异常上限（>500% 通常是数据脏点或退市币）
   health_safe_diff_apr_max: 200.0     # diff_apr ≤ 200% → safe tier
   health_risky_diff_apr_max: 500.0    # 200% < diff_apr ≤ 500% → risky tier；>500% → dirty tier
 
 # Live Trading（Phase D）
-# 切换为实盘：仅有 trading key 的交易所参与；preflight 读 reconciler 真实余额；
-# 任一 leg 余额不足或同步失败 → fail-closed 拒开。
 paper_trading:
-  enabled: true                       # 实盘启用：OKX hedge posSide 小写 + 跨钱包自动划转完整实现
-  live_mode: true                     # 实盘 LiveBroker（非 PaperBroker wrapper）
+  enabled: true
+  live_mode: true
   scan_interval_seconds: 60           # session tick 节奏（独立于 scanner）

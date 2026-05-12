@@ -19,6 +19,7 @@ from app.api.v1.market import router as market_router
 from app.api.v1.backtest import router as backtest_router
 from app.api.v1.reconciliation import router as reconciliation_router
 from app.api.v1.cex_dex import router as cex_dex_router
+from app.api.v1.scanner import router as scanner_router
 
 # 无需鉴权的路由
 router = APIRouter()
@@ -39,6 +40,7 @@ _protected.include_router(system_router)
 _protected.include_router(backtest_router)
 _protected.include_router(reconciliation_router)
 _protected.include_router(cex_dex_router)
+_protected.include_router(scanner_router)
 
 router.include_router(_protected)
 

@@ -4,22 +4,30 @@
 - 跨所 delta-neutral（perp short A vs perp long B 抵消价格风险）
 - 收 (A_funding_rate - B_funding_rate) × notional 每 funding 周期
 
-Phase C 完整业务（v0.4.7+）:
+Phase C 完整业务（v0.4.7+, optimized v2 2026-05-12）:
 - 双 broker 余额预检
 - size 对齐
 - 双腿同时下单 + cross-unwind 失败回滚
 - DB legs 持久化 + restore（X5 防丢失）
-- 退出: max_hold + diff_apr 衰减 + min_hold
+- 退出: max_hold + diff_apr 衰减 + min_hold + 连续衰减快速退出
+- 入场质量过滤：price_divergence < max_entry_price_divergence_pct
+- funding cursor 持久化至 /app/state/（重启不丢 funding 累计基线）
 - Telegram 开仓/平仓通知
 """
 from __future__ import annotations
 
 import asyncio
+import json as _json
+import os as _os
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+
+# funding cursor 持久化路径（/app/state/ 是 docker mount，重启存活）
+_FUNDING_CURSOR_PATH = Path("/app/state/perp_basis_funding_cursor.json")
 
 from app.core.logging import get_logger
 from app.exchanges.errors import InsufficientBalanceError
@@ -57,12 +65,15 @@ class PerpBasisPaperSession:
         scanner: Any,
         brokers: dict[str, Any],
         notional_per_position: Decimal,
-        max_concurrent: int = 2,
-        min_diff_apr_pct: Decimal = Decimal("50.0"),
-        max_hold_hours: Decimal = Decimal("48.0"),
-        min_hold_hours: Decimal = Decimal("4.0"),
-        exit_diff_apr_pct: Decimal = Decimal("5.0"),
-        stop_price_divergence_pct: Decimal = Decimal("5.0"),
+        max_concurrent: int = 3,
+        min_diff_apr_pct: Decimal = Decimal("15.0"),
+        max_hold_hours: Decimal = Decimal("240.0"),
+        min_hold_hours: Decimal = Decimal("6.0"),
+        exit_diff_apr_pct: Decimal = Decimal("2.0"),
+        stop_price_divergence_pct: Decimal = Decimal("1.0"),
+        max_entry_price_divergence_pct: Decimal = Decimal("0.3"),
+        consecutive_decline_exit_ticks: int = 3,
+        consecutive_decline_pct: Decimal = Decimal("0.40"),
         scan_interval_seconds: float = 60.0,
         market_data_hub: Any = None,
         reconciler: Any = None,
@@ -77,6 +88,13 @@ class PerpBasisPaperSession:
         self._exit_diff = exit_diff_apr_pct
         # #02-1: 跨所价格脱钩保护 — long@A vs short@B 价差超此 % 强平
         self._stop_price_div = stop_price_divergence_pct
+        # 优化 v2: 入场时价格偏差上限（adverse selection 防护）
+        self._max_entry_price_div = max_entry_price_divergence_pct
+        # 优化 v2: 连续衰减快速退出
+        self._decline_exit_ticks = consecutive_decline_exit_ticks
+        self._decline_exit_pct = consecutive_decline_pct
+        # key: pos.id → list of recent diff_apr snapshots（最近 N tick）
+        self._diff_history: dict[str, list[Decimal]] = {}
         self._interval = scan_interval_seconds
         self._hub = market_data_hub  # #02-2: funding 累计 + 价格查询数据源
         # 真实余额唯一真相源 — preflight 必须读这里，不读 broker 的 fake adapter
@@ -86,7 +104,9 @@ class PerpBasisPaperSession:
         self._manager = PositionManager(strategy_type=_STRATEGY_TYPE)
         # #02-2: 每条 leg 独立追踪上次结算 funding_timestamp（跨所周期不同步）
         # key: (pos.id, leg.side.value) → ms
+        # 优化 v2: 从 state 文件恢复（重启不丢 baseline）
         self._last_settled_funding_ms: dict[tuple[str, str], int] = {}
+        self._load_funding_cursor()
 
     @property
     def is_running(self) -> bool:
@@ -102,6 +122,38 @@ class PerpBasisPaperSession:
         if n:
             logger.info("perp_basis_paper_restored", count=n)
         return n
+
+    # ------------------------------------------------------------------
+    # Funding cursor 持久化（state 文件，重启存活）
+    # ------------------------------------------------------------------
+
+    def _load_funding_cursor(self) -> None:
+        """从 /app/state/ 恢复上次 funding 结算游标（重启不丢历史 baseline）。"""
+        try:
+            if _FUNDING_CURSOR_PATH.exists():
+                raw = _json.loads(_FUNDING_CURSOR_PATH.read_text())
+                for k, v in raw.items():
+                    # key 序列化为 "pos_id|side"
+                    parts = k.split("|", 1)
+                    if len(parts) == 2:
+                        self._last_settled_funding_ms[(parts[0], parts[1])] = int(v)
+                logger.info(
+                    "perp_basis_funding_cursor_loaded",
+                    keys=len(self._last_settled_funding_ms),
+                )
+        except Exception:
+            logger.warning("perp_basis_funding_cursor_load_failed", exc_info=True)
+
+    def _save_funding_cursor(self) -> None:
+        """将 funding 结算游标写入 state 文件（同步，轻量）。"""
+        try:
+            data = {
+                f"{pos_id}|{side}": ms
+                for (pos_id, side), ms in self._last_settled_funding_ms.items()
+            }
+            _FUNDING_CURSOR_PATH.write_text(_json.dumps(data))
+        except Exception:
+            logger.warning("perp_basis_funding_cursor_save_failed", exc_info=True)
 
     async def run_forever(self) -> None:
         self._running = True
@@ -146,7 +198,9 @@ class PerpBasisPaperSession:
             opportunities = scan_result
 
         # #02-2: funding 累计（跨所双周期独立结算）
-        self._settle_funding_per_leg()
+        settled_positions = self._settle_funding_per_leg()
+        for _pos in settled_positions:
+            await self._manager.save(_pos)
 
         # 1. 退出检查（含价格脱钩 + max_hold + diff_apr 衰减）
         await self._check_exits(opportunities)
@@ -169,10 +223,18 @@ class PerpBasisPaperSession:
         sorted_opps = sorted(
             opportunities, key=lambda o: getattr(o, "diff_apr_pct", 0), reverse=True,
         )
-        for opp in sorted_opps[:slots]:
+        # 已开仓 symbol 集（禁止同 symbol 重复建仓）
+        open_syms = {str(p.symbol) for p in self._manager.open_positions}
+        opened_this_tick = 0
+        for opp in sorted_opps:
+            if opened_this_tick >= slots:
+                break
             diff_apr = getattr(opp, "diff_apr_pct", Decimal("0"))
             if diff_apr < self._min_diff:
-                continue
+                continue  # sorted desc but may have 0/None, keep continue
+            if opp.symbol in open_syms:
+                continue  # 该 symbol 已有仓位
+            cnt_before = len(self._manager.open_positions)
             try:
                 await self._open_cross_exchange(opp)
             except Exception:
@@ -180,6 +242,10 @@ class PerpBasisPaperSession:
                     "perp_basis_open_failed",
                     symbol=getattr(opp, "symbol", "?"),
                 )
+            # 仅当实际新增仓位时才消耗 slot（price_diverged / no_broker 等不消耗）
+            if len(self._manager.open_positions) > cnt_before:
+                opened_this_tick += 1
+                open_syms.add(opp.symbol)
 
     # ------------------------------------------------------------------
     # 开仓
@@ -209,6 +275,20 @@ class PerpBasisPaperSession:
             )
             return
         mid = (long_price + short_price) / Decimal("2")
+
+        # 优化 v2: 入场价格偏差检查（adverse selection 防护）
+        # 若两所价格已显著偏离，说明市场已察觉不对称，此时入场风险高
+        if mid > 0 and self._max_entry_price_div > 0:
+            entry_price_div = abs(long_price - short_price) / mid * Decimal("100")
+            if entry_price_div > self._max_entry_price_div:
+                logger.debug(
+                    "perp_basis_open_skipped_price_diverged",
+                    symbol=symbol, long_ex=long_ex, short_ex=short_ex,
+                    divergence_pct=str(entry_price_div.quantize(Decimal("0.01"))),
+                    threshold=str(self._max_entry_price_div),
+                )
+                return
+
         size = self._notional / mid
 
         long_req = OrderRequest(
@@ -281,13 +361,13 @@ class PerpBasisPaperSession:
             exchange=long_ex, symbol=sym_obj,
             instrument_type=InstrumentType.PERPETUAL, side=Side.BUY,
             size=long_result.filled_size, entry_price=long_result.avg_price,
-            leverage=Decimal("5"),
+            leverage=broker_long._perp_leverage,
         ))
         pos.add_leg(PositionLeg(
             exchange=short_ex, symbol=sym_obj,
             instrument_type=InstrumentType.PERPETUAL, side=Side.SELL,
             size=short_result.filled_size, entry_price=short_result.avg_price,
-            leverage=Decimal("5"),
+            leverage=broker_short._perp_leverage,
         ))
         total_fees = long_result.fees + short_result.fees
         self._manager.record_fees(pos.id, total_fees)
@@ -374,7 +454,7 @@ class PerpBasisPaperSession:
                     f"(no API key or reconciler not synced) — fail-closed"
                 )
             notional = req.size * req.reference_price
-            required = notional / broker._perp_leverage * Decimal("1.05")
+            required = notional / broker._perp_leverage * Decimal("1.10")
             if free < required:
                 raise InsufficientBalanceError(
                     f"{ex} perp insufficient: free={free:.4f} required={required:.4f}"
@@ -453,25 +533,81 @@ class PerpBasisPaperSession:
             if held < self._min_hold:
                 continue
 
-            # diff_apr 衰减（P2-15 自适应阈值 + W3 floor 防 entry<25% 收紧 hysteresis）：
-            # 旧固定 exit_diff=1% 在高 entry_diff（如 50%）时 hysteresis 过大；
-            # 新规则：effective_exit = clamp(max(exit_diff, 0.2×entry), exit_diff, 0.5×entry)
-            # 例：entry 50% → max(1%, 10%) = 10%（hysteresis 40%，正常）
-            #     entry 12% → max(1%, 2.4%) = 2.4%，但 W3 floor 0.5×12% = 6% → effective_exit ≤ 6%
-            #              即 hysteresis ≥ 6%（保至少 50% 入场幅度的 hysteresis，防小 diff 早退）
-            #     entry 200% → 0.2×200=40%，floor 0.5×200=100%，clamp 后 max=40%
+            # diff_apr 衰减：直接使用 exit_diff_apr_pct 字面值，与回测引擎行为一致
+            # 策略目标：最大化持仓时间，只要 funding 收益 > 手续费就持有
             if long_leg and short_leg:
                 key = (str(pos.symbol), long_leg.exchange, short_leg.exchange)
                 cur_diff = diff_by_pair.get(key)
-                entry_diff = pos.target_apr_pct or Decimal("0")
-                # 上限 floor: 持仓 hysteresis 至少保留入场 diff 的一半
-                upper_floor = entry_diff * Decimal("0.5")
-                proposed = max(self._exit_diff, entry_diff * Decimal("0.2"))
-                effective_exit = min(proposed, upper_floor) if upper_floor > 0 else proposed
-                # 但 effective_exit 不应低于 self._exit_diff（保留绝对下限）
-                effective_exit = max(effective_exit, self._exit_diff)
+                effective_exit = self._exit_diff  # 字面值，不做自适应
                 if cur_diff is not None and cur_diff <= effective_exit:
                     to_close.append((pos, ExitReason.STRATEGY, "diff_decay"))
+                    continue
+
+                # 优化 v2: 连续衰减快速退出
+                # 若 diff_apr 连续 N tick 持续下降 且 已跌至入场时的 decline_exit_pct 以下 → 早退
+                # 兜底：持仓 pair 已从 scanner 结果消失（diff 跌破 min_diff_apr 阈值）
+                # 且已过 min_hold → 视同 diff_decay 退出，防止卡死占坑
+                if cur_diff is None and held >= self._min_hold:
+                    # pair 从 scanner 消失（diff 跌出 min_diff_apr 阈值），
+                    # 但不一定到了退出点 — 先从 hub 直接查实时 diff
+                    live_diff = self._get_live_diff(
+                        str(pos.symbol), long_leg.exchange, short_leg.exchange
+                    )
+                    if live_diff is not None:
+                        # hub 有数据：用真实 diff 重新判断
+                        cur_diff = live_diff
+                        logger.debug(
+                            "perp_basis_diff_from_hub",
+                            position_id=pos.id[:8], symbol=str(pos.symbol),
+                            live_diff_apr=str(live_diff.quantize(Decimal("0.01"))),
+                            effective_exit=str(effective_exit.quantize(Decimal("0.01"))),
+                        )
+                        if cur_diff <= effective_exit:
+                            logger.info(
+                                "perp_basis_diff_decay_exit",
+                                position_id=pos.id[:8], symbol=str(pos.symbol),
+                                cur_diff=str(cur_diff.quantize(Decimal("0.01"))),
+                                effective_exit=str(effective_exit.quantize(Decimal("0.01"))),
+                                held_h=round(float(held), 1),
+                            )
+                            to_close.append((pos, ExitReason.STRATEGY, "diff_decay"))
+                            continue  # fix: 防止同仓位被 consecutive_decline 再次 append
+                        # else: diff 还在退出阈值上方，继续持仓
+                    else:
+                        # hub 也无数据（超时/数据脏），才执行消失退出
+                        logger.info(
+                            "perp_basis_diff_vanished_exit",
+                            position_id=pos.id[:8], symbol=str(pos.symbol),
+                            held_h=round(float(held), 1),
+                            long_ex=long_leg.exchange, short_ex=short_leg.exchange,
+                        )
+                        to_close.append((pos, ExitReason.STRATEGY, "diff_decay"))
+                        continue  # fix: 防止同仓位被 consecutive_decline 再次 append
+
+                if cur_diff is not None and entry_diff > 0 and self._decline_exit_ticks > 0:
+                    hist = self._diff_history.setdefault(pos.id, [])
+                    hist.append(cur_diff)
+                    # 只保留最近 N+1 个（多一个用于比较）
+                    max_hist = self._decline_exit_ticks + 1
+                    if len(hist) > max_hist:
+                        self._diff_history[pos.id] = hist[-max_hist:]
+                        hist = self._diff_history[pos.id]
+                    if len(hist) >= self._decline_exit_ticks + 1:
+                        # 检查最近 N 个都在下降
+                        recent = hist[-(self._decline_exit_ticks + 1):]
+                        is_declining = all(
+                            recent[i] > recent[i + 1] for i in range(len(recent) - 1)
+                        )
+                        below_threshold = cur_diff < entry_diff * self._decline_exit_pct
+                        if is_declining and below_threshold:
+                            logger.info(
+                                "perp_basis_consecutive_decline_exit",
+                                position_id=pos.id[:8], symbol=str(pos.symbol),
+                                cur_diff=str(cur_diff.quantize(Decimal("0.01"))),
+                                entry_diff=str(entry_diff.quantize(Decimal("0.01"))),
+                                ticks=self._decline_exit_ticks,
+                            )
+                            to_close.append((pos, ExitReason.STRATEGY, "diff_declining"))
 
         for pos, reason, label in to_close:
             try:
@@ -510,7 +646,7 @@ class PerpBasisPaperSession:
         except Exception:
             return None
 
-    def _settle_funding_per_leg(self) -> None:
+    def _settle_funding_per_leg(self) -> list:
         """#02-2: 每条 leg 独立按 funding_timestamp 累计 funding。
 
         long_ex 周期可能 8h，short_ex 可能 4h — 不能用 #01 的统一 8h 假设。
@@ -518,9 +654,12 @@ class PerpBasisPaperSession:
         - SHORT leg: rate>0 收正 funding（正收益）
         - LONG leg:  rate>0 付正 funding（负收益）
         net 累加到 pos.funding_received（pos 级别 — manager.record_funding）。
+
+        返回已更新的 Position 列表，调用方需 await save() 持久化至 DB。
         """
         if self._hub is None:
-            return
+            return []
+        settled: list = []
         for pos in self._manager.open_positions:
             net_amount = Decimal("0")
             for leg in pos.legs:
@@ -531,18 +670,25 @@ class PerpBasisPaperSession:
                     funding_obj = fr.rate
                     rate = funding_obj.rate
                     fund_ts = int(funding_obj.next_funding_time or 0)
+                    if fund_ts == 0:
+                        continue
                     # next_funding_time 是 *下一次* 结算时刻 — 当 now > 该时刻表示已结算
                     # 我们追踪的是"已结算到何时"
                     last_key = (pos.id, leg.side.value)
                     # 使用 funding interval 推算"刚刚发生的"结算时间戳
                     interval_h = funding_obj.funding_interval_hours or 8
-                    interval_ms = interval_h * 3600 * 1000
+                    interval_ms = int(interval_h * 3600 * 1000)
                     last_settled_ts = fund_ts - interval_ms
 
                     # P1-3 修复：restart 后内存 dict 空，首次见此 leg 仅 baseline 不结算
                     # 防 restore 后第一个 tick 虚增一笔 funding
                     if last_key not in self._last_settled_funding_ms:
                         self._last_settled_funding_ms[last_key] = last_settled_ts
+                        logger.debug(
+                            "perp_basis_funding_baseline_set",
+                            position_id=pos.id[:8], exchange=leg.exchange,
+                            side=leg.side.value, last_settled_ts=last_settled_ts,
+                        )
                         continue
 
                     last = self._last_settled_funding_ms[last_key]
@@ -557,16 +703,32 @@ class PerpBasisPaperSession:
                         # LONG leg: 付 funding
                         net_amount -= period_amount
                     self._last_settled_funding_ms[last_key] = last_settled_ts
+                    logger.debug(
+                        "perp_basis_leg_funding_settled",
+                        position_id=pos.id[:8], exchange=leg.exchange,
+                        side=leg.side.value, rate=str(rate),
+                        period_amount=str(period_amount.quantize(Decimal("0.000001"))),
+                    )
                 except Exception:
+                    logger.warning(
+                        "perp_basis_funding_settle_error",
+                        position_id=pos.id[:8],
+                        exchange=getattr(leg, "exchange", "?"),
+                        exc_info=True,
+                    )
                     continue
             if net_amount != 0:
                 self._manager.record_funding(pos.id, net_amount)
+                settled.append(pos)
                 logger.info(
                     "perp_basis_funding_settled",
                     position_id=pos.id[:8], symbol=str(pos.symbol),
                     net_funding=str(net_amount.quantize(Decimal("0.000001"))),
                     cumulative=str(pos.funding_received.quantize(Decimal("0.000001"))),
                 )
+        if settled:
+            self._save_funding_cursor()
+        return settled
 
     async def _close(
         self, pos: Position, reason: ExitReason, exit_label: str | None = None,
@@ -659,11 +821,30 @@ class PerpBasisPaperSession:
 
         self._manager.record_fees(pos.id, close_fees)
         self._manager.close(position_id=pos.id, reason=reason, realized_pnl=realized)
-        # 用更细的 exit_label 覆盖 reason.value（diff_decay / price_divergence 等）
-        if exit_label and pos.exit_reason is not None:
-            pos.exit_reason = ExitReason.STRATEGY  # enum 仍 STRATEGY
-            # 但为了 DB 显示精确原因，存到 notes 末尾
         await self._manager.save(pos)
+
+        # 将具体退出原因（exit_label）写回 DB exit_reason 字段，覆盖通用 "strategy"
+        if exit_label:
+            try:
+                from app.core.database import get_session as _get_session  # noqa: PLC0415
+                from app.models.position import PositionRecord as _PR  # noqa: PLC0415
+                from sqlalchemy import update as _update  # noqa: PLC0415
+                async with _get_session() as _db:
+                    await _db.execute(
+                        _update(_PR)
+                        .where(_PR.uuid == pos.id)
+                        .values(exit_reason=exit_label)
+                    )
+                    await _db.commit()
+            except Exception as _e:
+                logger.warning("exit_label_db_write_failed", exit_label=exit_label, error=str(_e)[:80])
+
+        # 平仓后清理该仓位的 diff_history 和 funding cursor（减少内存 + 防误判）
+        self._diff_history.pop(pos.id, None)
+        cursor_keys = [k for k in self._last_settled_funding_ms if k[0] == pos.id]
+        for k in cursor_keys:
+            del self._last_settled_funding_ms[k]
+        self._save_funding_cursor()
 
         logger.info(
             "perp_basis_closed",
@@ -741,3 +922,28 @@ class PerpBasisPaperSession:
         except Exception:
             pass
         return Decimal("0")
+
+    def _get_live_diff(
+        self, symbol_str: str, long_exchange: str, short_exchange: str
+    ) -> "Decimal | None":
+        """从 MarketDataHub 直接查 (long_ex, short_ex) 当前 diff_apr_pct。
+
+        当 pair 跌出 scanner 阈值时用于补充查询，避免误触 diff_vanished_exit。
+        返回 None 表示 hub 无数据（stale / 未缓存）。
+        """
+        if self._hub is None:
+            return None
+        try:
+            sym = self._parse_symbol(symbol_str)
+            fr_long = self._hub.get_funding_rate(long_exchange, sym)
+            fr_short = self._hub.get_funding_rate(short_exchange, sym)
+            if fr_long is None or fr_short is None:
+                return None
+            _HUNDRED = Decimal("100")
+            long_apr_pct = fr_long.rate.apr * _HUNDRED
+            short_apr_pct = fr_short.rate.apr * _HUNDRED
+            diff = short_apr_pct - long_apr_pct
+            return diff
+        except Exception:
+            return None
+
