@@ -29,9 +29,9 @@ entry:
   max_opportunities: 20
 
 exit:
-  exit_diff_apr_pct: 1.0           # 绝对下限（字面值，与回测引擎一致；adaptive formula 已移除）
+  exit_diff_apr_pct: 2.0           # 绝对下限（字面值，与回测引擎一致；adaptive formula 已移除）
   max_hold_hours: 336              # 14 天兜底（结构溢价可持续更长）
-  min_hold_hours: 10               # 最少持仓 10h（覆盖至少 1 个完整 8h funding 结算）
+  min_hold_hours: 48               # 最少持仓 48h（6 个 8h funding period，确保结构溢价充分积累）
   margin_warn_pct: 80              # ⚠️ TODO: 未实现 — session_factory 未传入此参数，当前无效
   # 连续衰减快速退出（代码层实现）：
   # diff_apr 连续 N 个 tick 下降 且 当前 < entry × 40% → 提前平仓
