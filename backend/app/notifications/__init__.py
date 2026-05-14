@@ -67,6 +67,11 @@ def notify_reconcile_alert(
         "single_leg_exposure": "单腿暴露",
         "orphan_position": "残留持仓",
         "qty_drift": "数量漂移",
+        "circuit_breaker_daily_dd": "日回撤熔断",
+        "circuit_breaker_weekly_dd": "周回撤熔断",
+        "circuit_breaker_margin": "保证金率熔断",
+        "circuit_breaker_ex_conc": "交易所集中度熔断",
+        "circuit_breaker_sym_conc": "单币种集中度熔断",
     }.get(alert_type, alert_type)
     msg = (
         f"{severity_emoji} 对账告警 [{type_label}]\n"

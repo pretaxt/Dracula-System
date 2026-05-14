@@ -9,7 +9,7 @@ import ccxt.async_support as ccxt
 from app.core.logging import get_logger
 from app.exchanges.cex.ccxt_base import CCXTAdapter
 from app.exchanges.cex.funding_interval import infer_funding_interval_hours
-from app.exchanges.models import FundingRate, InstrumentType, Symbol
+from app.exchanges.models import Balance, BalanceEntry, FundingRate, InstrumentType, Symbol
 
 logger = get_logger(__name__)
 
@@ -50,6 +50,64 @@ class BybitAdapter(CCXTAdapter):
             InstrumentType.PERPETUAL: perp_client,
             InstrumentType.SPOT: spot_client,
         }
+
+    async def fetch_balance(self) -> Balance:
+        """Bybit UTA (Unified Trading Account) 余额查询。
+
+        UTA 是统一资产池：account.totalEquity 是所有币种折算成 USDT 后的总权益。
+        dashboard 把 USDT.total 作为该交易所总权益（UTA 设计），所以我们直接
+        让 USDT entry 反映 totalEquity（含 MNT/BTC 等非稳定币的 USD 折算），
+        而非仅 USDT wallet balance（会漏算其他币种 ~$20）。
+        """
+        import time as _time  # noqa: PLC0415
+        client = self._clients[InstrumentType.PERPETUAL]
+        raw = await self._call_with_retry(
+            lambda: client.fetch_balance({"type": "unified"})
+        )
+        # 从 raw info 拿 totalEquity（bybit v5 API 已折算到 USD）
+        info_list = (raw.get("info") or {}).get("result", {}).get("list", []) or []
+        total_equity_usd: Decimal | None = None
+        if info_list:
+            try:
+                total_equity_usd = Decimal(str(info_list[0].get("totalEquity") or 0))
+            except Exception:
+                total_equity_usd = None
+
+        usdt_wallet = Decimal(str((raw.get("total") or {}).get("USDT") or 0))
+        usdt_free = Decimal(str((raw.get("free") or {}).get("USDT") or 0))
+        usdt_locked = Decimal(str((raw.get("used") or {}).get("USDT") or 0))
+
+        entries: list[BalanceEntry] = []
+        # USDT entry: 用 totalEquity 作为总值（含其他币种折算），保持 free/locked 跟 USDT 一致
+        if total_equity_usd is not None and total_equity_usd > 0:
+            # locked 沿用真实 USDT locked；free = totalEquity - locked（含 MNT 等非锁定其他币种）
+            usdt_entry_free = total_equity_usd - usdt_locked
+            if usdt_entry_free < 0:
+                usdt_entry_free = Decimal("0")
+            entries.append(BalanceEntry(
+                asset="USDT",
+                free=usdt_entry_free,
+                locked=usdt_locked,
+            ))
+        else:
+            # fallback：仅 USDT wallet
+            entries.append(BalanceEntry(asset="USDT", free=usdt_free, locked=usdt_locked))
+
+        # 其他币种保留原值（供详情页展示，不重复算总额）
+        for asset, total_val in (raw.get("total") or {}).items():
+            if total_val is None or asset.upper() == "USDT":
+                continue
+            free_val = Decimal(str((raw.get("free") or {}).get(asset) or 0))
+            locked_val = Decimal(str((raw.get("used") or {}).get(asset) or 0))
+            entries.append(BalanceEntry(
+                asset=asset.upper(),
+                free=free_val,
+                locked=locked_val,
+            ))
+        return Balance(
+            entries=entries,
+            timestamp=int(_time.time() * 1000),
+        )
 
     async def top_up_perp_margin(self, amount: "Decimal") -> None:
         # Bybit Unified Trading Account 共享余额池

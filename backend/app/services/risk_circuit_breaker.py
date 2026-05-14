@@ -167,9 +167,9 @@ def _maybe_telegram_critical(metric: str, strategy: str, reason: str) -> None:
         notify_reconcile_alert(
             alert_type=f"circuit_breaker_{metric}",
             severity="critical",
-            exchange="*",
-            symbol=strategy,
-            explanation=f"账户级硬红线触发熔断：{reason}（已阻断所有新开仓）",
+            exchange="全部",
+            symbol="—",
+            explanation=f"账户级硬红线触发熔断 · 检查方: {strategy}\n{reason}\n后果: 已阻断所有策略新开仓（已有持仓不影响）",
         )
     except Exception:
         logger.debug("circuit_breaker_telegram_failed", metric=metric)
@@ -202,27 +202,27 @@ def _evaluate(summary: dict[str, Any], strategy_label: str) -> BreakerDecision:
 
     # 红线触发顺序：daily DD > weekly DD > margin > 集中度
     if daily_dd <= DAILY_DD_HALT_PCT:
-        msg = f"daily_dd {daily_dd}% <= {DAILY_DD_HALT_PCT}%"
+        msg = f"日回撤 {daily_dd}% 超过红线 {DAILY_DD_HALT_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("daily_dd", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="daily_dd")
     if weekly_dd <= WEEKLY_DD_HALT_PCT:
-        msg = f"weekly_dd {weekly_dd}% <= {WEEKLY_DD_HALT_PCT}%"
+        msg = f"周回撤 {weekly_dd}% 超过红线 {WEEKLY_DD_HALT_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("weekly_dd", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="weekly_dd")
     if margin >= MIN_MARGIN_USAGE_PCT:
-        msg = f"margin_usage {margin}% >= {MIN_MARGIN_USAGE_PCT}%"
+        msg = f"保证金使用率 {margin}% 超过红线 {MIN_MARGIN_USAGE_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("margin", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="margin")
     if not skip_ex_conc and ex_conc >= MAX_EXCHANGE_CONCENTRATION_PCT:
-        msg = f"exchange_concentration {ex_conc}% >= {MAX_EXCHANGE_CONCENTRATION_PCT}%"
+        msg = f"交易所集中度 {ex_conc}% 超过红线 {MAX_EXCHANGE_CONCENTRATION_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("ex_conc", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="ex_conc")
     if sym_conc >= MAX_SYMBOL_CONCENTRATION_PCT:
-        msg = f"symbol_concentration {sym_conc}% >= {MAX_SYMBOL_CONCENTRATION_PCT}%"
+        msg = f"单币种集中度 {sym_conc}% 超过红线 {MAX_SYMBOL_CONCENTRATION_PCT}%"
         logger.error("circuit_breaker_halt", strategy=strategy_label, reason=msg)
         _maybe_telegram_critical("sym_conc", strategy_label, msg)
         return BreakerDecision(allow=False, reason=msg, halt_metric="sym_conc")

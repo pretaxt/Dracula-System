@@ -257,9 +257,12 @@ _EXIT_REASON_ZH = {
     "perp_liq_risk": "强平兜底",
     "funding_reversal": "费率反转",
     "strategy": "策略退出",
-    "diff_decay": "费差衰减",  # #02 perp_basis: diff_apr 衰减到 exit_diff_apr_pct
+    "diff_decay": "基差衰减",  # #02 perp_basis: diff_apr 衰减到 exit_diff_apr_pct
     "price_divergence": "价格脱钩",  # #02 perp_basis: 跨所价差超 stop_price_divergence_pct
     "risk_limit": "风控触发",
+    "single_leg_unwind_manual": "裸腿手动平仓",
+    "single_leg_unwind": "裸腿自动平仓",
+    "single_leg_detected": "裸腿告警",
 }
 
 
@@ -410,4 +413,5 @@ def _classify_exit(
         return ("TIER 3", "强平", f"{symbol} 保证金不足", pnl_str, "force_closed", False)
     if reason in {"manual", "manual_close"}:
         return ("TIER 1", "手动平仓", f"{symbol} 用户操作", pnl_str, "manual", True)
-    return ("TIER 1", f"平仓 ({reason})", symbol, pnl_str, reason, True)
+    reason_zh = _EXIT_REASON_ZH.get(reason, reason)
+    return ("TIER 1", f"平仓 ({reason_zh})", symbol, pnl_str, reason_zh, True)

@@ -20,7 +20,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 # 退出原因标签映射（存储值 → 中文展示）
 _EXIT_REASON_LABEL: dict[str, str] = {
-    "diff_decay":        "差价衰减",
+    "diff_decay":        "基差衰减",
     "diff_vanished":     "差价消失",
     "price_divergence":  "价格脱钩",
     "diff_declining":    "连续衰减",

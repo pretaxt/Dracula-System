@@ -22,8 +22,15 @@ export function useTickerWS(exchange: string = 'binance') {
 
     function connect() {
       if (cancelled) return
-      const base = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000')
-        .replace(/^http/, 'ws')
+      let base: string
+      if (typeof window !== 'undefined') {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        base = `${proto}//${window.location.host}`
+      } else {
+        base = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000')
+          .replace(/^https/, 'wss')
+          .replace(/^http/, 'ws')
+      }
       const url = `${base}/api/v1/market/ws/tickers?token=${token}&exchange=${exchange}`
       const ws = new WebSocket(url)
       wsRef.current = ws

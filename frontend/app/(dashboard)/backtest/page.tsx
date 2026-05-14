@@ -1150,7 +1150,7 @@ function PerpBasisBacktestSection() {
                           {pnl >= 0 ? '+' : ''}{tr.realized_pnl}
                         </td>
                         <td style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-tertiary)' }}>
-                          {({'diff_decay':'差值衰减','diff_vanished':'差值消失','max_hold':'超时平仓','force_close_eob':'回测结束','manual':'手动平仓'} as Record<string,string>)[tr.exit_reason ?? ''] ?? tr.exit_reason}
+                          {({'diff_decay':'基差衰减','diff_vanished':'差值消失','max_hold':'超时平仓','force_close_eob':'回测结束','manual':'手动平仓'} as Record<string,string>)[tr.exit_reason ?? ''] ?? tr.exit_reason}
                         </td>
                       </tr>
                     )

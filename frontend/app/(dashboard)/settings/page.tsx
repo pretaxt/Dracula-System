@@ -32,7 +32,7 @@ const EXCHANGE_LABEL: Record<string, string> = {
 
 const EXCHANGES_REQUIRING_PASSPHRASE: Set<string> = new Set(['okx', 'bitget'])
 
-const ALL_EXCHANGES = ['binance', 'okx', 'bitget', 'bybit', 'htx'] as const
+const ALL_EXCHANGES = ['binance', 'okx', 'bitget', 'bybit', 'htx', 'hyperliquid'] as const
 
 export default function SettingsPage() {
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth, refetchInterval: 60_000 })
@@ -121,16 +121,17 @@ function ExchangeCredentialsSection({ credentials }: { credentials: ExchangeCred
     },
   })
 
-  // 兜底：如果 API 还没返回数据，至少显示全部 5 家未配置卡
-  const display: ExchangeCredential[] = credentials.length
-    ? credentials
-    : ALL_EXCHANGES.map((ex) => ({
-        exchange: ex,
-        configured: false,
-        api_key_preview: '',
-        has_passphrase: false,
-        updated_at: null,
-      }))
+  // 合并 API 返回的 credentials + 全量 ALL_EXCHANGES（未配置的显示空卡）
+  const configuredMap = new Map(credentials.map(c => [c.exchange, c]))
+  const display: ExchangeCredential[] = ALL_EXCHANGES.map((ex) => (
+    configuredMap.get(ex) ?? {
+      exchange: ex,
+      configured: false,
+      api_key_preview: '',
+      has_passphrase: false,
+      updated_at: null,
+    }
+  ))
 
   return (
     <CardElevated style={{ padding: 20 }} className="animate-in">

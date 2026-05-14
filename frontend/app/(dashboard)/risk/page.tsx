@@ -36,6 +36,13 @@ const ACTION_LABEL: Record<string, string> = {
   closed:         '已平仓',
   cancelled:      '已撤单',
   triggered:      '已触发',
+  stopped_out:    '触发止损',
+  auto_closed:    '自动平仓',
+  force_closed:   '强制平仓',
+  manual:         '手动操作',
+  halt_all_new_positions: '全策略停开仓',
+  throttle_position_size: '缩减仓位',
+  watch_only:     '仅观察',
 }
 
 function formatEventTime(iso: string): string {

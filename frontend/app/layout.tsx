@@ -4,8 +4,30 @@ import { themeInitScript } from '@/components/theme/ThemeProvider'
 import { langInitScript } from '@/components/i18n/I18nProvider'
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://dracula.bot'),
   title: 'Dracula System',
   description: 'Multi-Strategy Crypto Arbitrage Terminal',
+  manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
+      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
+  openGraph: {
+    title: 'Dracula System',
+    description: 'Multi-Strategy Crypto Arbitrage Terminal',
+    images: [{ url: '/og-image.png', width: 1200, height: 630 }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Dracula System',
+    description: 'Multi-Strategy Crypto Arbitrage Terminal',
+    images: ['/og-image.png'],
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

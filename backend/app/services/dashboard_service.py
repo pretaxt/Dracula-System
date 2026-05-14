@@ -212,25 +212,26 @@ async def get_summary(
     today_realized = Decimal(str(today_realized_raw))
     today_unrealized = Decimal(str(today_unrealized_raw))
     today_pnl_real = today_realized + today_unrealized
-    daily_drawdown_pct = (
-        (today_pnl / total_equity * Decimal("100"))
-        if total_equity > 0
-        else Decimal("0")
-    )
+    # 2026-05-14: reconciler 未就绪时跳过 dd 计算，避免 _initial_capital($300) 兜底
+    # 分母太小导致 weekly_dd 假阳性 -8.9% / -9.3% 误触发 circuit_breaker。
+    # 跟下面 concentration 计算用同样的 balance_data_ready 守护。
+    if balance_data_ready and total_equity > 0:
+        daily_drawdown_pct = today_pnl / total_equity * Decimal("100")
+    else:
+        daily_drawdown_pct = Decimal("0")
 
     weekly_pnl = Decimal(str(weekly_pnl_raw))
-    weekly_dd_pct = (
-        (weekly_pnl / total_equity * Decimal("100"))
-        if total_equity > 0
-        else Decimal("0")
-    )
+    if balance_data_ready and total_equity > 0:
+        weekly_dd_pct = weekly_pnl / total_equity * Decimal("100")
+    else:
+        weekly_dd_pct = Decimal("0")
 
     margin_used = Decimal(str(margin_used_total))
-    margin_usage_pct = (
-        (margin_used / total_equity * Decimal("100"))
-        if total_equity > 0
-        else Decimal("0")
-    )
+    # 同 weekly_dd / daily_dd：reconciler 未就绪时跳过，避免 $300 兜底分母假阳性
+    if balance_data_ready and total_equity > 0:
+        margin_usage_pct = margin_used / total_equity * Decimal("100")
+    else:
+        margin_usage_pct = Decimal("0")
 
     # 真实 5min HTTP 错误率（in-memory metrics 滑窗）
     from app.core.metrics import get_metrics  # noqa: PLC0415

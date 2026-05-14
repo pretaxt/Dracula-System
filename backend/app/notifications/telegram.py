@@ -44,10 +44,20 @@ async def _send(text: str) -> None:
 
 
 def _fire(text: str) -> None:
-    """非阻塞发送：在当前事件循环中创建 task，不等待结果。"""
+    """非阻塞发送：在当前事件循环中创建 task，不等待结果。
+
+    2026-05-14: 自动在每条推送末尾追加 BJT 时间戳（用户在 +8 时区）。
+    """
+    try:
+        from datetime import datetime  # noqa: PLC0415
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+        ts = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+        text_with_ts = f"{text}\n<i>🕒 {ts}</i>"
+    except Exception:
+        text_with_ts = text
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_send(text))
+        loop.create_task(_send(text_with_ts))
     except RuntimeError:
         pass
 

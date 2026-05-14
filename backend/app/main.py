@@ -180,6 +180,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("exchange_adapter_init_failed", exchange="bybit")
 
+    # Hyperliquid (Phase A: read-only DEX perp; 无私钥仍可拉公开 ticker/funding)
+    try:
+        from app.exchanges.dex_perp.hyperliquid import HyperliquidAdapter  # noqa: PLC0415
+        _hl = get_exchange_credentials("hyperliquid")
+        adapters["hyperliquid"] = HyperliquidAdapter(
+            wallet_address=_hl.get("api_key", ""),  # 主钱包地址（read-only 时可空）
+            api_wallet_private_key=_hl.get("api_secret", ""),  # API Wallet 子私钥
+        )
+        logger.info("exchange_adapter_ready", exchange="hyperliquid",
+                    source="file" if _hl.get("api_key") else "public-only")
+    except Exception:
+        logger.exception("exchange_adapter_init_failed", exchange="hyperliquid")
+
     # HTX
     try:
         from app.exchanges.cex.htx import HTXAdapter  # noqa: PLC0415

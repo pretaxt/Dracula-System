@@ -103,7 +103,7 @@ async def update_exchange_credentials(
 
     支持 binance / okx / bitget / bybit / htx。空字符串字段被忽略（不覆盖）。
     """
-    if exchange not in ("binance", "okx", "bitget", "bybit", "htx"):
+    if exchange not in ("binance", "okx", "bitget", "bybit", "htx", "hyperliquid"):
         raise HTTPException(status_code=400, detail=f"Unsupported exchange: {exchange}")
     patch = body.model_dump(exclude_none=True)
     try:

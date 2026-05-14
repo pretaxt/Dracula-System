@@ -530,7 +530,13 @@ export default function DashboardPage() {
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-card)' }}>
               <div style={{ marginTop: 2 }}>{ACTIVITY_ICON[a.icon as keyof typeof ACTIVITY_ICON] ?? ACTIVITY_ICON.up}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>{a.text}</div>
+                <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                  {a.text.split(/(建仓|平仓)/).map((part, idx) => {
+                    if (part === '建仓') return <span key={idx} style={{ color: 'var(--accent-emerald)' }}>{part}</span>
+                    if (part === '平仓') return <span key={idx} style={{ color: 'var(--accent-blood)' }}>{part}</span>
+                    return <span key={idx}>{part}</span>
+                  })}
+                </div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 2, color: 'var(--text-tertiary)' }}>{a.time}</div>
               </div>
             </div>

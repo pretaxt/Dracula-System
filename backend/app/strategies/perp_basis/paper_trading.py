@@ -238,6 +238,9 @@ class PerpBasisPaperSession:
             self._funding_notify_buffer = []
             self._funding_buffer_first_ts = None
 
+        # 2026-05-14: mark-to-market 每 tick 更新所有 open position 的 unrealized_pnl
+        await self._update_unrealized_pnl_all()
+
         # 1. 退出检查（max_hold + diff_apr 衰减，对齐回测引擎）
         await self._check_exits(opportunities)
 
@@ -871,6 +874,29 @@ class PerpBasisPaperSession:
             base, _, quote = s.partition("/")
             return Symbol(base, quote)
         return Symbol(s, "USDT")
+
+    async def _update_unrealized_pnl_all(self) -> None:
+        """Mark-to-market: 用 hub 实时 mark price 同步每个 open position legs 的 current_price.
+
+        Position.unrealized_pnl 是 derived property，由 legs.current_price 自动累加。
+        save() 时 ORM mapper (PositionRecord.from_domain) 读取 derived value 写入 DB
+        positions.unrealized_pnl 列 + legs.current_price 列。
+        """
+        for pos in list(self._manager.open_positions):
+            try:
+                sym_obj = self._parse_symbol(str(pos.symbol))
+                valid = True
+                for leg in pos.legs:
+                    mark = self._get_perp_price(leg.exchange, sym_obj)
+                    if mark is None or mark <= 0:
+                        valid = False
+                        break
+                    leg.current_price = mark  # derived property 自动累加
+                if valid:
+                    await self._manager.save(pos)
+            except Exception:
+                logger.exception("perp_basis_mtm_failed", position_id=pos.id[:8])
+
 
     def _get_perp_price(self, exchange: str, symbol: Symbol) -> Decimal:
         """从 MarketDataHub 实时取 perp 标记价。fail-safe: 取不到返回 0。
