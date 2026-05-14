@@ -13,9 +13,10 @@ class OrderOut(BaseModel):
     order_type: str
     side: str
     amount: str
-    price: str
+    pnl: str          # 平仓时为已实现盈亏（带符号），开仓时为 "—"
     status: str
     position_uuid: str
+    exit_reason: str  # 平仓原因（diff_decay/price_divergence/manual 等）；开仓时为 "—"
 
 
 class OrdersResponse(BaseModel):

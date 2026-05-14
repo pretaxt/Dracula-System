@@ -108,7 +108,7 @@ export const dict: Record<string, string> = {
   'SUPER ADMIN': 'SUPER ADMIN',
 
   // ===== 顶栏 =====
-  'ARBITRAGE SYSTEM': 'ARBITRAGE SYSTEM',
+  'ARBITRAGE SYSTEM': '套利系统',
 
   // ===== 策略详情通用 =====
   '入场条件': 'ENTRY',

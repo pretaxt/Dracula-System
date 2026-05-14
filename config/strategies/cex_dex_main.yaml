@@ -1,5 +1,5 @@
 # 策略 #5 — CEX-DEX 套利 (Arbitrum One)
-# 阶段一：ETH/USDT 单对，验证执行逻辑与滑点误差
+# 阶段一：ETH/USDT (CEX) ↔ WETH/USDC (DEX)，钱包持 USDC + native ETH
 
 instance_name: cex_dex_main
 strategy_type: cex_dex
@@ -25,9 +25,9 @@ pairs:
   - base: ETH
     quote: USDT
     cex_symbol: ETH/USDT
-    pool_fee: 500              # Uniswap V3 ETH/USDT 0.05% 池（深度最好）
+    pool_fee: 500              # Uniswap V3 WETH/USDC 0.05% 池（Arbitrum 深度最好）
     dex_base_token: WETH
-    dex_quote_token: USDT
+    dex_quote_token: USDC      # 钱包持 USDC（不是 USDT），改用 WETH/USDC 池
 
 # 阶段二（待库存充足后启用）：
 # - base: ARB

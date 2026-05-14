@@ -84,6 +84,34 @@ async def get_summary(
         )
     ).scalar_one()
 
+    # 真正的今日 PnL (含跨日仓位)：
+    #   = 今日 closed 的 realized + 当前 open 的 unrealized
+    # 不再用 opened_at >= today_start 过滤，让跨日仓位也参与
+    today_realized_raw = (
+        await session.execute(
+            select(func.coalesce(func.sum(PositionRecord.realized_pnl), 0))
+            .where(PositionRecord.status == "closed")
+            .where(PositionRecord.closed_at >= today_start)
+        )
+    ).scalar_one()
+    today_unrealized_raw = (
+        await session.execute(
+            select(func.coalesce(func.sum(PositionRecord.unrealized_pnl), 0))
+            .where(PositionRecord.status == "open")
+        )
+    ).scalar_one()
+    # DB unrealized_pnl 字段未实时 mark-to-market（工程债务），改用 reconciler 真实持仓数据
+    if reconciler is not None and getattr(reconciler, "position_cache", None):
+        try:
+            real_upnl = Decimal("0")
+            for ex_positions in reconciler.position_cache.values():
+                for pos_dict in ex_positions or []:
+                    val = pos_dict.get("unrealized_pnl") or 0
+                    real_upnl += Decimal(str(val))
+            today_unrealized_raw = real_upnl
+        except Exception:
+            pass
+
     # 本周净 PnL (从周一 00:00 起)
     week_start = today_start - timedelta(days=today_start.weekday())
     weekly_pnl_raw = (
@@ -181,6 +209,9 @@ async def get_summary(
                 missing_credentials_exchanges.append(ex_name)
 
     today_pnl = Decimal(str(today_pnl_raw))
+    today_realized = Decimal(str(today_realized_raw))
+    today_unrealized = Decimal(str(today_unrealized_raw))
+    today_pnl_real = today_realized + today_unrealized
     daily_drawdown_pct = (
         (today_pnl / total_equity * Decimal("100"))
         if total_equity > 0
@@ -262,6 +293,9 @@ async def get_summary(
         "realized_pnl_usd": str(round(Decimal(str(r_pnl)), 8)),
         "unrealized_pnl_usd": str(round(Decimal(str(u_pnl)), 8)),
         "today_funding_usd": str(round(Decimal(str(today_funding)), 8)),
+        "today_pnl_usd": str(round(today_pnl_real, 8)),
+        "today_realized_usd": str(round(today_realized, 8)),
+        "today_unrealized_usd": str(round(today_unrealized, 8)),
         "monthly_pnl_usd": str(round(Decimal(str(monthly_pnl_raw)), 8)),
         "daily_drawdown_pct": str(round(daily_drawdown_pct, 4)),
         "weekly_dd_pct": str(round(weekly_dd_pct, 4)),
@@ -387,9 +421,15 @@ async def _max_symbol_concentration(
 # ---------------------------------------------------------------------------
 
 _STRATEGY_LABEL_MAP: dict[str, str] = {
-    "funding_rate_main": "资金费率套利",
-    "spot_perp_main": "期现套利",
-    "perp_basis_main": "跨所基差套利",
+    "funding_rate_main": "资金费率套利",       # #01
+    "perp_basis_main": "跨所基差套利",         # #02
+    "price_spread_main": "价差套利",           # #03
+    "spot_perp_main": "期现套利",              # #04
+    "cex_dex_main": "CEX-DEX 套利",            # #05
+    "triangular_main": "三角套利",             # #06
+    "stablecoin_main": "稳定币套利",
+    "options_vol_main": "期权波动率",
+    "pairs_main": "配对套利",
 }
 
 

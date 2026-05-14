@@ -107,49 +107,132 @@ async def _probe_one(name: str, adapter: Any) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _format_exchanges(legs: list) -> str:
+    """根据 legs 构造交易所标签：跨所 "OKX→HTX"，单所 "BINANCE"。"""
+    if not legs:
+        return ""
+    longs = [l for l in legs if (l.side or "").lower() in ("buy", "long")]
+    shorts = [l for l in legs if (l.side or "").lower() in ("sell", "short")]
+    if longs and shorts:
+        return f"{longs[0].exchange.upper()}→{shorts[0].exchange.upper()}"
+    if legs:
+        return " / ".join(sorted(set((l.exchange or "?").upper() for l in legs)))
+    return ""
+
+
+_STRATEGY_BADGE = {
+    "funding_rate_main": "资金费率",
+    "perp_basis_main": "跨所基差",
+    "spot_perp_main": "期现",
+    "price_spread_main": "价差",
+    "cex_dex_main": "CEX-DEX",
+}
+
+
+def _format_strategy_badge(strategy_instance: str | None) -> str:
+    """根据 strategy_instance 返回中文 Badge 字符串。"""
+    if not strategy_instance:
+        return ""
+    return _STRATEGY_BADGE.get(strategy_instance, strategy_instance)
+
+
+def _format_hold_time(hours: float | None) -> str:
+    """将持仓小时数格式化为 "5h 12m" 或 "42m" 或 "3d 4h"。"""
+    if hours is None or hours <= 0:
+        return ""
+    if hours < 1:
+        return f"{int(hours * 60)}m"
+    if hours < 24:
+        h = int(hours)
+        m = int((hours - h) * 60)
+        return f"{h}h {m}m" if m else f"{h}h"
+    d = int(hours // 24)
+    h = int(hours - d * 24)
+    return f"{d}d {h}h" if h else f"{d}d"
+
+
 async def get_recent_activity(session: AsyncSession, limit: int = 10) -> list[dict]:
-    """最近 N 条真实活动:开仓 / 平仓 / 资金费入账。来源全是 PositionRecord。"""
+    """最近 N 条真实活动:开仓 / 平仓 / 资金费入账。来源全是 PositionRecord。
+
+    扩展(2026-05-14)：加交易所信息 (long→short / 单所)，从 position_legs JOIN 获取。
+    """
+    from app.models.position import PositionLegRecord  # noqa: PLC0415
+
     stmt = (
         select(PositionRecord)
         .order_by(desc(PositionRecord.opened_at))
         .limit(limit * 2)
     )
     rows = (await session.execute(stmt)).scalars().all()
+
+    # 一次性 JOIN legs（避免 N+1）
+    pos_ids = [r.id for r in rows]
+    legs_by_pos: dict[int, list] = {}
+    if pos_ids:
+        leg_stmt = select(PositionLegRecord).where(
+            PositionLegRecord.position_id.in_(pos_ids)
+        )
+        leg_rows = (await session.execute(leg_stmt)).scalars().all()
+        for leg in leg_rows:
+            legs_by_pos.setdefault(leg.position_id, []).append(leg)
+
     now = datetime.now(timezone.utc)
     activities: list[dict] = []
 
     for r in rows:
-        # spot_perp D.1+ notes 末尾含 "\n{json}"; 先按 \n 切再去 "@" 兼容旧分隔
         first_line = (r.notes or "").split("\n", 1)[0]
         symbol = first_line.split("@", 1)[0].strip() or "?"
-        # spot_perp target_apr_pct 实际是 basis%；funding_rate 才是 APR
         is_spot_perp = "spot_perp" in (r.strategy_instance or "")
+        ex_label = _format_exchanges(legs_by_pos.get(r.id, []))
+        strat_badge = _format_strategy_badge(r.strategy_instance)
+        hold_h = None
+        if r.closed_at and r.opened_at:
+            hold_h = (r.closed_at - r.opened_at).total_seconds() / 3600
 
         if r.closed_at:
-            net = (r.realized_pnl or Decimal("0")) + (r.funding_received or Decimal("0"))
-            icon = "x" if (r.exit_reason and "stop" in (r.exit_reason or "")) else "check"
+            realized = float(r.realized_pnl or 0)
+            funding = float(r.funding_received or 0)
+            fees = float(r.fees_paid or 0)
+            net = realized + funding - fees
+            # icon 语义化：盈利 'check'，亏损 'down'，止损类 'alert'
+            if r.exit_reason and any(k in r.exit_reason for k in ("stop", "liq", "unwind")):
+                icon = "alert"
+            elif net > 0:
+                icon = "check"
+            else:
+                icon = "down"
             activities.append({
                 "icon": icon,
-                "text": _format_close_text(symbol, r.exit_reason or "manual", float(net)),
+                "text": _format_close_text(
+                    symbol, r.exit_reason or "manual", net,
+                    ex_label, hold_h, strat_badge, realized, funding, fees,
+                ),
                 "time": _format_time(r.closed_at, now),
                 "_sort_at": r.closed_at,
             })
 
         if r.opened_at:
             activities.append({
-                "icon": "check" if r.status == "open" else "up",
+                "icon": "open" if r.status == "open" else "up",
                 "text": _format_open_text(
                     symbol, float(r.notional_usd or 0),
-                    float(r.target_apr_pct or 0), is_spot_perp,
+                    float(r.target_apr_pct or 0), is_spot_perp, ex_label, strat_badge,
                 ),
                 "time": _format_time(r.opened_at, now),
                 "_sort_at": r.opened_at,
             })
 
         if (r.funding_received or Decimal("0")) > 0:
+            _funding_text = ""
+            if strat_badge:
+                _funding_text += f"[{strat_badge}] "
+            _funding_text += f"资金费率结算 · {symbol}"
+            if ex_label:
+                _funding_text += f" [{ex_label}]"
+            _funding_text += f" +${float(r.funding_received):.2f}"
             activities.append({
-                "icon": "up",
-                "text": f"资金费率结算 · {symbol} +${float(r.funding_received):.2f}",
+                "icon": "money",
+                "text": _funding_text,
                 "time": _format_time(r.opened_at or now, now),
                 "_sort_at": r.opened_at or now,
             })
@@ -182,17 +265,37 @@ _EXIT_REASON_ZH = {
 
 def _format_open_text(
     symbol: str, notional: float, target_pct: float, is_spot_perp: bool,
+    ex_label: str = "", strat_badge: str = "",
 ) -> str:
-    """spot_perp 显示基差 %; funding_rate 显示 APR %。"""
+    """spot_perp 显示基差 %; funding_rate/perp_basis 显示 APR/diff %。"""
     label = "基差" if is_spot_perp else "APR"
     sign = "+" if target_pct >= 0 else ""
-    return f"建仓成功 · {symbol} · {label} {sign}{target_pct:.2f}% · 仓位 ${notional:.0f}"
+    ex_part = f" [{ex_label}]" if ex_label else ""
+    badge = f"[{strat_badge}] " if strat_badge else ""
+    return f"{badge}建仓 · {symbol}{ex_part} · {label} {sign}{target_pct:.2f}% · 仓位 ${notional:.0f}"
 
 
-def _format_close_text(symbol: str, exit_reason: str, net_pnl: float) -> str:
+def _format_close_text(
+    symbol: str, exit_reason: str, net_pnl: float,
+    ex_label: str = "", hold_h: float | None = None,
+    strat_badge: str = "", realized: float = 0.0,
+    funding: float = 0.0, fees: float = 0.0,
+) -> str:
     sign = "+" if net_pnl >= 0 else "-"
     reason_zh = _EXIT_REASON_ZH.get(exit_reason, exit_reason)
-    return f"平仓 · {symbol} · {reason_zh} · {sign}${abs(net_pnl):.2f}"
+    ex_part = f" [{ex_label}]" if ex_label else ""
+    badge = f"[{strat_badge}] " if strat_badge else ""
+    hold_part = f" · 持仓 {_format_hold_time(hold_h)}" if hold_h else ""
+    # PnL 拆解(只在数值非 0 时显示)
+    parts = []
+    if realized != 0:
+        parts.append(f"实现 {'+' if realized >= 0 else '-'}${abs(realized):.2f}")
+    if funding > 0:
+        parts.append(f"资费 +${funding:.2f}")
+    if fees > 0:
+        parts.append(f"费 -${fees:.2f}")
+    breakdown = f" ({' · '.join(parts)})" if parts else ""
+    return f"{badge}平仓 · {symbol}{ex_part} · {reason_zh} · {sign}${abs(net_pnl):.2f}{breakdown}{hold_part}"
 
 
 def _format_time(at: datetime, now: datetime) -> str:

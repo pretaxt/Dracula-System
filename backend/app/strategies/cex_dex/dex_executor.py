@@ -180,3 +180,20 @@ class DexExecutor:
         signed = self._w3.eth.account.sign_transaction(tx, self._key)
         tx_hash = await self._w3.eth.send_raw_transaction(signed.raw_transaction)
         await self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+
+    async def balance_of(self, token_key: str) -> Decimal:
+        """返回 wallet 中指定 token 的数量（token-native unit，非 USD）。"""
+        from web3 import AsyncWeb3  # noqa: PLC0415
+        tok = TOKENS.get(token_key)
+        if not tok:
+            return Decimal("0")
+        try:
+            token = self._w3.eth.contract(
+                address=AsyncWeb3.to_checksum_address(tok["address"]),
+                abi=ERC20_ABI,
+            )
+            raw = await token.functions.balanceOf(self._account).call()
+            return Decimal(str(raw)) / Decimal(str(10 ** tok["decimals"]))
+        except Exception:
+            logger.warning("dex_balance_of_failed", token=token_key, exc_info=True)
+            return Decimal("0")

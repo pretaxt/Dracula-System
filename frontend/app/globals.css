@@ -296,3 +296,44 @@ body::after {
   background: linear-gradient(135deg, #2a0a0e, #4a1218) !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12) !important;
 }
+
+/* ============================================================
+ * 系统状态 — 红色方块逐个延伸动画 (3 块循环)
+ * ============================================================ */
+@keyframes blood-dot-1 {
+  0%       { opacity: 0; transform: scale(0.4); }
+  5%       { opacity: 1; transform: scale(1);   }
+  68%      { opacity: 1; transform: scale(1);   }
+  78%      { opacity: 0; transform: scale(0.4); }
+  100%     { opacity: 0; }
+}
+@keyframes blood-dot-2 {
+  0%, 28%  { opacity: 0; transform: scale(0.4); }
+  34%      { opacity: 1; transform: scale(1);   }
+  68%      { opacity: 1; transform: scale(1);   }
+  78%      { opacity: 0; transform: scale(0.4); }
+  100%     { opacity: 0; }
+}
+@keyframes blood-dot-3 {
+  0%, 58%  { opacity: 0; transform: scale(0.4); }
+  64%      { opacity: 1; transform: scale(1);   }
+  68%      { opacity: 1; transform: scale(1);   }
+  78%      { opacity: 0; transform: scale(0.4); }
+  100%     { opacity: 0; }
+}
+.blood-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.blood-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--accent-blood);
+  opacity: 0;
+}
+.blood-dot-1 { animation: blood-dot-1 2.4s ease-in-out infinite; }
+.blood-dot-2 { animation: blood-dot-2 2.4s ease-in-out infinite; }
+.blood-dot-3 { animation: blood-dot-3 2.4s ease-in-out infinite; }

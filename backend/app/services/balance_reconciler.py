@@ -793,6 +793,17 @@ class BalanceReconcilerService:
 
         # PERPETUAL leg → 期望在 perp position_cache 中找到
         if leg.instrument_type == InstrumentType.PERPETUAL.value:
+            # GRACE_PERIOD: 跳过最近 _RECONCILE_OPEN_GRACE_SECONDS 秒内开的仓
+            # 防止 binance API 同步延迟导致的误报（fetch_positions 滞后 N 秒）
+            opened_at = getattr(rec, "opened_at", None)
+            if opened_at is not None:
+                try:
+                    from datetime import datetime, timezone  # noqa: PLC0415
+                    age_s = (datetime.now(timezone.utc) - opened_at).total_seconds()
+                    if age_s < _RECONCILE_OPEN_GRACE_SECONDS:
+                        return None
+                except Exception:
+                    pass
             cached = self.position_cache.get(leg.exchange, [])
             match = next(
                 (p for p in cached if _normalize_symbol(p.get("symbol", "")) == leg.symbol),
@@ -1194,17 +1205,25 @@ class BalanceReconcilerService:
             # 平仓方向：long 腿 → sell，short 腿 → buy
             leg_side = (s_leg.side or "").lower()
             close_side = "sell" if leg_side == "long" else "buy"
-            params: dict[str, Any] = {}
+            # CRITICAL: reduceOnly + CCXT unified swap symbol
+            # 否则 HTX 会把 close 当作"新开 long 仓"，引用 spot trade 余额报错
+            # （5/13 STABLE 误报触发的 account-frozen-balance-insufficient-error: left 41 根因）
+            params: dict[str, Any] = {"reduceOnly": True}
             if s_leg.exchange == "binance":
                 # binance hedge mode 需要 positionSide
                 params["positionSide"] = "LONG" if leg_side == "long" else "SHORT"
+            # CCXT swap symbol 必须带 :QUOTE 后缀（HTX/OKX/Bybit linear perp 都需要）
+            close_symbol = s_leg.symbol
+            if ":" not in close_symbol:
+                quote = close_symbol.split("/")[1] if "/" in close_symbol else "USDT"
+                close_symbol = f"{close_symbol}:{quote}"
             if close_side == "sell":
                 r = await perp_client.create_market_sell_order(
-                    s_leg.symbol, float(size), params=params,
+                    close_symbol, float(size), params=params,
                 )
             else:
                 r = await perp_client.create_market_buy_order(
-                    s_leg.symbol, float(size), params=params,
+                    close_symbol, float(size), params=params,
                 )
             logger.warning(
                 "auto_close_remaining_leg_executed",

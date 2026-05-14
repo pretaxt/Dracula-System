@@ -27,6 +27,9 @@ class DashboardSummary(BaseModel):
     realized_pnl_usd: str
     unrealized_pnl_usd: str
     today_funding_usd: str
+    today_pnl_usd: str = "0"
+    today_realized_usd: str = "0"
+    today_unrealized_usd: str = "0"
     monthly_pnl_usd: str
     daily_drawdown_pct: str
     weekly_dd_pct: str

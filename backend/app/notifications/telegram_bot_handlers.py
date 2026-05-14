@@ -42,15 +42,30 @@ def _is_paper_running(app_state) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 链上余额（Arbitrum）
+# ---------------------------------------------------------------------------
+
+async def _fetch_onchain_safe() -> "Any":
+    """拉链上余额，任何异常静默返回 None。"""
+    try:
+        from app.services.onchain_balance import get_onchain_balances  # noqa: PLC0415
+        return await get_onchain_balances(timeout=8.0)
+    except Exception as e:
+        logger.warning("onchain_balance_handler_failed", error=str(e)[:120])
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
 
 
 async def _balance_handler(app_state) -> str:
-    """读 reconciler.balance_cache 与 dashboard 同源；正确处理 UTA 与 HTX swap。"""
+    """读 reconciler.balance_cache 与 dashboard 同源；正确处理 UTA 与 HTX swap。
+    同时追加 Arbitrum 链上余额（ETH / USDT / USDC）。
+    """
     rec = getattr(app_state, "balance_reconciler", None)
     cache = getattr(rec, "balance_cache", None) if rec else None
-    # 与 dashboard_service usdt_keys 同义 — 累加所有 USDT 钱包
     _USDT_KEYS = (
         "USDT", "USDT_SPOT_OTHERS",
         "USDT_MARGIN", "USDT_MARGIN_OTHERS", "USDT_MARGIN_ISOLATED",
@@ -74,16 +89,41 @@ async def _balance_handler(app_state) -> str:
             if sub_total > 0:
                 per_ex[ex_name] = sub_total
     if not per_ex:
-        # fallback：reconciler 不可用时用旧 path
         adapters: dict[str, Any] = getattr(app_state, "adapters", {}) or {}
         if not adapters:
             return "⚠️ 尚未初始化任何交易所适配器。"
         per_ex = await balance_service.get_per_exchange_equity(adapters)
-    total = sum(per_ex.values(), Decimal("0"))
+
+    # 链上余额（并发拉取，不阻塞 CEX 结果）
+    onchain = await _fetch_onchain_safe()
+
+    cex_total = sum(per_ex.values(), Decimal("0"))
+    onchain_total = onchain.total_usd if onchain and onchain.configured else Decimal("0")
+    grand_total = cex_total + onchain_total
+
     lines = ["<b>💰 账户余额</b>"]
+
+    # CEX 明细
     for name, val in sorted(per_ex.items()):
         lines.append(f"  {name.upper():<8}{_fmt_usd(val)}")
-    lines.append(f"  <b>合计   {_fmt_usd(total)}</b>")
+
+    # 链上明细
+    if onchain and onchain.configured:
+        lines.append(f"  {'ARBITRUM':<8}（链上）")
+        if onchain.eth > Decimal("0.0001"):
+            lines.append(f"    ETH   {onchain.eth:.4f} (~{_fmt_usd(onchain.eth_usd)})")
+        if onchain.usdt > Decimal("0.01"):
+            lines.append(f"    USDT  {_fmt_usd(onchain.usdt)}")
+        if onchain.usdc > Decimal("0.01"):
+            lines.append(f"    USDC  {_fmt_usd(onchain.usdc)}")
+        if onchain.total_usd <= Decimal("0.01"):
+            lines.append(f"    （余额为零）")
+    elif onchain and not onchain.configured:
+        pass  # 未配置私钥，静默不显示
+    else:
+        lines.append(f"  ARBITRUM ⚠️ 查询失败")
+
+    lines.append(f"  <b>合计   {_fmt_usd(grand_total)}</b>")
     return "\n".join(lines)
 
 
@@ -190,7 +230,6 @@ async def _read_perp_basis_open_rows() -> tuple[int, list[str]]:
         )
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
-            # 读 legs 拼出 long/short 交易所（DB 存的是 buy/sell，需映射）
             leg_stmt = select(PositionLegRecord).where(
                 PositionLegRecord.position_id == r.id,
             )
@@ -203,7 +242,6 @@ async def _read_perp_basis_open_rows() -> tuple[int, list[str]]:
                 (l.exchange for l in legs if (l.side or "").lower() in ("sell", "short")),
                 "?",
             )
-            # PositionRecord 没有 symbol 字段；symbol 临时存在 notes
             sym = (r.notes or "?").split("\n", 1)[0].split("@", 1)[0].strip() or "?"
             entry_diff = r.target_apr_pct or Decimal("0")
             upnl = r.unrealized_pnl or Decimal("0")
@@ -232,7 +270,6 @@ async def _pause_handler(app_state) -> str:
     if _is_perp_basis_running(app_state):
         if await strategy_control.stop_perp_basis_paper(app_state):
             actions.append("#02")
-    # #04 spot_perp 暂停由独立 toggle 控制（live_mode 不通过 stop session 体现）
     if not actions:
         return "ℹ️ 策略已处于暂停状态。"
     return f"⏸ 已暂停 {' + '.join(actions)} 纸交易 session。"
@@ -266,7 +303,6 @@ async def _status_handler(app_state) -> str:
         except Exception:
             fr_count = -1
 
-    # #04 spot-perp session 状态（独立于 #01）
     sp_session = getattr(app_state, "spot_perp_paper", None)
     sp_task = getattr(app_state, "spot_perp_task", None)
     sp_running = (
@@ -278,7 +314,6 @@ async def _status_handler(app_state) -> str:
     except Exception:
         sp_count = -1
 
-    # #02 perp-basis session 状态（跨所 perp+perp）
     pb_running = _is_perp_basis_running(app_state)
     pb_count = 0
     try:
@@ -286,7 +321,7 @@ async def _status_handler(app_state) -> str:
     except Exception:
         pb_count = -1
 
-    # 与 /balance 同源 — reconciler.balance_cache (UTA + htx_swap 正确)
+    # CEX 余额
     rec = getattr(app_state, "balance_reconciler", None)
     cache = getattr(rec, "balance_cache", None) if rec else None
     _USDT_KEYS = (
@@ -318,7 +353,13 @@ async def _status_handler(app_state) -> str:
                 per_ex = await balance_service.get_per_exchange_equity(adapters)
             except Exception:
                 logger.exception("status_balance_fetch_failed")
-    total = sum(per_ex.values(), Decimal("0")) if per_ex else None
+
+    cex_total = sum(per_ex.values(), Decimal("0")) if per_ex else Decimal("0")
+
+    # 链上余额（/status 中只展示合计，不展示明细）
+    onchain = await _fetch_onchain_safe()
+    onchain_total = onchain.total_usd if onchain and onchain.configured else Decimal("0")
+    grand_total = cex_total + onchain_total if (per_ex or onchain_total) else None
 
     mode_emoji = "🔴 LIVE" if mode == "live" else "🟡 PAPER"
     fr_emoji = "✅ 运行中" if fr_running else "⏸ 已暂停"
@@ -334,8 +375,11 @@ async def _status_handler(app_state) -> str:
         f"  #02 持仓:  {pb_count if pb_count >= 0 else '—'}",
         f"  #04 策略:  {sp_emoji}",
         f"  #04 持仓:  {sp_count if sp_count >= 0 else '—'}",
-        f"  总资产:    {_fmt_usd(total)}",
+        f"  CEX 资产:  {_fmt_usd(cex_total) if per_ex else '—'}",
     ]
+    if onchain and onchain.configured and onchain_total > Decimal("0.01"):
+        lines.append(f"  链上资产:  {_fmt_usd(onchain_total)} (ARB)")
+    lines.append(f"  总资产:    {_fmt_usd(grand_total)}")
     return "\n".join(lines)
 
 

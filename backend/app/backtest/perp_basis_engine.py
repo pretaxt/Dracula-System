@@ -57,7 +57,6 @@ def run_perp_basis_backtest(
     closed_trades: list[PerpBasisTrade] = []
     equity = config.initial_capital_usd
     equity_curve: list[PerpBasisEquityPoint] = []
-
     for ts in sorted(by_ts.keys()):
         period_snaps = by_ts[ts]
         # symbol → exchange → snap
@@ -70,7 +69,6 @@ def run_perp_basis_backtest(
             ex_long = by_sym.get(trade.symbol, {}).get(trade.long_exchange)
             ex_short = by_sym.get(trade.symbol, {}).get(trade.short_exchange)
             if ex_short and ex_long:
-                # short 收 rate，long 付 rate；diff = short_rate - long_rate
                 diff_rate = ex_short.funding_rate - ex_long.funding_rate
                 period_funding = diff_rate * trade.notional_usd
                 trade.funding_collected += period_funding
@@ -82,34 +80,36 @@ def run_perp_basis_backtest(
             held_dec = Decimal(str(held))
             should_close = False
             reason = None
-            # max_hold
-            if held_dec >= config.max_hold_hours:
-                should_close = True
-                reason = "max_hold"
-            elif held_dec >= config.min_hold_hours:
-                # diff_apr 衰减检查
-                ex_long = by_sym.get(trade.symbol, {}).get(trade.long_exchange)
-                ex_short = by_sym.get(trade.symbol, {}).get(trade.short_exchange)
-                if ex_short and ex_long:
-                    cur_diff_apr = ex_short.apr_pct - ex_long.apr_pct
-                    if cur_diff_apr <= config.exit_diff_apr_pct:
+
+            ex_long = by_sym.get(trade.symbol, {}).get(trade.long_exchange)
+            ex_short = by_sym.get(trade.symbol, {}).get(trade.short_exchange)
+
+            if not should_close:
+                # ── 1. max_hold ───────────────────────────────────────────
+                if held_dec >= config.max_hold_hours:
+                    should_close = True
+                    reason = "max_hold"
+
+                elif held_dec >= config.min_hold_hours:
+                    cur_diff_apr: Decimal | None = None
+                    if ex_short and ex_long:
+                        cur_diff_apr = ex_short.apr_pct - ex_long.apr_pct
+
+                    # ── 2. diff 衰减退出 ──────────────────────────────────
+                    if cur_diff_apr is not None and cur_diff_apr <= config.exit_diff_apr_pct:
                         should_close = True
                         reason = "diff_decay"
 
+
             if should_close:
-                ex_long = by_sym.get(trade.symbol, {}).get(trade.long_exchange)
-                ex_short = by_sym.get(trade.symbol, {}).get(trade.short_exchange)
                 long_exit = ex_long.perp_price if ex_long else trade.long_entry_price
                 short_exit = ex_short.perp_price if ex_short else trade.short_entry_price
                 trade.long_exit_price = long_exit
                 trade.short_exit_price = short_exit
                 trade.closed_at = ts
                 trade.exit_reason = reason
-                # close fees (single side, both legs)
                 close_fees = trade.notional_usd * config.fee_rate * Decimal("2")
                 trade.fees_paid += close_fees
-                # realized pnl = funding 累计 - 总 fees - 滑点
-                # 价格漂移在跨所 short+long 抵消（近似）
                 trade.realized_pnl = trade.funding_collected - trade.fees_paid
                 equity += trade.realized_pnl
                 closed_trades.append(trade)
@@ -120,12 +120,10 @@ def run_perp_basis_backtest(
         # 3. 入场扫描 — 计算所有跨所配对
         if len(open_trades) < config.max_concurrent:
             opportunities = _scan_opportunities(by_sym, config)
-            # 按 diff_apr 降序，挑最优
             opportunities.sort(key=lambda o: o.diff_apr_pct, reverse=True)
             for opp in opportunities:
                 if len(open_trades) >= config.max_concurrent:
                     break
-                # 已开仓相同 (symbol, long, short) 跳过
                 already_open = any(
                     t.symbol == opp.symbol
                     and t.long_exchange == opp.long_exchange
@@ -134,9 +132,8 @@ def run_perp_basis_backtest(
                 )
                 if already_open:
                     continue
-                # open fees
+
                 open_fees = config.notional_per_position * config.fee_rate * Decimal("2")
-                # 滑点（perp 单边）— 双腿 2 × slippage
                 slippage_loss = (
                     config.notional_per_position
                     * (config.slippage_pct / _HUNDRED)

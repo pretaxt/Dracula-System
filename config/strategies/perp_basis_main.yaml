@@ -75,8 +75,8 @@ position:
 
 # 风险控制（#02 独有）
 risk:
-  stop_price_divergence_pct: 1.2
-  max_entry_price_divergence_pct: 0.7
+  stop_price_divergence_pct: 2.0
+  max_entry_price_divergence_pct: 2.0
   max_abs_apr_pct: 500.0
   health_safe_diff_apr_max: 200.0
   health_risky_diff_apr_max: 500.0
@@ -86,3 +86,16 @@ paper_trading:
   enabled: true
   live_mode: true
   scan_interval_seconds: 60           # session tick 节奏（独立于 scanner）
+
+# HTX 溢价筛选器（按需运行 + 主动应用）
+# - enabled=true 时 main.py lifespan 仅 instantiate runner（不起周期 task）。
+# - 手动触发：POST /api/v1/scanner/htx-premium/run （30-90s）
+# - 应用结果：POST /api/v1/scanner/htx-premium/apply
+#     body: {tier: "STRONG", max_symbols: 20, protect_open_positions: true}
+#     效果：把 STRONG 候选写入 candidate_symbols（runtime_overrides + scanner 内存）
+#           当前持仓中币种自动保留（不会被移除导致单边敞口）
+# - 状态查看：GET /api/v1/scanner/htx-premium/status
+screener:
+  enabled: true
+  days: 14                     # 历史窗口
+

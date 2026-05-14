@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Lock, CheckCircle2, Pencil } from 'lucide-react'
-import { getRiskLimits, getRiskEvents, type RiskEvent } from '@/lib/api/risk'
+import { getRiskLimits, getRiskEvents, getRiskThresholds, type RiskEvent, type RiskThresholds } from '@/lib/api/risk'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 import {
   getSpotPerpConfig,
@@ -52,6 +52,12 @@ export default function RiskPage() {
   const { data, isLoading } = useQuery<RiskLimits>({ queryKey: ['risk'], queryFn: getRiskLimits })
   const { data: eventsData } = useQuery({ queryKey: ['risk-events'], queryFn: () => getRiskEvents(30), refetchInterval: 60_000 })
   const { data: summary } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardSummary, refetchInterval: 30_000 })
+  const { data: thresholds } = useQuery<RiskThresholds>({ queryKey: ['risk-thresholds'], queryFn: getRiskThresholds, refetchInterval: 60_000 })
+  const T_dailyDD = Math.abs(parseFloat(thresholds?.daily_dd_halt_pct ?? '-3'))
+  const T_weeklyDD = Math.abs(parseFloat(thresholds?.weekly_dd_halt_pct ?? '-8'))
+  const T_margin = parseFloat(thresholds?.min_margin_usage_pct ?? '50')
+  const T_exConc = parseFloat(thresholds?.max_exchange_concentration_pct ?? '50')
+  const T_symConc = parseFloat(thresholds?.max_symbol_concentration_pct ?? '45')
   const { data: spCfg } = useQuery<SpotPerpConfig>({
     queryKey: ['spot-perp-config'],
     queryFn: getSpotPerpConfig,
@@ -187,23 +193,23 @@ export default function RiskPage() {
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>单日回撤红线</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-3.0%</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>{`-${T_dailyDD.toFixed(1)}%`}</span>
                   </div>
-                  <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / 3.0 * 100)} tone="success" />
+                  <ProgressBar pct={Math.min(100, Math.abs(dailyDD) / T_dailyDD * 100)} tone="success" />
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.daily_drawdown_pct, '-')}</div>
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>周回撤红线</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>-8.0%</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>{`-${T_weeklyDD.toFixed(1)}%`}</span>
                   </div>
-                  <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / 8.0 * 100)} tone="success" />
+                  <ProgressBar pct={Math.min(100, Math.abs(weeklyDD) / T_weeklyDD * 100)} tone="success" />
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmt(summary?.weekly_dd_pct, '-')}</div>
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>{t('最低保证金率')}</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>50%</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>{`${T_margin.toFixed(0)}%`}</span>
                   </div>
                   <ProgressBar pct={Math.min(100, marginPct)} tone="success" />
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>当前 {fmtPct(summary?.margin_usage_pct)}</div>
@@ -211,12 +217,12 @@ export default function RiskPage() {
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>单交易所占比</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>50%</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>{`${T_exConc.toFixed(0)}%`}</span>
                   </div>
                   {(() => {
                     const exConc = parseFloat(summary?.max_exchange_concentration_pct ?? '0')
                     return <>
-                      <ProgressBar pct={Math.min(100, exConc / 50 * 100)} tone={exConc > 50 ? 'blood' : 'success'} />
+                      <ProgressBar pct={Math.min(100, exConc / T_exConc * 100)} tone={exConc > T_exConc ? 'blood' : 'success'} />
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
                         当前 {summary === undefined ? '—' : `${exConc.toFixed(1)}%`}
                       </div>
@@ -226,12 +232,12 @@ export default function RiskPage() {
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>单币种占比</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>20%</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-blood)' }}>{`${T_symConc.toFixed(0)}%`}</span>
                   </div>
                   {(() => {
                     const symConc = parseFloat(summary?.max_symbol_concentration_pct ?? '0')
                     return <>
-                      <ProgressBar pct={Math.min(100, symConc / 20 * 100)} tone={symConc > 20 ? 'blood' : 'success'} />
+                      <ProgressBar pct={Math.min(100, symConc / T_symConc * 100)} tone={symConc > T_symConc ? 'blood' : 'success'} />
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
                         当前 {summary === undefined ? '—' : `${symConc.toFixed(1)}%`}
                       </div>
@@ -254,7 +260,7 @@ export default function RiskPage() {
         }}>
           <Lock size={12} />
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-            账户级硬性熔断,触及任意一条立即停所有策略;需修改 config.yaml 重启系统才能调整
+            账户级硬性熔断,触及任意一条立即停所有策略;修改 /opt/dracula/.env 后 docker compose restart api 即生效
           </span>
         </div>
       </CardElevated>

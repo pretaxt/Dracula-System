@@ -414,7 +414,7 @@ class CCXTAdapter(ExchangeAdapter):
             and instrument == InstrumentType.PERPETUAL
         ):
             params.setdefault("offset", "close" if reduce_only else "open")
-            params.setdefault("leverRate", 5)
+            params.setdefault("leverRate", 10)
             # HTX 用 offset:close 替代 reduceOnly，移除避免冲突
             params.pop("reduceOnly", None)
             # 同样移除 marginMode（如果上游 spot 路径误带）

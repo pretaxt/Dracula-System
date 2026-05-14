@@ -329,6 +329,7 @@ async def perp_basis_config(_: CurrentUser, request: Request) -> PerpBasisConfig
     pos_cfg = cfg.get("position", {}) or {}
     exit_cfg = cfg.get("exit", {}) or {}
     scan_cfg = cfg.get("scanning", {}) or {}
+    risk_cfg = cfg.get("risk", {}) or {}
     scanner_cfg = runner._scanner._config if runner is not None else None
     paper = getattr(state, "perp_basis_paper", None)
     paper_task = getattr(state, "perp_basis_paper_task", None)
@@ -347,6 +348,10 @@ async def perp_basis_config(_: CurrentUser, request: Request) -> PerpBasisConfig
         max_hold_hours=str(exit_cfg.get("max_hold_hours", "48")),
         min_hold_hours=str(exit_cfg.get("min_hold_hours", "4")),
         exit_diff_apr_pct=str(exit_cfg.get("exit_diff_apr_pct", "5")),
+        stop_price_divergence_pct=str(
+            paper._stop_price_div if paper is not None
+            else risk_cfg.get("stop_price_divergence_pct", "2.0")
+        ),
         candidate_symbols=list(pos_cfg.get("candidate_symbols", []) or []),
         scan_interval_seconds=float(scan_cfg.get("scan_interval_seconds", 30)),
     )
@@ -384,6 +389,10 @@ async def perp_basis_config_patch(
             paper._min_hold = _Decimal(str(patch["min_hold_hours"]))
         if "exit_diff_apr_pct" in patch:
             paper._exit_diff = _Decimal(str(patch["exit_diff_apr_pct"]))
+        if "stop_price_divergence_pct" in patch:
+            paper._stop_price_div = _Decimal(str(patch["stop_price_divergence_pct"]))
+        if "max_entry_price_divergence_pct" in patch:
+            paper._max_entry_price_div = _Decimal(str(patch["max_entry_price_divergence_pct"]))
 
     # 3. 持久化到 overrides.json（重启不丢）
     try:
@@ -650,3 +659,105 @@ async def stop_any(
             timestamp=datetime.now(timezone.utc),
         )
     return StrategyActionResponse(paper_running=False, timestamp=datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# 聚合所有策略机会 — dashboard "实时套利机会" 卡片用
+# ---------------------------------------------------------------------------
+
+@router.get("/all-opportunities")
+async def all_opportunities(_: CurrentUser, request: Request) -> dict:
+    """汇总当前所有策略的实时机会，统一 schema 返回。
+
+    schema: [{strategy, symbol, exchange, apr_pct, extra_pct, meta}, ...]
+      - apr_pct: 主指标（funding_rate APR / diff_apr_pct / spread_pct）
+      - extra_pct: 次指标（funding_rate 本身 / 价差 / 基差）
+      - exchange: 单交易所 or "long_ex→short_ex"
+
+    数据源：4 个 runner 内存 latest_opportunities（不打交易所，零延迟）。
+    """
+    out: list[dict] = []
+    state = request.app.state
+
+    # #01 funding_rate
+    fr_runner = getattr(state, "funding_rate_runner", None)
+    if fr_runner is not None:
+        for o in getattr(fr_runner, "latest_opportunities", []) or []:
+            try:
+                out.append({
+                    "strategy": "funding_rate",
+                    "symbol": str(o.symbol),
+                    "exchange": str(o.exchange),
+                    "apr_pct": str(o.apr_pct),
+                    "extra_pct": str(o.funding_rate.rate * 100) if getattr(o, "funding_rate", None) else "0",
+                    "meta": "",
+                })
+            except Exception:
+                continue
+
+    # #02 perp_basis
+    pb_runner = getattr(state, "perp_basis_runner", None)
+    if pb_runner is not None:
+        for o in getattr(pb_runner, "latest_opportunities", []) or []:
+            try:
+                d = o.to_dict()
+                out.append({
+                    "strategy": "perp_basis",
+                    "symbol": d["symbol"],
+                    "exchange": f"{d['long_exchange']}→{d['short_exchange']}",
+                    "apr_pct": d["diff_apr_pct"],
+                    "extra_pct": str(round(float(d["short_apr_pct"]) - float(d["long_apr_pct"]), 2)),
+                    "meta": d.get("health_tier", ""),
+                })
+            except Exception:
+                continue
+
+    # #03 price_spread
+    ps_runner = getattr(state, "price_spread_runner", None)
+    if ps_runner is not None:
+        for o in getattr(ps_runner, "latest_opportunities", []) or []:
+            try:
+                d = o.to_dict() if hasattr(o, "to_dict") else dict(vars(o))
+                ex_label = (
+                    f"{d.get('long_exchange', '?')}→{d.get('short_exchange', '?')}"
+                    if d.get("long_exchange")
+                    else str(d.get("exchange", "?"))
+                )
+                # apr_pct 用年化估算（spread × 365 × 周转次数）；这里直接用 spread_pct 作为机会强度
+                out.append({
+                    "strategy": "price_spread",
+                    "symbol": d.get("symbol", "?"),
+                    "exchange": ex_label,
+                    "apr_pct": str(d.get("spread_pct", "0")),
+                    "extra_pct": str(d.get("spread_pct", "0")),
+                    "meta": "",
+                })
+            except Exception:
+                continue
+
+    # #04 spot_perp
+    sp_runner = getattr(state, "spot_perp_runner", None)
+    if sp_runner is not None:
+        for o in getattr(sp_runner, "latest_opportunities", []) or []:
+            try:
+                d = o.to_dict() if hasattr(o, "to_dict") else dict(vars(o))
+                out.append({
+                    "strategy": "spot_perp",
+                    "symbol": d.get("symbol", "?"),
+                    "exchange": str(d.get("exchange", "?")),
+                    "apr_pct": str(d.get("apr_pct", d.get("basis_pct", "0"))),
+                    "extra_pct": str(d.get("basis_pct", "0")),
+                    "meta": str(d.get("direction", "")),
+                })
+            except Exception:
+                continue
+
+    # 按 apr_pct 数值降序
+    def _key(item: dict) -> float:
+        try:
+            return float(item.get("apr_pct", "0") or 0)
+        except (ValueError, TypeError):
+            return 0.0
+    out.sort(key=_key, reverse=True)
+    return {"data": out, "count": len(out)}
+

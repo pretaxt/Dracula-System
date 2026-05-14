@@ -18,9 +18,15 @@ _API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
 
 async def _send(text: str) -> None:
+    from app.services.notification_credentials import get_notification_config  # noqa: PLC0415
+    cfg = get_notification_config()
+    # enabled 开关：state file 禁用 → 跳过（即便 env 有 token）
+    if not cfg.get("telegram_enabled", False):
+        return
+    # state file 凭据优先，回退到 env
     settings = get_settings()
-    token = settings.telegram_bot_token
-    chat_id = settings.telegram_chat_id
+    token = cfg.get("telegram_bot_token") or settings.telegram_bot_token
+    chat_id = cfg.get("telegram_chat_id") or settings.telegram_chat_id
     if not token or not chat_id:
         return
     url = _API_BASE.format(token=token)
@@ -115,3 +121,38 @@ def notify_risk_violation(rule: str, message: str) -> None:
 def notify_system(message: str) -> None:
     text = f"ℹ️ <b>系统通知</b>\n{message}"
     _fire(text)
+
+
+def notify_funding_settled_batch(items: list[dict]) -> None:
+    """资金费结算批量通知（tick 内聚合多个 symbol，避免 spam）。
+
+    每个 item: {"symbol": str, "net": Decimal, "cumulative": Decimal}
+      - net: 本次结算净额（SHORT 端 + LONG 端聚合后的实际进出）
+      - cumulative: 仓位累计 funding_received
+
+    示例消息:
+      💰 资金费结算
+      📈 ENJ/USDT: 本期 +$0.0840  累计 +$0.1872
+      📉 STABLE/USDT: 本期 -$0.0035  累计 +$0.2127
+      ────────────────
+      本次合计: +$0.0805
+    """
+    if not items:
+        return
+    lines = ["💰 <b>资金费结算</b>"]
+    total = Decimal("0")
+    for it in items:
+        try:
+            net = Decimal(str(it.get("net", 0)))
+            cum = Decimal(str(it.get("cumulative", 0)))
+            sym = str(it.get("symbol", "?"))
+        except Exception:
+            continue
+        emoji = "📈" if net >= 0 else "📉"
+        lines.append(f"{emoji} {sym}: 本期 ${net:+.4f}  累计 ${cum:+.4f}")
+        total += net
+    if len(items) > 1:
+        lines.append("────────────────")
+        lines.append(f"本次合计: ${total:+.4f}")
+    _fire("\n".join(lines))
+

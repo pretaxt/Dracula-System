@@ -753,6 +753,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.perp_basis_runner = perp_basis_runner
     app.state.perp_basis_task = perp_basis_task
 
+    # --- #02 HTX premium screener — 仅初始化实例，不周期循环 ---
+    # 通过 POST /api/v1/scanner/htx-premium/run 手动触发；
+    # 通过 POST /api/v1/scanner/htx-premium/apply 把结果写入 candidate_symbols。
+    htx_screener_runner = None
+    if adapters and "htx" in adapters and market_data_hub is not None:
+        try:
+            _hs_cfg = (_pb_yaml.get("screener", {}) or {})
+            if bool(_hs_cfg.get("enabled", True)):
+                from app.strategies.perp_basis.htx_screener_runner import (  # noqa: PLC0415
+                    HTXScreenerRunner,
+                )
+                htx_screener_runner = HTXScreenerRunner(
+                    adapters=adapters,
+                    hub=market_data_hub,
+                    days=int(_hs_cfg.get("days", 14)),
+                )
+                logger.info(
+                    "htx_screener_runner_ready",
+                    days=htx_screener_runner.days,
+                    mode="on-demand",
+                )
+            else:
+                logger.info("htx_screener_runner_disabled_in_config")
+        except Exception:
+            logger.exception("htx_screener_runner_init_failed")
+    app.state.htx_screener_runner = htx_screener_runner
+
     # --- #02 perp-basis Phase C paper trading (off by default) ---
     perp_basis_paper = None
     perp_basis_paper_task = None

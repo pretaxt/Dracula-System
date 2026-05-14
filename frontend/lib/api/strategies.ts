@@ -165,6 +165,7 @@ export type PerpBasisConfig = {
   max_hold_hours: string
   min_hold_hours: string
   exit_diff_apr_pct: string
+  stop_price_divergence_pct: string
   candidate_symbols: string[]
   scan_interval_seconds: number
 }
@@ -176,6 +177,7 @@ export type PerpBasisConfigPatch = Partial<{
   max_hold_hours: string
   min_hold_hours: string
   exit_diff_apr_pct: string
+  stop_price_divergence_pct: string
 }>
 
 export async function getPerpBasisConfig(): Promise<PerpBasisConfig> {
@@ -414,3 +416,30 @@ export async function getCexDexPaperHistory(): Promise<CexDexPaperHistoryRespons
   const { data } = await apiClient.get<CexDexPaperHistoryResponse>('/strategies/cex-dex/paper-history')
   return data
 }
+
+
+// =============================================================================
+// 聚合实时机会（dashboard 卡片用）
+// =============================================================================
+
+export type AllOpportunity = {
+  strategy: string             // funding_rate | perp_basis | price_spread | spot_perp
+  symbol: string
+  exchange: string             // 单 ex 或 "long→short"
+  apr_pct: string              // 主指标
+  extra_pct: string
+  meta: string
+}
+
+export type AllOpportunitiesResponse = {
+  data: AllOpportunity[]
+  count: number
+}
+
+export async function getAllOpportunities(): Promise<AllOpportunitiesResponse> {
+  const { data } = await apiClient.get<AllOpportunitiesResponse>(
+    "/strategies/all-opportunities",
+  )
+  return data
+}
+

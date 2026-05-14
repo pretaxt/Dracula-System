@@ -631,7 +631,7 @@ class LiveBroker:
             )
 
     async def _ensure_perp_leverage(self, symbol) -> None:
-        """第一次对某 symbol 下永续单前，设置 ISOLATED 模式 + 目标杠杆。"""
+        """第一次对某 symbol 下永续单前，设置 CROSS 模式 + 目标杠杆（2026-05-13 用户决策从 isolated 切换；持仓中 binance 拒改 except 已吃错）"""
         sym_key = str(symbol)
         if sym_key in self._leverage_initialized:
             return
@@ -639,7 +639,7 @@ class LiveBroker:
             usdm = self._adapter._clients[InstrumentType.PERPETUAL]
             ccxt_sym = f"{symbol.base}/{symbol.quote}:{symbol.quote}"
             try:
-                await usdm.set_margin_mode("isolated", ccxt_sym)
+                await usdm.set_margin_mode("cross", ccxt_sym)
             except Exception as e:
                 logger.debug("set_margin_mode_skipped", symbol=sym_key, reason=str(e))
             await usdm.set_leverage(int(self._perp_leverage), ccxt_sym)

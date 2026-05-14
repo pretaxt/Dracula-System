@@ -94,7 +94,7 @@ export default function LoginPage() {
                 color: 'var(--accent-blood)',
               }}
             >
-              ARBITRAGE SYSTEM
+              套利系统
             </p>
           </div>
         </div>

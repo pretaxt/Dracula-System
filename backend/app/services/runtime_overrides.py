@@ -180,6 +180,9 @@ _PERP_BASIS_ALLOWED = {
     "min_diff_apr_pct", "exit_diff_apr_pct",
     "max_hold_hours", "min_hold_hours",
     "max_concurrent", "notional_per_position",
+    "candidate_symbols",
+    "stop_price_divergence_pct",
+    "max_entry_price_divergence_pct",
 }
 
 
@@ -251,4 +254,13 @@ def apply_to_perp_basis_cfg(cfg: dict, overrides: dict[str, Any]) -> dict:
         cfg.setdefault("position", {})["max_concurrent"] = int(overrides["max_concurrent"])
     if "notional_per_position" in overrides:
         cfg.setdefault("position", {})["notional_per_position"] = overrides["notional_per_position"]
+    if "stop_price_divergence_pct" in overrides:
+        cfg.setdefault("risk", {})["stop_price_divergence_pct"] = overrides["stop_price_divergence_pct"]
+    if "max_entry_price_divergence_pct" in overrides:
+        cfg.setdefault("risk", {})["max_entry_price_divergence_pct"] = overrides["max_entry_price_divergence_pct"]
+    if "candidate_symbols" in overrides:
+        # candidate_symbols 写在 position 子节（与 yaml 结构一致）
+        syms = overrides["candidate_symbols"]
+        if isinstance(syms, list):
+            cfg.setdefault("position", {})["candidate_symbols"] = list(syms)
     return cfg

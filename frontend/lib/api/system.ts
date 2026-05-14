@@ -101,3 +101,49 @@ export async function updateWeb3Credentials(patch: Web3CredentialsPatch): Promis
   const { data } = await apiClient.post<Web3CredentialsMeta>('/system/web3-credentials', patch)
   return data
 }
+
+// ---------------------------------------------------------------------------
+// 通知配置
+// ---------------------------------------------------------------------------
+
+export interface NotificationConfig {
+  telegram_enabled: boolean
+  telegram_bot_token_preview: string   // "abcd1234…" or ""
+  telegram_chat_id: string
+  email_enabled: boolean
+  smtp_host: string
+  smtp_port: number
+  smtp_user: string
+  smtp_password_set: boolean
+  smtp_from_email: string
+  smtp_to_email: string
+  updated_at: string | null
+}
+
+export interface NotificationConfigPatch {
+  telegram_enabled?: boolean
+  telegram_bot_token?: string
+  telegram_chat_id?: string
+  email_enabled?: boolean
+  smtp_host?: string
+  smtp_port?: number
+  smtp_user?: string
+  smtp_password?: string
+  smtp_from_email?: string
+  smtp_to_email?: string
+}
+
+export async function getNotificationConfig(): Promise<NotificationConfig> {
+  const { data } = await apiClient.get<NotificationConfig>('/system/notifications')
+  return data
+}
+
+export async function updateNotificationConfig(patch: NotificationConfigPatch): Promise<NotificationConfig> {
+  const { data } = await apiClient.post<NotificationConfig>('/system/notifications', patch)
+  return data
+}
+
+export async function testNotification(channel: 'telegram' | 'email'): Promise<{ status: string; channel: string }> {
+  const { data } = await apiClient.post<{ status: string; channel: string }>(`/system/notifications/test?channel=${channel}`)
+  return data
+}

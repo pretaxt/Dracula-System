@@ -322,3 +322,70 @@ async def update_web3_credentials(
 
     from app.services.web3_credentials import get_web3_credentials_meta  # noqa: PLC0415
     return Web3CredentialsMeta(**get_web3_credentials_meta())
+
+
+# ---------------------------------------------------------------------------
+# 通知渠道配置 (Telegram + Email)
+# ---------------------------------------------------------------------------
+
+class NotificationConfigOut(BaseModel):
+    telegram_enabled: bool
+    telegram_bot_token_preview: str   # "abcd1234…" 或 ""
+    telegram_chat_id: str
+    email_enabled: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password_set: bool            # 不返回明文
+    smtp_from_email: str
+    smtp_to_email: str
+    updated_at: str | None
+
+
+class NotificationConfigPatch(BaseModel):
+    telegram_enabled: bool | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    email_enabled: bool | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_to_email: str | None = None
+
+
+@router.get("/notifications", response_model=NotificationConfigOut)
+async def get_notifications(_: CurrentUser) -> NotificationConfigOut:
+    """读取通知渠道配置（脱敏版，密码只返回是否已设置）。"""
+    from app.services.notification_credentials import get_notification_meta  # noqa: PLC0415
+    return NotificationConfigOut(**get_notification_meta())
+
+
+@router.post("/notifications", response_model=NotificationConfigOut)
+async def update_notifications(
+    body: NotificationConfigPatch,
+    _: CurrentUser,
+) -> NotificationConfigOut:
+    """更新通知配置，仅 exclude_unset 字段生效；空字符串 '' 视为清空凭据。"""
+    from app.services.notification_credentials import (  # noqa: PLC0415
+        save_notification_config,
+        get_notification_meta,
+    )
+    patch = body.model_dump(exclude_unset=True)
+    save_notification_config(patch)
+    return NotificationConfigOut(**get_notification_meta())
+
+
+@router.post("/notifications/test")
+async def test_notification(channel: str, _: CurrentUser) -> dict:
+    """发送测试消息验证渠道连通性。channel = telegram | email"""
+    if channel not in ("telegram", "email"):
+        raise HTTPException(status_code=400, detail="channel 须为 telegram 或 email")
+    if channel == "telegram":
+        from app.notifications.telegram import notify_system  # noqa: PLC0415
+        notify_system("🧪 Dracula 推送测试 — Telegram 连通正常")
+    else:
+        from app.notifications.email import notify_system  # noqa: PLC0415
+        notify_system("Dracula 推送测试 — 邮件连通正常")
+    return {"status": "sent", "channel": channel}

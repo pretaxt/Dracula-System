@@ -312,12 +312,13 @@ class PerpBasisBacktestRequest(BaseModel):
     )
     days: int = Field(default=14, ge=3, le=60)
     initial_capital_usd: float = Field(default=1_000.0, ge=100)
-    notional_per_position: float = Field(default=50.0, ge=10)
+    notional_per_position: float = Field(default=100.0, ge=10)
     max_concurrent: int = Field(default=3, ge=1, le=10)
-    min_diff_apr_pct: float = Field(default=30.0, ge=5.0)
-    max_hold_hours: float = Field(default=48.0, ge=4.0)
-    min_hold_hours: float = Field(default=4.0, ge=0.0)
-    exit_diff_apr_pct: float = Field(default=5.0, ge=0.0)
+    leverage: float = Field(default=10.0, ge=1.0, le=125.0)
+    min_diff_apr_pct: float = Field(default=50.0, ge=5.0)
+    max_hold_hours: float = Field(default=240.0, ge=4.0)
+    min_hold_hours: float = Field(default=6.0, ge=0.0)
+    exit_diff_apr_pct: float = Field(default=2.0, ge=0.0)
     max_abs_apr_pct: float = Field(default=500.0, ge=50.0)
     fee_rate: float = Field(default=0.0004, ge=0)
     slippage_pct: float = Field(default=0.05, ge=0)
@@ -368,6 +369,7 @@ async def run_perp_basis_backtest_endpoint(
         initial_capital_usd=Decimal(str(body.initial_capital_usd)),
         notional_per_position=Decimal(str(body.notional_per_position)),
         max_concurrent=body.max_concurrent,
+        leverage=Decimal(str(body.leverage)),
         min_diff_apr_pct=Decimal(str(body.min_diff_apr_pct)),
         max_hold_hours=Decimal(str(body.max_hold_hours)),
         min_hold_hours=Decimal(str(body.min_hold_hours)),
@@ -384,6 +386,8 @@ async def run_perp_basis_backtest_endpoint(
             "win_rate_pct": str(result.win_rate_pct),
             "total_pnl_usd": str(round(result.total_pnl_usd, 4)),
             "total_pnl_pct": str(round(result.total_pnl_pct, 4)),
+            "roi_on_margin_pct": str(round(result.roi_on_margin_pct, 4)),
+            "margin_deployed_usd": str(round(result.margin_deployed_usd, 2)),
             "total_funding_usd": str(round(result.total_funding_collected, 4)),
             "total_fees_usd": str(round(result.total_fees_paid, 4)),
             "final_equity_usd": str(round(result.final_equity_usd, 2)),
@@ -424,8 +428,9 @@ class PerpBasisSweepRequest(BaseModel):
     min_diff_apr_pct_list: list[float] = Field(
         default_factory=lambda: [15, 30, 50, 75, 100, 150],
     )
-    min_hold_hours: float = Field(default=4.0, ge=0)
-    notional_per_position: float = Field(default=50.0, ge=10)
+    min_hold_hours: float = Field(default=6.0, ge=0)
+    notional_per_position: float = Field(default=100.0, ge=10)
+    leverage: float = Field(default=10.0, ge=1.0, le=125.0)
 
 
 class PerpBasisSweepRow(BaseModel):
@@ -436,6 +441,7 @@ class PerpBasisSweepRow(BaseModel):
     total_fees_usd: str
     total_pnl_usd: str
     total_pnl_pct: str
+    roi_on_margin_pct: str
 
 
 class PerpBasisSweepResponse(BaseModel):
@@ -466,6 +472,7 @@ async def run_perp_basis_sweep(
         cfg = PerpBasisBacktestConfig(
             initial_capital_usd=Decimal("1000"),
             notional_per_position=Decimal(str(body.notional_per_position)),
+            leverage=Decimal(str(body.leverage)),
             min_diff_apr_pct=Decimal(str(thr)),
             min_hold_hours=Decimal(str(body.min_hold_hours)),
         )
@@ -478,5 +485,6 @@ async def run_perp_basis_sweep(
             total_fees_usd=str(round(result.total_fees_paid, 2)),
             total_pnl_usd=str(round(result.total_pnl_usd, 2)),
             total_pnl_pct=str(round(result.total_pnl_pct, 2)),
+            roi_on_margin_pct=str(round(result.roi_on_margin_pct, 2)),
         ))
     return PerpBasisSweepResponse(snapshots_loaded=len(snaps), rows=rows)

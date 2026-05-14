@@ -245,6 +245,7 @@ class PerpBasisConfigResponse(BaseModel):
     max_hold_hours: str
     min_hold_hours: str
     exit_diff_apr_pct: str
+    stop_price_divergence_pct: str
     candidate_symbols: list[str]
     scan_interval_seconds: float
 
@@ -258,10 +259,12 @@ class PerpBasisConfigPatchRequest(BaseModel):
     max_hold_hours: str | None = None
     min_hold_hours: str | None = None
     exit_diff_apr_pct: str | None = None
+    stop_price_divergence_pct: str | None = None
 
     @field_validator(
         "min_diff_apr_pct", "notional_per_position",
         "max_hold_hours", "min_hold_hours", "exit_diff_apr_pct",
+        "stop_price_divergence_pct",
     )
     @classmethod
     def validate_non_negative_pb(cls, v: str | None) -> str | None:

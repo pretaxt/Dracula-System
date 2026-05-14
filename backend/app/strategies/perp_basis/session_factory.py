@@ -32,7 +32,7 @@ class _PerpPaperBrokerWrapper:
     def __init__(
         self, exchange_name: str,
         fee_rate: Decimal = Decimal("0.0004"),
-        perp_leverage: Decimal = Decimal("5"),
+        perp_leverage: Decimal = Decimal("10"),
         slippage_bps: Decimal = Decimal("2"),
     ) -> None:
         self._paper = PaperBroker(slippage_bps=slippage_bps, fee_rate=fee_rate)
@@ -67,7 +67,7 @@ def build_perp_basis_paper_session(
     adapters: dict[str, Any],
     scanner: Any,
     fee_rate: Decimal = Decimal("0.0004"),
-    perp_leverage: Decimal = Decimal("5"),
+    perp_leverage: Decimal = Decimal("10"),
     market_data_hub: Any = None,
     live_mode: bool = False,
     reconciler: Any = None,
@@ -118,7 +118,10 @@ def build_perp_basis_paper_session(
         min_hold_hours=Decimal(str(exit_cfg.get("min_hold_hours", 4))),
         exit_diff_apr_pct=Decimal(str(exit_cfg.get("exit_diff_apr_pct", 5))),
         stop_price_divergence_pct=Decimal(str(
-            risk.get("stop_price_divergence_pct", "5.0")
+            risk.get("stop_price_divergence_pct", "2.0")
+        )),
+        max_entry_price_divergence_pct=Decimal(str(
+            risk.get("max_entry_price_divergence_pct", "2.0")
         )),
         scan_interval_seconds=float(scan_cfg.get("scan_interval_seconds", 60)),
         market_data_hub=market_data_hub,

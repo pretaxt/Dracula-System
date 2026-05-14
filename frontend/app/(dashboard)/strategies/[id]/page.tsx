@@ -1,6 +1,6 @@
 'use client'
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, AlertTriangle } from 'lucide-react'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
@@ -29,11 +29,22 @@ import {
   type CexDexPaperTrade,
 } from '@/lib/api/strategies'
 import { getRiskLimits, patchRiskLimits } from '@/lib/api/risk'
+import { getPositions } from '@/lib/api/positions'
+import {
+  getHTXScreenerStatus,
+  runHTXScreener,
+  applyHTXScreener,
+  type HTXRunResponse,
+  type HTXApplyResponse,
+  type HTXTier,
+  type HTXApplyMode,
+} from '@/lib/api/scanner'
 import { getDashboardSummary } from '@/lib/api/dashboard'
 
 const INSTANCE_MAP: Record<string, string> = {
   'funding-rate': 'funding_rate_main',
   'spot-perp':    'spot_perp_main',
+  'perp-basis':   'perp_basis_main',
 }
 
 const STATUS_LABEL: Record<StrategyStatus, string> = {
@@ -73,7 +84,6 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     queryKey: ['strategy'],
     queryFn: getStrategyStatus,
     refetchInterval: 10_000,
-    enabled: params.id === 'funding-rate',
   })
   const { data: spotPerpOpps } = useQuery({
     queryKey: ['spot-perp-opps'],
@@ -195,6 +205,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
   const [pbForm, setPbForm] = useState({
     min_diff_apr_pct: '',
     exit_diff_apr_pct: '',
+    stop_price_divergence_pct: '',
     max_concurrent: '',
     notional_per_position: '',
     max_hold_hours: '',
@@ -370,9 +381,8 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
           // #02 perp-basis：用 perpBasisCfg + perf 同步显示三段
           const sizeUsd = parseFloat(perpBasisCfg.notional_per_position ?? '50')
           const maxPos = perpBasisCfg.max_concurrent ?? 0
-          // perf.open_positions = leg 数，跨所策略每仓 2 legs → 实际仓数 = legs / 2
-          const legCnt = perf?.open_positions ?? 0
-          const openCnt = Math.floor(legCnt / 2) || legCnt  // 兼容旧记录
+          // perf.open_positions = dashboard SQL COUNT(status='open') = 持仓数（非 leg 数）
+          const openCnt = perf?.open_positions ?? 0
           const deployed = openCnt * sizeUsd
           const account = parseFloat(summary?.total_equity_usd ?? '0')
           const configMax = maxPos * sizeUsd
@@ -471,7 +481,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
       })()}
 
       <CardElevated style={{ padding: 24 }}>
-        <SectionHeader title={t('策略简介')} subtitle="STRATEGY THESIS" />
+        <SectionHeader title={t('策略简介')} subtitle="策略逻辑" />
         <p style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text-secondary)', margin: 0 }}>
           {strategy.desc}
         </p>
@@ -583,7 +593,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('风险点')}
-            subtitle="RISK FACTORS"
+            subtitle="风险因素"
             right={<AlertTriangle size={16} style={{ color: 'var(--accent-blood)' }} />}
           />
           <ul style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
@@ -617,7 +627,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('实时基差机会')}
-            subtitle="LIVE BASIS OPPORTUNITIES · BINANCE + OKX"
+            subtitle="实时 BASIS 机会 · BINANCE + OKX"
             right={
               <span
                 style={{
@@ -795,7 +805,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('实时费率机会')}
-            subtitle="LIVE FUNDING-RATE OPPORTUNITIES · BINANCE + OKX"
+            subtitle="实时资金费率机会 · BINANCE + OKX"
             right={
               <span
                 style={{
@@ -956,7 +966,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('实时跨所 funding 差')}
-            subtitle={`LIVE PERP-BASIS ARB · ${perpBasisOpps?.exchange_pair_count ?? 0} EXCHANGE PAIRS`}
+            subtitle={`实时跨所套利 · ${perpBasisOpps?.exchange_pair_count ?? 0} 交易所对`}
             right={
               <span style={{
                 fontFamily: 'var(--font-mono)', fontSize: 13,
@@ -989,7 +999,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
               }}>
                 <thead>
                   <tr>
-                    {[t('币对'), t('long 端'), t('short 端'), t('long APR'), t('short APR'), t('差 APR'), t('健康度'), t('周期 L/S')].map((h, i) => (
+                    {[t('币对'), '做多方', '做空方', '做多 APR', '做空 APR', t('差 APR'), t('入场'), t('健康度'), '周期（多/空）'].map((h, i) => (
                       <th key={i} style={{
                         textAlign: i <= 2 ? 'left' : 'right',
                         padding: '10px 12px', color: 'var(--text-tertiary)',
@@ -1005,6 +1015,8 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 <tbody>
                   {(perpBasisOpps?.data ?? []).map((o) => {
                     const diff = parseFloat(o.diff_apr_pct)
+                    const minDiff = parseFloat(perpBasisOpps?.min_diff_apr_pct || '0')
+                    const canEnter = diff >= minDiff
                     const tier = o.health_tier ?? 'safe'
                     // 健康度分级配色 — safe 绿 / risky 金 / dirty 红警示
                     const tierColor = tier === 'dirty'
@@ -1038,6 +1050,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                         <td style={{ padding: '12px', textAlign: 'right', color: tierColor, fontWeight: 600 }}>
                           {diff.toFixed(2)}%
                         </td>
+                        <td style={{ padding: '12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12,
+                          color: canEnter ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                          fontWeight: canEnter ? 600 : 400,
+                        }}>
+                          {canEnter ? `✓ ≥${minDiff.toFixed(0)}%` : '—'}
+                        </td>
                         <td style={{ padding: '12px', textAlign: 'right', color: tierColor, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                           {tierLabel}
                         </td>
@@ -1055,7 +1073,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 12,
             color: 'var(--text-muted)',
           }}>
-            {t('入场门槛 funding diff APR ≥')} {parseFloat(perpBasisOpps?.min_diff_apr_pct || '0').toFixed(1)}%
+            {t('入场门槛 APR ≥')} {parseFloat(perpBasisOpps?.min_diff_apr_pct || '0').toFixed(1)}%
             ， {perpBasisOpps?.exchange_pair_count ?? 0} {t('个交易所组合 · 30 秒扫描 · 数据来自 MarketDataHub')}
           </div>
           <div style={{
@@ -1074,7 +1092,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('交易所资金状态')}
-            subtitle="PER-EXCHANGE PERP MARGIN"
+            subtitle="各交易所永续保证金"
             right={
               <span style={{
                 fontFamily: 'var(--font-mono)', fontSize: 13,
@@ -1151,13 +1169,17 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('参数配置（PATCH 热更新）')}
-            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            subtitle="实时配置 · 下一 tick 生效"
             right={
               <span style={{
                 fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: perpBasisCfg.paper_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+                color: perpBasisCfg.paper_running
+                  ? (live?.trading_mode === 'live' ? 'var(--accent-blood)' : 'var(--accent-emerald)')
+                  : 'var(--text-tertiary)',
               }}>
-                {perpBasisCfg.paper_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+                {perpBasisCfg.paper_running
+                  ? (live?.trading_mode === 'live' ? `● ${t('实盘运行中')}` : `● ${t('模拟运行中')}`)
+                  : `○ ${t('未启动')}`}
               </span>
             }
           />
@@ -1166,10 +1188,11 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             gap: 16,
           }}>
             {([
-              { key: 'min_diff_apr_pct',     label: 'funding diff 入场 (%)', cur: perpBasisCfg.min_diff_apr_pct },
-              { key: 'exit_diff_apr_pct',    label: 'diff 衰减退出 (%)',     cur: perpBasisCfg.exit_diff_apr_pct },
-              { key: 'max_hold_hours',       label: '最长持仓 (h)',           cur: perpBasisCfg.max_hold_hours },
-              { key: 'min_hold_hours',       label: '最少持仓 (h)',           cur: perpBasisCfg.min_hold_hours },
+              { key: 'min_diff_apr_pct',     label: '入场 APR (%)',          cur: perpBasisCfg.min_diff_apr_pct },
+              { key: 'exit_diff_apr_pct',    label: '退出 APR (%)',          cur: perpBasisCfg.exit_diff_apr_pct },
+              { key: 'stop_price_divergence_pct', label: '脱钩止损 (%)',      cur: perpBasisCfg.stop_price_divergence_pct },
+              { key: 'max_hold_hours',       label: '最长持仓 (H)',           cur: perpBasisCfg.max_hold_hours },
+              { key: 'min_hold_hours',       label: '最少持仓 (H)',           cur: perpBasisCfg.min_hold_hours },
               { key: 'notional_per_position',label: '单笔名义 (USD)',         cur: perpBasisCfg.notional_per_position },
               { key: 'max_concurrent',       label: '同时持仓上限',           cur: String(perpBasisCfg.max_concurrent) },
             ] as const).map((f) => (
@@ -1212,6 +1235,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 const patch: Record<string, unknown> = {}
                 if (pbForm.min_diff_apr_pct) patch.min_diff_apr_pct = pbForm.min_diff_apr_pct
                 if (pbForm.exit_diff_apr_pct) patch.exit_diff_apr_pct = pbForm.exit_diff_apr_pct
+                if (pbForm.stop_price_divergence_pct) patch.stop_price_divergence_pct = pbForm.stop_price_divergence_pct
                 if (pbForm.max_hold_hours) patch.max_hold_hours = pbForm.max_hold_hours
                 if (pbForm.min_hold_hours) patch.min_hold_hours = pbForm.min_hold_hours
                 if (pbForm.notional_per_position) patch.notional_per_position = pbForm.notional_per_position
@@ -1219,8 +1243,8 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
                 if (Object.keys(patch).length === 0) return
                 patchPbCfg.mutate(patch)
                 setPbForm({
-                  min_diff_apr_pct: '', exit_diff_apr_pct: '', max_concurrent: '',
-                  notional_per_position: '', max_hold_hours: '', min_hold_hours: '',
+                  min_diff_apr_pct: '', exit_diff_apr_pct: '', stop_price_divergence_pct: '',
+                  max_concurrent: '', notional_per_position: '', max_hold_hours: '', min_hold_hours: '',
                 })
               }}
               disabled={patchPbCfg.isPending}
@@ -1242,18 +1266,34 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         </CardElevated>
       )}
 
+      {/* #02 HTX 溢价筛选器 */}
+      {strategy.id === 'perp-basis' && perpBasisCfg && (
+        <HTXScreenerCard
+          liveCandidates={perpBasisCfg.candidate_symbols ?? []}
+
+          onApplied={() => {
+            queryClient.invalidateQueries({ queryKey: ['perp-basis-cfg'] })
+            queryClient.invalidateQueries({ queryKey: ['perp-basis-opps'] })
+          }}
+        />
+      )}
+
       {/* #01 funding-rate: 配置表单（risk_limits PATCH，#01 强相关字段集中入口）*/}
       {strategy.id === 'funding-rate' && frRiskCfg && (
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('参数配置（PATCH 热更新）')}
-            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            subtitle="实时配置 · 下一 tick 生效"
             right={
               <span style={{
                 fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: live?.paper_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+                color: live?.paper_running
+                  ? (live?.trading_mode === 'live' ? 'var(--accent-blood)' : 'var(--accent-emerald)')
+                  : 'var(--text-tertiary)',
               }}>
-                {live?.paper_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+                {live?.paper_running
+                  ? (live?.trading_mode === 'live' ? `● ${t('实盘运行中')}` : `● ${t('模拟运行中')}`)
+                  : `○ ${t('未启动')}`}
               </span>
             }
           />
@@ -1262,12 +1302,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
             gap: 16,
           }}>
             {([
-              { key: 'min_apr_pct',            label: '最低入场 APR (%)',     cur: String(frRiskCfg.min_apr_pct) },
+              { key: 'min_apr_pct',            label: '入场 APR (%)',     cur: String(frRiskCfg.min_apr_pct) },
               { key: 'scan_threshold_apr_pct', label: '候选展示门槛 APR (%)', cur: String(frRiskCfg.scan_threshold_apr_pct ?? '0') },
               { key: 'max_positions',          label: '同时持仓上限',         cur: String(frRiskCfg.max_positions) },
               { key: 'max_total_notional_usd', label: '总名义上限 (USD)',     cur: String(frRiskCfg.max_total_notional_usd) },
               { key: 'stop_loss_pct',          label: '止损 (%)',             cur: String(frRiskCfg.stop_loss_pct) },
-              { key: 'max_hold_hours',         label: '最长持仓 (h)',         cur: String(frRiskCfg.max_hold_hours) },
+              { key: 'max_hold_hours',         label: '最长持仓 (H)',         cur: String(frRiskCfg.max_hold_hours) },
             ] as const).map((f) => (
               <div key={f.key}>
                 <label style={{
@@ -1343,13 +1383,17 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('参数配置（PATCH 热更新）')}
-            subtitle="LIVE CONFIG · APPLIES NEXT TICK"
+            subtitle="实时配置 · 下一 tick 生效"
             right={
               <span style={{
                 fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: spotPerpCfg.session_running ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+                color: spotPerpCfg.session_running
+                  ? (live?.trading_mode === 'live' ? 'var(--accent-blood)' : 'var(--accent-emerald)')
+                  : 'var(--text-tertiary)',
               }}>
-                {spotPerpCfg.session_running ? `● ${t('paper 运行中')}` : `○ ${t('未启动')}`}
+                {spotPerpCfg.session_running
+                  ? (live?.trading_mode === 'live' ? `● ${t('实盘运行中')}` : `● ${t('模拟运行中')}`)
+                  : `○ ${t('未启动')}`}
               </span>
             }
           />
@@ -1359,10 +1403,10 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
           }}>
             {([
               { key: 'entry_pct',               label: '入场基差通用阈值 (%)',  cur: spotPerpCfg.entry_pct },
-              { key: 'entry_pct_premium',       label: 'PREMIUM 阈值 (%)',     cur: spotPerpCfg.entry_pct_premium },
-              { key: 'entry_pct_discount',      label: 'DISCOUNT 阈值 (%)',    cur: spotPerpCfg.entry_pct_discount },
+              { key: 'entry_pct_premium',       label: '溢价阈值 (%)',     cur: spotPerpCfg.entry_pct_premium },
+              { key: 'entry_pct_discount',      label: '折价阈值 (%)',    cur: spotPerpCfg.entry_pct_discount },
               { key: 'exit_pct',                label: '收敛平仓阈值 (%)',     cur: spotPerpCfg.exit_pct },
-              { key: 'max_hold_hours',          label: '最长持仓 (h)',          cur: spotPerpCfg.max_hold_hours },
+              { key: 'max_hold_hours',          label: '最长持仓 (H)',          cur: spotPerpCfg.max_hold_hours },
               { key: 'max_concurrent',          label: '同时持仓上限',          cur: String(spotPerpCfg.max_concurrent) },
               { key: 'notional_per_position',   label: '单笔名义 (USD)',        cur: spotPerpCfg.notional_per_position },
               { key: 'stop_basis_widening_pct', label: '基差扩大止损 (%)',     cur: spotPerpCfg.stop_basis_widening_pct },
@@ -1444,7 +1488,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
       {/* #05 cex-dex: 运行状态卡 */}
       {strategy.id === 'cex-dex' && cexDexStat && (
         <CardElevated style={{ padding: 24 }}>
-          <SectionHeader title={t('运行状态')} subtitle="ARBITRUM ONE · CEX-DEX RUNNER" />
+          <SectionHeader title={t('运行状态')} subtitle="ARBITRUM ONE · CEX-DEX 执行器" />
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
@@ -1491,7 +1535,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('Arbitrum 钱包余额')}
-            subtitle="ON-CHAIN WALLET · ARBITRUM ONE"
+            subtitle="链上钱包 · ARBITRUM ONE"
             right={
               cexDexWallet?.wallet_address
                 ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
@@ -1595,7 +1639,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('实时价差机会')}
-            subtitle="LIVE CEX-DEX OPPORTUNITIES · 5s SCAN"
+            subtitle="实时 CEX-DEX 套利机会 · 5s 扫描"
             right={
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13,
                 color: cexDexOpps?.running ? 'var(--accent-emerald)' : 'var(--text-tertiary)' }}>
@@ -1673,7 +1717,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('价差监控')}
-            subtitle={`LIVE SPREAD · 扫描 ${cexDexSpreads?.scan_count ?? 0} 次`}
+            subtitle={`实时价差 · 扫描 ${cexDexSpreads?.scan_count ?? 0} 次`}
             right={
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
                 触发门槛 ≥ ~13 bps (净利 ${cexDexSpreads?.threshold_usd ?? 2})
@@ -1721,7 +1765,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <CardElevated style={{ padding: 24 }}>
           <SectionHeader
             title={t('Paper 记录')}
-            subtitle={`SIMULATED TRADES · 共 ${cexDexHistory?.total ?? 0} 次触发`}
+            subtitle={`模拟交易 · 共 ${cexDexHistory?.total ?? 0} 次触发`}
           />
           {(cexDexHistory?.data ?? []).length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', fontFamily: 'var(--font-mono)',
@@ -1776,7 +1820,7 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
       {/* #05 cex-dex: 配置 + 模式切换 */}
       {strategy.id === 'cex-dex' && cexDexCfg && (
         <CardElevated style={{ padding: 24 }}>
-          <SectionHeader title={t('配置')} subtitle="CEX-DEX CONFIG PATCH" />
+          <SectionHeader title={t('配置')} subtitle="参数热更新" />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 20 }}>
             {/* 当前配置展示 */}
             <div>
@@ -1923,3 +1967,324 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
     </div>
   )
 }
+
+// =============================================================================
+// HTX 溢价筛选器 Widget (#02 only)
+// =============================================================================
+
+function HTXScreenerCard({
+  liveCandidates,
+  onApplied,
+}: {
+  liveCandidates: string[]
+  onApplied: () => void
+}) {
+  // 内部 query open positions，避免依赖外部 props
+  const { data: openPositionsData } = useQuery({
+    queryKey: ['perp-basis-open-positions-htx'],
+    queryFn: () => getPositions({ status: 'open', page_size: 200 }),
+    refetchInterval: 15_000,
+  })
+  const openPositionSymbols = useMemo<string[]>(() => {
+    const rows = openPositionsData?.data ?? []
+    const bases: string[] = []
+    for (const p of rows) {
+      if (p.strategy_instance !== 'perp_basis_main') continue
+      const base = p.symbol.split('/')[0]
+      if (base && !bases.includes(base)) bases.push(base)
+    }
+    return bases
+  }, [openPositionsData])
+
+  const [runResult, setRunResult] = useState<HTXRunResponse | null>(null)
+  const [runLoading, setRunLoading] = useState(false)
+  const [applyLoading, setApplyLoading] = useState<HTXApplyMode | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [diffSummary, setDiffSummary] = useState<HTXApplyResponse | null>(null)
+  const [tier, setTier] = useState<HTXTier>('STRONG')
+  const [protectOpen, setProtectOpen] = useState(true)
+  const [maxSymbols, setMaxSymbols] = useState(20)
+
+  const { data: status } = useQuery({
+    queryKey: ['htx-screener-status'],
+    queryFn: getHTXScreenerStatus,
+    refetchInterval: 15_000,
+  })
+
+  async function handleRun() {
+    setRunLoading(true)
+    setError(null)
+    setDiffSummary(null)
+    try {
+      const res = await runHTXScreener()
+      setRunResult(res)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '触发失败')
+    } finally {
+      setRunLoading(false)
+    }
+  }
+
+  async function handleApply(mode: HTXApplyMode) {
+    setApplyLoading(mode)
+    setError(null)
+    try {
+      const res = await applyHTXScreener({
+        tier, max_symbols: maxSymbols,
+        protect_open_positions: protectOpen,
+        mode,
+      })
+      setDiffSummary(res)
+      onApplied()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '应用失败')
+    } finally {
+      setApplyLoading(null)
+    }
+  }
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block', fontFamily: 'var(--font-mono)', fontSize: 11,
+    color: 'var(--text-tertiary)', textTransform: 'uppercase',
+    letterSpacing: '0.08em', marginBottom: 6,
+  }
+
+  const TokenChip = ({ sym, color = 'var(--accent-emerald)' }: { sym: string; color?: string }) => (
+    <span style={{
+      display: 'inline-block', padding: '2px 9px', borderRadius: 4,
+      fontFamily: 'var(--font-mono)', fontSize: 12,
+      color, border: `1px solid ${color}`,
+      background: 'transparent',
+    }}>{sym}</span>
+  )
+
+  const strong = runResult?.strong ?? []
+  const moderate = runResult?.moderate ?? []
+  const hasRun = runResult !== null || (status?.strong_count ?? 0) > 0
+  const applyDisabled = strong.length === 0 && moderate.length === 0
+  const lastRunAt = runResult ? '刚刚' : (status?.last_run_at ? new Date(status.last_run_at).toLocaleString() : '尚未运行')
+
+  return (
+    <CardElevated style={{ padding: 24 }}>
+      <SectionHeader
+        title={'HTX 溢价筛选器'}
+        subtitle={'14d 历史 · HTX vs binance/okx/bybit funding 差 · STRONG / MODERATE 分级'}
+        right={
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 12,
+            color: status?.available ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
+          }}>
+            {status?.available ? '● runner ready' : '○ 不可用'}
+          </span>
+        }
+      />
+
+      {/* 状态 + 触发按钮 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+        padding: '12px 0', borderBottom: '1px solid var(--border-subtle)', marginBottom: 16,
+      }}>
+        <button
+          onClick={handleRun}
+          disabled={runLoading || !status?.available}
+          style={{
+            padding: '8px 18px',
+            background: runLoading ? 'var(--surface-2)' : 'var(--accent-blood)',
+            color: '#fff', border: 'none', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
+            cursor: runLoading ? 'wait' : 'pointer',
+            opacity: runLoading ? 0.6 : 1, letterSpacing: '0.06em',
+          }}
+        >
+          {runLoading ? '↻ 跑筛选中... (30-90s)' : '↻ 手动触发'}
+        </button>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+          上次运行: {lastRunAt}
+          {status?.last_elapsed_secs ? ` (${status.last_elapsed_secs}s)` : ''}
+          {(status?.strong_count ?? 0) > 0 ? ` · STRONG ${status?.strong_count}` : ''}
+          {(status?.moderate_count ?? 0) > 0 ? ` · MODERATE ${status?.moderate_count}` : ''}
+        </span>
+      </div>
+
+      {/* 错误显示 */}
+      {error && (
+        <div style={{
+          padding: 10, marginBottom: 12,
+          background: 'rgba(227,64,88,0.1)', border: '1px solid var(--accent-blood)',
+          borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
+          color: 'var(--accent-blood)',
+        }}>
+          ✗ {error}
+        </div>
+      )}
+
+      {/* 筛选结果展示框 */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={labelStyle}>筛选结果</div>
+        {!hasRun ? (
+          <div style={{
+            padding: 16, fontFamily: 'var(--font-mono)', fontSize: 12,
+            color: 'var(--text-muted)', textAlign: 'center',
+            background: 'var(--bg-deepest)', borderRadius: 4,
+            border: '1px dashed var(--border-default)',
+          }}>
+            点击「手动触发」开始筛选
+          </div>
+        ) : (
+          <div style={{
+            padding: 12, background: 'var(--bg-deepest)', borderRadius: 4,
+            border: '1px solid var(--border-default)',
+          }}>
+            {strong.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-emerald)', marginBottom: 6 }}>
+                  STRONG ({strong.length})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {strong.map(s => <TokenChip key={s} sym={s.split('/')[0]} color='var(--accent-emerald)' />)}
+                </div>
+              </div>
+            )}
+            {moderate.length > 0 && (
+              <div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#fbbf24', marginBottom: 6 }}>
+                  MODERATE ({moderate.length})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {moderate.map(s => <TokenChip key={s} sym={s.split('/')[0]} color='#fbbf24' />)}
+                </div>
+              </div>
+            )}
+            {strong.length === 0 && moderate.length === 0 && (
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+                本次筛选无 STRONG / MODERATE 候选
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 当前 candidate 显示 */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={labelStyle}>当前 candidate ({liveCandidates.length})</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {liveCandidates.map(s => (
+            <TokenChip key={s} sym={s}
+              color={openPositionSymbols.includes(s) ? 'var(--accent-blood)' : 'var(--text-secondary)'} />
+          ))}
+        </div>
+        {openPositionSymbols.length > 0 && (
+          <div style={{ marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+            红色 = 当前持仓中币种
+          </div>
+        )}
+      </div>
+
+      {/* 应用选项 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+        marginBottom: 12,
+      }}>
+        <div>
+          <label style={labelStyle}>Tier</label>
+          <select value={tier} onChange={e => setTier(e.target.value as HTXTier)} style={{
+            padding: '6px 10px', background: 'var(--surface-2)',
+            border: '1px solid var(--border)', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', fontSize: 13,
+            color: 'var(--text-primary)',
+          }}>
+            <option value="STRONG">STRONG only</option>
+            <option value="STRONG+MODERATE">STRONG + MODERATE</option>
+            <option value="MODERATE">MODERATE only</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>上限</label>
+          <input type="number" value={maxSymbols}
+            onChange={e => setMaxSymbols(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 20)))}
+            min={1} max={50}
+            style={{
+              width: 80, padding: '6px 10px', background: 'var(--surface-2)',
+              border: '1px solid var(--border)', borderRadius: 4,
+              fontFamily: 'var(--font-mono)', fontSize: 13,
+              color: 'var(--text-primary)',
+            }} />
+        </div>
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontFamily: 'var(--font-mono)', fontSize: 12,
+          color: 'var(--text-secondary)', cursor: 'pointer',
+        }}>
+          <input type="checkbox" checked={protectOpen}
+            onChange={e => setProtectOpen(e.target.checked)} />
+          保留持仓币种（{openPositionSymbols.length} 个）
+        </label>
+      </div>
+
+      {/* 两个应用按钮 */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => handleApply('union')}
+          disabled={applyLoading !== null || !hasRun || applyDisabled}
+          style={{
+            padding: '8px 18px',
+            background: 'rgba(99,102,241,0.18)', color: '#818cf8',
+            border: '1px solid #818cf8', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
+            cursor: (applyLoading !== null || !hasRun || applyDisabled) ? 'not-allowed' : 'pointer',
+            opacity: (applyLoading !== null || !hasRun || applyDisabled) ? 0.5 : 1,
+            letterSpacing: '0.04em',
+          }}
+        >
+          {applyLoading === 'union' ? '⊕ 应用中...' : '⊕ 主动加载（叠加）'}
+        </button>
+        <button
+          onClick={() => handleApply('replace')}
+          disabled={applyLoading !== null || !hasRun || applyDisabled}
+          style={{
+            padding: '8px 18px',
+            background: 'var(--accent-blood)', color: '#fff',
+            border: 'none', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
+            cursor: (applyLoading !== null || !hasRun || applyDisabled) ? 'not-allowed' : 'pointer',
+            opacity: (applyLoading !== null || !hasRun || applyDisabled) ? 0.5 : 1,
+            letterSpacing: '0.04em',
+          }}
+        >
+          {applyLoading === 'replace' ? '⟲ 应用中...' : '⟲ 全部替换'}
+        </button>
+      </div>
+
+      {/* apply diff 摘要 */}
+      {diffSummary && (
+        <div style={{
+          marginTop: 14, padding: 12,
+          background: 'rgba(16,185,129,0.08)',
+          border: '1px solid var(--accent-emerald)', borderRadius: 4,
+        }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-emerald)', marginBottom: 6, textTransform: 'uppercase' }}>
+            ✓ apply {diffSummary.mode} 完成 — 新 candidate {diffSummary.applied.length} 个
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+            <div>
+              <div style={{ color: 'var(--accent-emerald)', marginBottom: 4 }}>新增 ({diffSummary.added.length})</div>
+              <div style={{ color: 'var(--text-secondary)' }}>{diffSummary.added.join(', ') || '—'}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--accent-blood)', marginBottom: 4 }}>移除 ({diffSummary.removed.length})</div>
+              <div style={{ color: 'var(--text-secondary)' }}>{diffSummary.removed.join(', ') || '—'}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--text-tertiary)', marginBottom: 4 }}>保留 ({diffSummary.kept.length})</div>
+              <div style={{ color: 'var(--text-secondary)' }}>{diffSummary.kept.join(', ') || '—'}</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+            候选已写入 runtime_overrides + scanner._config，下一 tick (≤30s) 生效。回测 UI 自动同步。
+          </div>
+        </div>
+      )}
+    </CardElevated>
+  )
+}
+

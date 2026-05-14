@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { Key, CheckCircle2, AlertCircle, Edit3, X } from 'lucide-react'
+import { Key, CheckCircle2, AlertCircle, Edit3, X, Bell, Mail } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { CardElevated, SectionHeader } from '@/components/ui/Card'
 import { Badge, Button } from '@/components/ui/Button'
@@ -11,10 +11,15 @@ import {
   updateExchangeCredentials,
   getWeb3Credentials,
   updateWeb3Credentials,
+  getNotificationConfig,
+  updateNotificationConfig,
+  testNotification,
   type ExchangeCredential,
   type ExchangeCredentialPatch,
   type Web3CredentialsMeta,
   type Web3CredentialsPatch,
+  type NotificationConfig,
+  type NotificationConfigPatch,
 } from '@/lib/api/system'
 
 const EXCHANGE_LABEL: Record<string, string> = {
@@ -65,6 +70,9 @@ export default function SettingsPage() {
 
       {/* Web3 凭据 */}
       <Web3CredentialsSection meta={web3Data ?? null} />
+
+      {/* 推送通知配置 */}
+      <NotificationConfigSection />
 
       {/* 关于系统 */}
       <CardElevated style={{ padding: 20 }} className="animate-in">
@@ -389,7 +397,7 @@ function Web3CredentialModal({
   const [privateKey, setPrivateKey] = useState('')
   const [rpcUrl, setRpcUrl] = useState('')
 
-  const canSubmit = privateKey.trim().length >= 64 && rpcUrl.trim().startsWith('https://') 
+  const canSubmit = privateKey.trim().length >= 64 && rpcUrl.trim().startsWith('https://')
 
   return (
     <div
@@ -451,6 +459,477 @@ function Web3CredentialModal({
             variant="primary"
             disabled={!canSubmit || isPending}
             onClick={() => onSave({ private_key: privateKey.trim(), rpc_url: rpcUrl.trim() })}
+            style={{ flex: 1 }}
+          >
+            {isPending ? '保存中…' : '保存'}
+          </Button>
+          <Button variant="secondary" onClick={onClose} style={{ flex: 1 }}>
+            取消
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// 推送通知配置
+// ---------------------------------------------------------------------------
+
+/** CSS-only pill toggle，无外部依赖 */
+function Toggle({ enabled, onChange, disabled }: { enabled: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={() => !disabled && onChange(!enabled)}
+      aria-checked={enabled}
+      role="switch"
+      style={{
+        width: 42,
+        height: 22,
+        borderRadius: 11,
+        border: 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        padding: 0,
+        background: enabled ? 'var(--accent-blood)' : 'var(--border-strong)',
+        position: 'relative',
+        flexShrink: 0,
+        transition: 'background 200ms',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          top: 2,
+          left: enabled ? 22 : 2,
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          background: 'var(--text-primary)',
+          transition: 'left 200ms',
+        }}
+      />
+    </button>
+  )
+}
+
+function NotificationConfigSection() {
+  const qc = useQueryClient()
+  const { data: cfg, isLoading } = useQuery({
+    queryKey: ['notification-config'],
+    queryFn: getNotificationConfig,
+    refetchInterval: 60_000,
+    retry: false,
+  })
+
+  const mutation = useMutation({
+    mutationFn: (patch: NotificationConfigPatch) => updateNotificationConfig(patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notification-config'] })
+    },
+  })
+
+  const [showTgModal, setShowTgModal] = useState(false)
+  const [showEmailModal, setShowEmailModal] = useState(false)
+  const [tgTestStatus, setTgTestStatus] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [emailTestStatus, setEmailTestStatus] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  async function handleTest(channel: 'telegram' | 'email') {
+    const setter = channel === 'telegram' ? setTgTestStatus : setEmailTestStatus
+    try {
+      await testNotification(channel)
+      setter({ ok: true, msg: '✓ 已发送' })
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setter({ ok: false, msg: `✗ ${msg}` })
+    }
+    setTimeout(() => setter(null), 3000)
+  }
+
+  // 乐观更新开关
+  function handleToggle(field: 'telegram_enabled' | 'email_enabled', current: boolean) {
+    mutation.mutate({ [field]: !current })
+  }
+
+  const tgEnabled = cfg?.telegram_enabled ?? false
+  const emailEnabled = cfg?.email_enabled ?? false
+  const isPending = mutation.isPending
+
+  return (
+    <CardElevated style={{ padding: 20 }} className="animate-in">
+      <SectionHeader
+        title="推送通知"
+        subtitle="NOTIFICATION CHANNELS"
+        right={
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Bell size={12} />
+            {isLoading ? '加载中…' : cfg ? '已加载' : '后端未就绪'}
+          </span>
+        }
+      />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* ── Telegram 区块 ── */}
+        <div style={{
+          padding: 16,
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-default)',
+          background: 'var(--bg-card)',
+        }}>
+          {/* 标题行 + 开关 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+              Telegram
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: tgEnabled ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+                {tgEnabled ? '已开启' : '已关闭'}
+              </span>
+              <Toggle enabled={tgEnabled} onChange={() => handleToggle('telegram_enabled', tgEnabled)} disabled={isPending || !cfg} />
+            </div>
+          </div>
+          <div style={{ height: 1, background: 'var(--border-subtle)', marginBottom: 12 }} />
+
+          {/* 字段展示 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 90 }}>Bot Token</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.telegram_bot_token_preview ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                  {cfg?.telegram_bot_token_preview || '(未填写)'}
+                </span>
+                <button
+                  onClick={() => setShowTgModal(true)}
+                  style={{
+                    padding: '2px 8px', fontSize: 12, fontFamily: 'var(--font-mono)',
+                    background: 'transparent', border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  修改
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 90 }}>Chat ID</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.telegram_chat_id ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.telegram_chat_id || '(未填写)'}
+              </span>
+            </div>
+          </div>
+
+          {/* 测试按钮 + 状态 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Button
+              variant="secondary"
+              onClick={() => handleTest('telegram')}
+              disabled={!tgEnabled || !cfg?.telegram_bot_token_preview}
+              style={{ fontSize: 13 }}
+            >
+              发送测试消息
+            </Button>
+            {tgTestStatus && (
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 13,
+                color: tgTestStatus.ok ? 'var(--accent-emerald)' : 'var(--accent-blood)',
+              }}>
+                {tgTestStatus.msg}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* ── 邮件 SMTP 区块 ── */}
+        <div style={{
+          padding: 16,
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-default)',
+          background: 'var(--bg-card)',
+        }}>
+          {/* 标题行 + 开关 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Mail size={14} />
+              邮件 (SMTP)
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: emailEnabled ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+                {emailEnabled ? '已开启' : '已关闭'}
+              </span>
+              <Toggle enabled={emailEnabled} onChange={() => handleToggle('email_enabled', emailEnabled)} disabled={isPending || !cfg} />
+            </div>
+          </div>
+          <div style={{ height: 1, background: 'var(--border-subtle)', marginBottom: 12 }} />
+
+          {/* 字段展示 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>SMTP 主机</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_host ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.smtp_host || '(未填写)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>SMTP 端口</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_port ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.smtp_port || '(未填写)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>发件账号</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_user ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.smtp_user || '(未填写)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>密码</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_password_set ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                  {cfg?.smtp_password_set ? '●●●●● (已设置)' : '(未设置)'}
+                </span>
+                <button
+                  onClick={() => setShowEmailModal(true)}
+                  style={{
+                    padding: '2px 8px', fontSize: 12, fontFamily: 'var(--font-mono)',
+                    background: 'transparent', border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  修改
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>发件人邮箱</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_from_email ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.smtp_from_email || '(同发件账号)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>收件人邮箱</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: cfg?.smtp_to_email ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {cfg?.smtp_to_email || '(未填写)'}
+              </span>
+            </div>
+          </div>
+
+          {/* 测试按钮 + 状态 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Button
+              variant="secondary"
+              onClick={() => handleTest('email')}
+              disabled={!emailEnabled || !cfg?.smtp_host}
+              style={{ fontSize: 13 }}
+            >
+              发送测试邮件
+            </Button>
+            {emailTestStatus && (
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 13,
+                color: emailTestStatus.ok ? 'var(--accent-emerald)' : 'var(--accent-blood)',
+              }}>
+                {emailTestStatus.msg}
+              </span>
+            )}
+          </div>
+        </div>
+
+      </div>
+
+      {/* Telegram 修改 Modal */}
+      {showTgModal && (
+        <TelegramConfigModal
+          current={cfg}
+          onClose={() => setShowTgModal(false)}
+          onSave={(patch) => {
+            mutation.mutate(patch, { onSuccess: () => setShowTgModal(false) })
+          }}
+          isPending={isPending}
+          error={mutation.error ? String(mutation.error) : null}
+        />
+      )}
+
+      {/* 邮件修改 Modal */}
+      {showEmailModal && (
+        <EmailConfigModal
+          current={cfg}
+          onClose={() => setShowEmailModal(false)}
+          onSave={(patch) => {
+            mutation.mutate(patch, { onSuccess: () => setShowEmailModal(false) })
+          }}
+          isPending={isPending}
+          error={mutation.error ? String(mutation.error) : null}
+        />
+      )}
+    </CardElevated>
+  )
+}
+
+
+function TelegramConfigModal({
+  current, onClose, onSave, isPending, error,
+}: {
+  current: NotificationConfig | undefined
+  onClose: () => void
+  onSave: (patch: NotificationConfigPatch) => void
+  isPending: boolean
+  error: string | null
+}) {
+  const [botToken, setBotToken] = useState('')
+  const [chatId, setChatId] = useState(current?.telegram_chat_id ?? '')
+
+  const canSubmit = botToken.trim() || chatId.trim()
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 480, maxWidth: '90vw',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-md)',
+          padding: 24,
+          display: 'flex', flexDirection: 'column', gap: 16,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 20, color: 'var(--text-primary)' }}>
+            Telegram 配置
+          </h3>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <Field
+          label="Bot Token"
+          value={botToken}
+          onChange={setBotToken}
+          placeholder="从 @BotFather 获取的 token（留空则不修改）"
+          type="password"
+        />
+        <Field
+          label="Chat ID"
+          value={chatId}
+          onChange={setChatId}
+          placeholder="-1001234567890"
+        />
+
+        {error && (
+          <div style={{ padding: 8, background: 'rgba(227,64,88,0.10)', color: 'var(--accent-blood)', fontSize: 13, borderRadius: 'var(--radius-sm)' }}>
+            ❌ {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <Button
+            variant="primary"
+            disabled={!canSubmit || isPending}
+            onClick={() => onSave({
+              ...(botToken.trim() ? { telegram_bot_token: botToken.trim() } : {}),
+              ...(chatId.trim() ? { telegram_chat_id: chatId.trim() } : {}),
+            })}
+            style={{ flex: 1 }}
+          >
+            {isPending ? '保存中…' : '保存'}
+          </Button>
+          <Button variant="secondary" onClick={onClose} style={{ flex: 1 }}>
+            取消
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+function EmailConfigModal({
+  current, onClose, onSave, isPending, error,
+}: {
+  current: NotificationConfig | undefined
+  onClose: () => void
+  onSave: (patch: NotificationConfigPatch) => void
+  isPending: boolean
+  error: string | null
+}) {
+  const [smtpHost, setSmtpHost] = useState(current?.smtp_host ?? '')
+  const [smtpPort, setSmtpPort] = useState(String(current?.smtp_port ?? '587'))
+  const [smtpUser, setSmtpUser] = useState(current?.smtp_user ?? '')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpFromEmail, setSmtpFromEmail] = useState(current?.smtp_from_email ?? '')
+  const [smtpToEmail, setSmtpToEmail] = useState(current?.smtp_to_email ?? '')
+
+  const canSubmit = smtpHost.trim() && smtpUser.trim() && smtpToEmail.trim()
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 520, maxWidth: '90vw',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-md)',
+          padding: 24,
+          display: 'flex', flexDirection: 'column', gap: 16,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 20, color: 'var(--text-primary)' }}>
+            邮件 (SMTP) 配置
+          </h3>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <Field label="SMTP 主机" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.gmail.com" />
+        <Field label="SMTP 端口" value={smtpPort} onChange={setSmtpPort} placeholder="587" type="text" />
+        <Field label="发件账号" value={smtpUser} onChange={setSmtpUser} placeholder="your@gmail.com" />
+        <Field label="密码" value={smtpPassword} onChange={setSmtpPassword} placeholder="留空则不修改" type="password" />
+        <Field label="发件人邮箱（可选，空=同发件账号）" value={smtpFromEmail} onChange={setSmtpFromEmail} placeholder="your@gmail.com" />
+        <Field label="收件人邮箱" value={smtpToEmail} onChange={setSmtpToEmail} placeholder="alerts@you.com" />
+
+        {error && (
+          <div style={{ padding: 8, background: 'rgba(227,64,88,0.10)', color: 'var(--accent-blood)', fontSize: 13, borderRadius: 'var(--radius-sm)' }}>
+            ❌ {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <Button
+            variant="primary"
+            disabled={!canSubmit || isPending}
+            onClick={() => {
+              const portNum = parseInt(smtpPort, 10)
+              onSave({
+                smtp_host: smtpHost.trim(),
+                smtp_port: isNaN(portNum) ? 587 : portNum,
+                smtp_user: smtpUser.trim(),
+                ...(smtpPassword.trim() ? { smtp_password: smtpPassword.trim() } : {}),
+                ...(smtpFromEmail.trim() ? { smtp_from_email: smtpFromEmail.trim() } : {}),
+                smtp_to_email: smtpToEmail.trim(),
+              })
+            }}
             style={{ flex: 1 }}
           >
             {isPending ? '保存中…' : '保存'}

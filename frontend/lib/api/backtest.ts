@@ -112,6 +112,7 @@ export interface PerpBasisBacktestRequest {
   days: number
   initial_capital_usd?: number
   notional_per_position?: number
+  leverage?: number
   max_concurrent?: number
   min_diff_apr_pct?: number
   max_hold_hours?: number
@@ -158,6 +159,7 @@ export interface PerpBasisSweepRequest {
   min_diff_apr_pct_list: number[]
   min_hold_hours?: number
   notional_per_position?: number
+  leverage?: number
 }
 
 export interface PerpBasisSweepRow {
@@ -168,6 +170,7 @@ export interface PerpBasisSweepRow {
   total_fees_usd: string
   total_pnl_usd: string
   total_pnl_pct: string
+  roi_on_margin_pct: string
 }
 
 export interface PerpBasisSweepResponse {

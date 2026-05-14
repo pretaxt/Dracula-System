@@ -203,11 +203,11 @@ export default function PositionsPage() {
 
       {/* 最近订单 */}
       <CardElevated style={{ padding: 20 }}>
-        <SectionHeader title={t('最近订单')} subtitle="RECENT ORDERS · LAST 20" />
+        <SectionHeader title={t('最近订单')} subtitle="最近 20 条开平仓记录" />
         <table className="data-table" style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'var(--font-mono)', fontSize: 14 }}>
           <thead>
             <tr>
-              {[t('时间'), t('交易所'), t('币对'), t('类型'), t('方向'), t('数量'), t('成交均价'), t('状态')].map((h, i) => (
+              {[t('时间'), t('交易所'), t('币对'), t('类型'), t('方向'), t('数量'), t('盈亏'), t('状态'), t('平仓原因')].map((h, i) => (
                 <th key={i} style={{
                   textAlign: i >= 5 && i <= 6 ? 'right' : 'left',
                   padding: '8px 12px',
@@ -242,14 +242,25 @@ export default function PositionsPage() {
                   }}>
                     {t(o.side)}
                   </td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>${o.amount}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>{o.price}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-primary)' }}>${parseFloat(o.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td style={{
+                    padding: '10px 12px', textAlign: 'right',
+                    color: o.pnl === '—' ? 'var(--text-tertiary)'
+                      : o.pnl.startsWith('+') ? 'var(--accent-emerald)'
+                      : 'var(--accent-blood)',
+                    fontWeight: o.pnl !== '—' ? 600 : 400,
+                  }}>
+                    {o.pnl !== '—' ? `$${o.pnl}` : '—'}
+                  </td>
                   <td style={{ padding: '10px 12px' }}><Badge tone="active">{o.status.toUpperCase()}</Badge></td>
+                  <td style={{ padding: '10px 12px', color: o.exit_reason === '—' ? 'var(--text-tertiary)' : 'var(--accent-amber, #f59e0b)', fontSize: 12 }}>
+                    {o.exit_reason}
+                  </td>
                 </tr>
               )
             })}
             {(ordersData?.data ?? []).length === 0 && (
-              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>暂无订单</td></tr>
+              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>暂无订单</td></tr>
             )}
           </tbody>
         </table>

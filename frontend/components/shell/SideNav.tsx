@@ -97,12 +97,12 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
               style={{
                 margin: '4px 0 0',
                 fontFamily: 'var(--font-mono)',
-                fontSize: 8,
-                letterSpacing: '0.35em',
+                fontSize: 14,
+                letterSpacing: '0.20em',
                 color: 'var(--accent-blood)',
               }}
             >
-              {t('ARBITRAGE SYSTEM')}
+              套利系统
             </p>
           </div>
         </div>
@@ -134,7 +134,14 @@ export default function SideNav({ isMobileOpen = false, onClose }: SideNavProps 
           </span>
           <StatusDot tone="active" />
         </div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, color: 'var(--text-primary)' }}>{t('运行中')}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {t('运行中')}
+          <span className="blood-dots">
+            <span className="blood-dot blood-dot-1" />
+            <span className="blood-dot blood-dot-2" />
+            <span className="blood-dot blood-dot-3" />
+          </span>
+        </div>
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 4, color: 'var(--text-tertiary)' }}>
           ↑ {formatUptime(health?.uptime_seconds ?? 0)}
         </div>

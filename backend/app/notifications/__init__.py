@@ -79,3 +79,12 @@ def notify_reconcile_alert(
     except Exception:
         # 通知失败不影响主对账循环
         pass
+
+
+def notify_funding_settled_batch(items: list[dict]) -> None:
+    """资金费结算批量通知 — 仅 Telegram（高频事件，跳过邮件以免淹没邮箱）。
+
+    items: 每条 {"symbol": str, "net": Decimal, "cumulative": Decimal}
+    """
+    _tg.notify_funding_settled_batch(items)
+

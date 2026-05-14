@@ -85,16 +85,17 @@ class PerpBasisBacktestConfig:
     """#02 perp_basis 回测参数。"""
 
     initial_capital_usd: Decimal = Decimal("1000")
-    notional_per_position: Decimal = Decimal("50")
+    notional_per_position: Decimal = Decimal("100")
     max_concurrent: int = 3
+    leverage: Decimal = Decimal("10")            # 每边合约杠杆倍数
 
-    # 入场门槛（diff_apr_pct，例如 30 = 30% APR 差）
-    min_diff_apr_pct: Decimal = Decimal("30.0")
+    # 入场门槛（diff_apr_pct，例如 50 = 50% APR 差）
+    min_diff_apr_pct: Decimal = Decimal("50.0")
 
     # 退出
-    max_hold_hours: Decimal = Decimal("48.0")    # 最长持仓
-    exit_diff_apr_pct: Decimal = Decimal("5.0")  # diff 衰减到 ≤ 此值就平
-    min_hold_hours: Decimal = Decimal("4.0")     # 最少持仓（防 funding 周期切换噪音）
+    max_hold_hours: Decimal = Decimal("240.0")   # 最长持仓
+    exit_diff_apr_pct: Decimal = Decimal("2.0")  # diff 衰减到 ≤ 此值就平
+    min_hold_hours: Decimal = Decimal("6.0")     # 最少持仓（防 funding 周期切换噪音）
 
     # 风控（绝对值过滤极端 funding，常见数据脏点）
     max_abs_apr_pct: Decimal = Decimal("500.0")  # 单腿 APR 绝对值 > 此 → 过滤（防 TIA HTX -99% 异常）
@@ -103,6 +104,7 @@ class PerpBasisBacktestConfig:
     # 执行成本（单边）
     fee_rate: Decimal = Decimal("0.0004")        # taker
     slippage_pct: Decimal = Decimal("0.05")      # perp 单边滑点 0.05%
+
 
 
 # ---------------------------------------------------------------------------
@@ -188,3 +190,24 @@ class PerpBasisBacktestResult:
         if self.config.initial_capital_usd <= 0:
             return _ZERO
         return self.total_pnl_usd / self.config.initial_capital_usd * _HUNDRED
+
+    @property
+    def margin_deployed_usd(self) -> Decimal:
+        """实际占用保证金上限 = notional / leverage × 2边 × 并发数 × 1.1缓冲。"""
+        if self.config.leverage <= 0:
+            return _ZERO
+        return (
+            self.config.notional_per_position
+            / self.config.leverage
+            * Decimal("2")
+            * Decimal(str(self.config.max_concurrent))
+            * Decimal("1.10")
+        )
+
+    @property
+    def roi_on_margin_pct(self) -> Decimal:
+        """基于实际保证金的 ROI（更能反映杠杆资金效率）。"""
+        margin = self.margin_deployed_usd
+        if margin <= 0:
+            return _ZERO
+        return self.total_pnl_usd / margin * _HUNDRED

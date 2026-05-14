@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from decimal import Decimal
 from typing import Any
 
@@ -29,14 +30,14 @@ logger = get_logger(__name__)
 # 硬红线阈值（与「锁定红线·账户级」UI 显示对齐）
 # ---------------------------------------------------------------------------
 
-DAILY_DD_HALT_PCT = Decimal("-3.0")      # 单日 PnL ≤ -3% 即熔断
-WEEKLY_DD_HALT_PCT = Decimal("-8.0")     # 周 PnL ≤ -8% 即熔断
-MIN_MARGIN_USAGE_PCT = Decimal("50.0")   # DB 口径 margin_used / equity ≥ 50% 即熔断
-MAX_EXCHANGE_CONCENTRATION_PCT = Decimal("50.0")
-MAX_SYMBOL_CONCENTRATION_PCT = Decimal("45.0")  # 调整自 35%: $200 notional / ~$547 equity = 36.55%，原阈值每笔必触发
+DAILY_DD_HALT_PCT = Decimal(os.getenv("DRACULA_DAILY_DD_HALT_PCT", "-3.0"))  # 单日 PnL ≤ N% 即熔断（env 可调，重启生效）
+WEEKLY_DD_HALT_PCT = Decimal(os.getenv("DRACULA_WEEKLY_DD_HALT_PCT", "-8.0"))  # 周 PnL ≤ N% 即熔断
+MIN_MARGIN_USAGE_PCT = Decimal(os.getenv("DRACULA_MIN_MARGIN_USAGE_PCT", "50.0"))  # margin_used/equity ≥ N% 即熔断
+MAX_EXCHANGE_CONCENTRATION_PCT = Decimal(os.getenv("DRACULA_MAX_EXCHANGE_CONCENTRATION_PCT", "50.0"))
+MAX_SYMBOL_CONCENTRATION_PCT = Decimal(os.getenv("DRACULA_MAX_SYMBOL_CONCENTRATION_PCT", "45.0"))  # 历史调整自 35%
 # B3-3 binance USDM 真实保证金率（来自交易所 fetch_balance）
 # MMR ≥ 80% 距强平线 100% 仅 20%，1-2% 滑点即可穿透 — 立即熔断
-MAX_BINANCE_MMR_PCT = Decimal("80.0")
+MAX_BINANCE_MMR_PCT = Decimal(os.getenv("DRACULA_MAX_BINANCE_MMR_PCT", "80.0"))
 
 
 @dataclass(frozen=True)

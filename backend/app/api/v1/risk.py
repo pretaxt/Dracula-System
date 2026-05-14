@@ -143,3 +143,33 @@ async def list_events(
     raw = await get_recent_risk_events(db, days=days, daily_dd_pct=daily_dd)
     events = [RiskEventOut(**e) for e in raw]
     return RiskEventsResponse(data=events, total=len(events), days=days)
+
+
+# ---------------------------------------------------------------------------
+# Tier 3 账户级硬性熔断阈值（env var 驱动）— 暴露给前端 UI 动态展示
+# ---------------------------------------------------------------------------
+
+@router.get("/thresholds")
+async def get_thresholds() -> dict:
+    """返回 6 个账户级 circuit_breaker 阈值（从 env var 加载）。
+
+    前端用于显示 Tier 3 "锁定红线" 卡片的红线值。
+    修改方式：编辑 /opt/dracula/.env + docker compose restart api 即生效。
+    """
+    from app.services.risk_circuit_breaker import (  # noqa: PLC0415
+        DAILY_DD_HALT_PCT,
+        WEEKLY_DD_HALT_PCT,
+        MIN_MARGIN_USAGE_PCT,
+        MAX_EXCHANGE_CONCENTRATION_PCT,
+        MAX_SYMBOL_CONCENTRATION_PCT,
+        MAX_BINANCE_MMR_PCT,
+    )
+    return {
+        "daily_dd_halt_pct": str(DAILY_DD_HALT_PCT),
+        "weekly_dd_halt_pct": str(WEEKLY_DD_HALT_PCT),
+        "min_margin_usage_pct": str(MIN_MARGIN_USAGE_PCT),
+        "max_exchange_concentration_pct": str(MAX_EXCHANGE_CONCENTRATION_PCT),
+        "max_symbol_concentration_pct": str(MAX_SYMBOL_CONCENTRATION_PCT),
+        "max_binance_mmr_pct": str(MAX_BINANCE_MMR_PCT),
+    }
+

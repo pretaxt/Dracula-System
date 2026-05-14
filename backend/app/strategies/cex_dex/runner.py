@@ -56,7 +56,6 @@ class CexDexRunner:
     async def run_forever(self) -> None:
         self._running = True
         logger.info("cex_dex_runner_started", mode=self._cfg.execution_mode)
-        notify_system(f"CEX-DEX runner 启动 — 模式: {self._cfg.execution_mode}")
 
         eth_refresh = 0
         while self._running:
@@ -131,6 +130,51 @@ class CexDexRunner:
             return
 
         opp = fresh  # 使用刷新后的数据
+
+        # 反查 pair config（用其中的 dex_base_token / dex_quote_token，而不是硬编码 USDT）
+        pair_cfg = next((p for p in self._cfg.pairs if p.cex_symbol == opp.pair), None)
+        if pair_cfg is None:
+            logger.warning("cex_dex_pair_config_not_found", pair=opp.pair)
+            return
+        base_tok_key = pair_cfg.dex_base_token   # e.g. "WETH"
+        quote_tok_key = pair_cfg.dex_quote_token  # e.g. "USDC"
+
+        # 钱包余额预检（防 token 不足导致单腿暴露）
+        try:
+            if opp.direction == "cex_cheap":
+                # DEX 这一腿卖 base→quote，钱包需要 base token (WETH)
+                bal = await self._dex_exec.balance_of(base_tok_key)
+                # base token 需要换算 USD：trade_usd / cex_price = 所需 base 数量
+                need_base = opp.trade_usd / opp.cex_price if opp.cex_price > 0 else Decimal("0")
+                if bal < need_base:
+                    logger.warning(
+                        "cex_dex_wallet_insufficient",
+                        direction="cex_cheap", token=base_tok_key,
+                        need=float(need_base), have=float(bal),
+                    )
+                    notify_system(
+                        f"⚠️ CEX-DEX 跳过 {opp.pair} cex_cheap — 钱包 {base_tok_key} "
+                        f"不足 (need {need_base:.6f}, have {bal:.6f})"
+                    )
+                    return
+            else:  # dex_cheap
+                # DEX 这一腿买 quote→base，钱包需要 quote token (USDC/USDT)
+                bal = await self._dex_exec.balance_of(quote_tok_key)
+                if bal < opp.trade_usd:
+                    logger.warning(
+                        "cex_dex_wallet_insufficient",
+                        direction="dex_cheap", token=quote_tok_key,
+                        need=float(opp.trade_usd), have=float(bal),
+                    )
+                    notify_system(
+                        f"⚠️ CEX-DEX 跳过 {opp.pair} dex_cheap — 钱包 {quote_tok_key} "
+                        f"不足 (need ${opp.trade_usd:.2f}, have ${bal:.2f})"
+                    )
+                    return
+        except Exception:
+            logger.exception("cex_dex_balance_precheck_failed", pair=opp.pair)
+            return
+
         self._open_trades += 1
 
         try:
@@ -138,7 +182,7 @@ class CexDexRunner:
                 # 买 CEX + 卖 DEX（base→quote）
                 cex_task = self._cex_exec.market_buy(opp.pair, opp.trade_usd, opp.cex_price)
                 dex_task = self._dex_exec.swap(
-                    token_in_key="WETH", token_out_key="USDT",
+                    token_in_key=base_tok_key, token_out_key=quote_tok_key,
                     amount_in_usd=opp.trade_usd, expected_out_usd=opp.dex_price * opp.trade_usd / opp.cex_price,
                     pool_fee=opp.pool_fee, eth_usd_price=self._eth_usd,
                 )
@@ -146,7 +190,7 @@ class CexDexRunner:
                 # 买 DEX（quote→base）+ 卖 CEX
                 cex_task = self._cex_exec.market_sell(opp.pair, opp.trade_usd, opp.cex_price)
                 dex_task = self._dex_exec.swap(
-                    token_in_key="USDT", token_out_key="WETH",
+                    token_in_key=quote_tok_key, token_out_key=base_tok_key,
                     amount_in_usd=opp.trade_usd, expected_out_usd=opp.trade_usd / opp.dex_price,
                     pool_fee=opp.pool_fee, eth_usd_price=self._eth_usd,
                 )

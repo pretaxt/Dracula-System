@@ -17,18 +17,30 @@ logger = get_logger(__name__)
 
 
 def _send_sync(subject: str, body: str) -> None:
+    from app.services.notification_credentials import get_notification_config  # noqa: PLC0415
+    cfg = get_notification_config()
+    # enabled 开关：state file 禁用 → 跳过
+    if not cfg.get("email_enabled", False):
+        return
+    # state file 凭据优先，回退到 env
     settings = get_settings()
-    if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
+    smtp_host     = cfg.get("smtp_host")      or settings.smtp_host
+    smtp_port     = cfg.get("smtp_port")      or settings.smtp_port
+    smtp_user     = cfg.get("smtp_user")      or settings.smtp_user
+    smtp_password = cfg.get("smtp_password")  or settings.smtp_password
+    smtp_from     = cfg.get("smtp_from_email") or settings.smtp_from_email or smtp_user
+    smtp_to       = cfg.get("smtp_to_email")   or settings.smtp_to_email   or smtp_user
+    if not smtp_host or not smtp_user or not smtp_password:
         return
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = f"[Dracula] {subject}"
-    msg["From"] = settings.smtp_from_email or settings.smtp_user
-    msg["To"] = settings.smtp_to_email or settings.smtp_user
+    msg["From"] = smtp_from
+    msg["To"] = smtp_to
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
             server.starttls()
-            server.login(settings.smtp_user, settings.smtp_password)
-            server.sendmail(msg["From"], [msg["To"]], msg.as_string())
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_from, [smtp_to], msg.as_string())
     except Exception:
         logger.warning("email_send_error", exc_info=True)
 

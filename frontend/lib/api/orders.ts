@@ -7,9 +7,10 @@ export type Order = {
   order_type: string
   side: string
   amount: string
-  price: string
+  pnl: string        // 平仓: "+0.1234" / "-0.0056"；开仓: "—"
   status: string
   position_uuid: string
+  exit_reason: string  // 平仓原因中文标签；开仓: "—"
 }
 
 export type OrdersResponse = {

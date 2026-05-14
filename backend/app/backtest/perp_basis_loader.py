@@ -94,7 +94,9 @@ async def load_funding_history(
                     continue
                 rate = _to_dec(r.get("fundingRate"))
                 # 价格：尝试从 raw 取 mark / markPrice，否则 0
-                price = _to_dec(r.get("markPrice")) or _to_dec(r.get("mark")) or _to_dec(r.get("indexPrice"))
+                info = r.get("info") or {}
+                price = (_to_dec(r.get("markPrice")) or _to_dec(r.get("mark")) or _to_dec(r.get("indexPrice"))
+                        or _to_dec(info.get("markPrice")) or _to_dec(info.get("indexPrice")) or _to_dec(info.get("p")))
                 snaps.append(PerpFundingSnapshot(
                     timestamp=datetime.fromtimestamp(ts / 1000, tz=timezone.utc),
                     symbol=sym_str,

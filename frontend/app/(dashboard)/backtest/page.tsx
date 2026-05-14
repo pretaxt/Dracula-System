@@ -14,6 +14,7 @@ import {
   type PerpBasisBacktestResult,
   type PerpBasisSweepResponse,
 } from '@/lib/api/backtest'
+import { getPerpBasisConfig } from '@/lib/api/strategies'
 import { getSymbols } from '@/lib/api/system'
 
 const FALLBACK_SYMBOLS = ['HIGH', 'CHIP', 'API3', 'ENSO', 'COMP']
@@ -341,12 +342,12 @@ export default function BacktestPage() {
               min={100} step={100} style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>{t('最低 APR %')}</label>
+            <label style={labelStyle}>入场 APR (%)</label>
             <input type="number" value={minApr} onChange={e => setMinApr(Number(e.target.value))}
               min={0.1} step={0.5} style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>{t('最大持仓数')}</label>
+            <label style={labelStyle}>同时持仓上限</label>
             <input type="number" value={maxPos} onChange={e => setMaxPos(Number(e.target.value))}
               min={1} max={20} step={1} style={inputStyle} />
           </div>
@@ -356,7 +357,7 @@ export default function BacktestPage() {
               min={0.5} step={0.5} style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>{t('最长持仓 h')}</label>
+            <label style={labelStyle}>最长持仓 (H)</label>
             <input type="number" value={maxHold} onChange={e => setMaxHold(Number(e.target.value))}
               min={8} step={8} style={inputStyle} />
           </div>
@@ -614,7 +615,7 @@ function SpotPerpBacktestSection() {
 
   return (
     <CardElevated style={{ padding: 20 }}>
-      <SectionHeader title={t('#04 期现套利回测')} subtitle="SPOT-PERP BASIS · CCXT 1m kline → engine → metrics" />
+      <SectionHeader title={t('#04 期现套利回测')} subtitle="现货-永续基差 · CCXT 1m K线 → 引擎 → 绩效指标" />
 
       {/* 标的选择（多选） */}
       <div style={{ marginTop: 16 }}>
@@ -657,7 +658,7 @@ function SpotPerpBacktestSection() {
         <div><label style={labelStyle}>{t('起始资金 $')}</label>
           <input type="number" value={capital} onChange={e => setCapital(Number(e.target.value))} step={100} style={inputStyle} />
         </div>
-        <div><label style={labelStyle}>{t('单笔 notional $')}</label>
+        <div><label style={labelStyle}>单笔名义 (USD)</label>
           <input type="number" value={notional} onChange={e => setNotional(Number(e.target.value))} step={10} style={inputStyle} />
         </div>
         <div><label style={labelStyle}>{t('同时持仓上限')}</label>
@@ -666,19 +667,19 @@ function SpotPerpBacktestSection() {
         <div><label style={labelStyle}>{t('入场基差 %')}</label>
           <input type="number" value={entryPct} onChange={e => setEntryPct(Number(e.target.value))} step={0.05} style={inputStyle} />
         </div>
-        <div><label style={labelStyle}>premium 阈值 %</label>
+        <div><label style={labelStyle}>溢价阈值 (%)</label>
           <input type="number" value={entryPrem} onChange={e => setEntryPrem(Number(e.target.value))} step={0.05} style={inputStyle} />
         </div>
-        <div><label style={labelStyle}>discount 阈值 %</label>
+        <div><label style={labelStyle}>折价阈值 (%)</label>
           <input type="number" value={entryDisc} onChange={e => setEntryDisc(Number(e.target.value))} step={0.05} style={inputStyle} />
         </div>
         <div><label style={labelStyle}>{t('收敛平仓 %')}</label>
           <input type="number" value={exitPct} onChange={e => setExitPct(Number(e.target.value))} step={0.05} style={inputStyle} />
         </div>
-        <div><label style={labelStyle}>最大持仓 h</label>
+        <div><label style={labelStyle}>最长持仓 (H)</label>
           <input type="number" value={maxHold} onChange={e => setMaxHold(Number(e.target.value))} step={1} style={inputStyle} />
         </div>
-        <div><label style={labelStyle}>min hold min</label>
+        <div><label style={labelStyle}>最少持仓 (min)</label>
           <input type="number" value={minHoldMin} onChange={e => setMinHoldMin(Number(e.target.value))} step={1} style={inputStyle} />
         </div>
         <div><label style={labelStyle}>基差扩大止损 %</label>
@@ -692,9 +693,9 @@ function SpotPerpBacktestSection() {
         </div>
         <div><label style={labelStyle}>方向</label>
           <select value={direction} onChange={e => setDirection(e.target.value as 'premium' | 'discount' | 'both')} style={inputStyle}>
-            <option value="both">both</option>
-            <option value="premium">premium</option>
-            <option value="discount">discount</option>
+            <option value="both">双向</option>
+            <option value="premium">溢价</option>
+            <option value="discount">折价</option>
           </select>
         </div>
         <div><label style={labelStyle}>滑点 %</label>
@@ -778,16 +779,46 @@ function SpotPerpBacktestSection() {
 // ---------------------------------------------------------------------------
 
 
+// PB candidate_symbols 现在完全由 /api/v1/strategies/perp-basis/config 驱动（liveConfig.candidate_symbols）
+// 不再硬编码 group 名单 — 前端只显示当前 yaml + runtime_overrides 合并后的候选
+
+
 function PerpBasisBacktestSection() {
   const { t } = useT()
-  const [symbolsCsv, setSymbolsCsv] = useState('BTC/USDT,ETH/USDT,FIL/USDT,SOL/USDT,TIA/USDT')
+
+  // 代币多选状态（默认选中全部）
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set())
+
   const [days, setDays] = useState(14)
   const [minDiff, setMinDiff] = useState(50)
-  const [notional, setNotional] = useState(50)
+  const [notional, setNotional] = useState(100)
+  const [leverage, setLeverage] = useState(10)
   const [maxConcurrent, setMaxConcurrent] = useState(3)
-  const [maxHold, setMaxHold] = useState(48)
-  const [minHold, setMinHold] = useState(4)
-  const [exitDiff, setExitDiff] = useState(5)
+  const [maxHold, setMaxHold] = useState(240)
+  const [minHold, setMinHold] = useState(6)
+  const [exitDiff, setExitDiff] = useState(2)
+
+  // 读取生产配置，用于标注回测参数中哪个是"当前实盘值"
+  const { data: liveConfig } = useQuery({
+    queryKey: ['perp-basis-cfg-backtest'],
+    queryFn: getPerpBasisConfig,
+    staleTime: 60_000,
+  })
+  const liveMinDiff = liveConfig ? parseFloat(liveConfig.min_diff_apr_pct) : null
+
+  // 仅显示当前生产配置 candidate_symbols 内的币种（runtime_overrides + yaml 合并）
+  const PB_ACTIVE_SYMBOLS = useMemo<string[]>(() => {
+    const raw = liveConfig?.candidate_symbols ?? []
+    return raw.map(s => (s.includes('/') ? s : `${s}/USDT`))
+  }, [liveConfig?.candidate_symbols])
+
+  // liveConfig 加载完成后，默认全选（仅在 selectedSymbols 为空且 active 列表非空时初始化）
+  useEffect(() => {
+    if (PB_ACTIVE_SYMBOLS.length > 0 && selectedSymbols.size === 0) {
+      setSelectedSymbols(new Set(PB_ACTIVE_SYMBOLS))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [PB_ACTIVE_SYMBOLS.length])
 
   const [result, setResult] = useState<PerpBasisBacktestResult | null>(null)
   const [sweep, setSweep] = useState<PerpBasisSweepResponse | null>(null)
@@ -805,10 +836,24 @@ function PerpBasisBacktestSection() {
     display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em',
   }
 
-  const symbols = useMemo(
-    () => symbolsCsv.split(',').map(s => s.trim()).filter(Boolean),
-    [symbolsCsv],
-  )
+  const symbols = useMemo(() => Array.from(selectedSymbols), [selectedSymbols])
+
+  function toggleSymbol(sym: string) {
+    setSelectedSymbols(prev => {
+      const next = new Set(prev)
+      if (next.has(sym)) { next.delete(sym) } else { next.add(sym) }
+      return next
+    })
+  }
+
+
+  // 重新加载生产配置 — 重置选中为当前 candidate_symbols 全部
+  function syncFromConfig() {
+    if (PB_ACTIVE_SYMBOLS.length === 0) return
+    setSelectedSymbols(new Set(PB_ACTIVE_SYMBOLS))
+  }
+
+  const configSymCount = liveConfig?.candidate_symbols?.length ?? null
 
   async function handleRun() {
     setLoading(true); setError(null); setResult(null)
@@ -817,6 +862,7 @@ function PerpBasisBacktestSection() {
         symbols, days,
         min_diff_apr_pct: minDiff,
         notional_per_position: notional,
+        leverage,
         max_concurrent: maxConcurrent,
         max_hold_hours: maxHold,
         min_hold_hours: minHold,
@@ -837,6 +883,7 @@ function PerpBasisBacktestSection() {
         symbols, days,
         min_diff_apr_pct_list: [15, 30, 50, 75, 100, 150],
         notional_per_position: notional,
+        leverage,
         min_hold_hours: minHold,
       })
       setSweep(res)
@@ -851,20 +898,95 @@ function PerpBasisBacktestSection() {
     <CardElevated style={{ padding: 20 }}>
       <SectionHeader
         title={t('#02 跨所基差套利回测')}
-        subtitle="PERP-BASIS · CCXT funding history → engine + multi-threshold sweep"
+        subtitle="跨所永续基差 · 资金费率历史 → 引擎 → 多阈值扫描"
       />
+
+      {/* ── 代币选择器 ── */}
+      <div style={{
+        marginTop: 16, padding: 16,
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+      }}>
+        {/* 头部：全选 / 全清 + 选中计数 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            交易对选择
+          </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-emerald)', marginLeft: 4 }}>
+            {symbols.length} / {PB_ACTIVE_SYMBOLS.length}
+          </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button
+              onClick={syncFromConfig}
+              disabled={!configSymCount}
+              title="同步为当前生产配置的 candidate_symbols 列表"
+              style={{
+                padding: '4px 12px',
+                background: configSymCount ? 'rgba(99,102,241,0.15)' : 'transparent',
+                color: configSymCount ? '#818cf8' : 'var(--text-muted)',
+                border: `1px solid ${configSymCount ? 'rgba(99,102,241,0.45)' : 'var(--border-default)'}`,
+                borderRadius: 4, fontFamily: 'var(--font-mono)',
+                fontSize: 12, cursor: configSymCount ? 'pointer' : 'not-allowed',
+                letterSpacing: '0.04em',
+              }}
+            >◆ 同步配置{configSymCount !== null ? ` (${configSymCount})` : ''}</button>
+            <button
+              onClick={() => setSelectedSymbols(new Set(PB_ACTIVE_SYMBOLS))}
+              style={{
+                padding: '4px 12px', background: 'var(--accent-blood)', color: '#fff',
+                border: 'none', borderRadius: 4, fontFamily: 'var(--font-mono)',
+                fontSize: 12, cursor: 'pointer', letterSpacing: '0.04em',
+              }}
+            >全选</button>
+            <button
+              onClick={() => setSelectedSymbols(new Set())}
+              style={{
+                padding: '4px 12px', background: 'transparent', color: 'var(--text-tertiary)',
+                border: '1px solid var(--border-default)', borderRadius: 4,
+                fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer',
+              }}
+            >全清</button>
+          </div>
+        </div>
+
+        {/* 平铺 token 标签（按字母序）— 只展示当前 candidate_symbols 内币种 */}
+        {PB_ACTIVE_SYMBOLS.length === 0 ? (
+          <div style={{ padding: '12px 0', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+            配置中无候选币种（candidate_symbols 为空）。请检查 perp_basis_main.yaml 或运行 HTX 筛选器后 apply。
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {[...PB_ACTIVE_SYMBOLS].sort().map(full => {
+              const sym = full.split('/')[0]
+              const active = selectedSymbols.has(full)
+              return (
+                <button
+                  key={full}
+                  onClick={() => toggleSymbol(full)}
+                  style={{
+                    padding: '3px 10px',
+                    background: active ? 'var(--accent-blood)' : 'var(--bg-deepest)',
+                    color: active ? '#fff' : 'var(--text-secondary)',
+                    border: `1px solid ${active ? 'var(--accent-blood)' : 'var(--border-default)'}`,
+                    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
+                    cursor: 'pointer', transition: 'all 140ms',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {sym}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-        gap: 12, marginTop: 16,
+        gap: 12, marginTop: 14,
       }}>
-        <div style={{ gridColumn: '1 / -1' }}>
-          <label style={labelStyle}>{t('交易对（逗号分隔）')}</label>
-          <input
-            value={symbolsCsv} onChange={e => setSymbolsCsv(e.target.value)}
-            style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
-          />
-        </div>
+        <div style={{ gridColumn: '1 / -1' }}>{/* 选择器已代替文本输入框 */}</div>
         <div>
           <label style={labelStyle}>{t('回测天数')}</label>
           <select value={days} onChange={e => setDays(Number(e.target.value))} style={inputStyle}>
@@ -872,32 +994,37 @@ function PerpBasisBacktestSection() {
           </select>
         </div>
         <div>
-          <label style={labelStyle}>min_diff_apr (%)</label>
+          <label style={labelStyle}>入场 APR (%)</label>
           <input type="number" value={minDiff} onChange={e => setMinDiff(Number(e.target.value))}
                  style={inputStyle} step="5" />
         </div>
         <div>
-          <label style={labelStyle}>{t('单笔名义')}</label>
+          <label style={labelStyle}>单笔名义 (USD)</label>
           <input type="number" value={notional} onChange={e => setNotional(Number(e.target.value))}
                  style={inputStyle} step="10" />
         </div>
         <div>
-          <label style={labelStyle}>max_concurrent</label>
+          <label style={labelStyle}>合约杠杆倍数</label>
+          <input type="number" value={leverage} onChange={e => setLeverage(Number(e.target.value))}
+                 style={inputStyle} step="1" min="1" max="125" />
+        </div>
+        <div>
+          <label style={labelStyle}>同时持仓上限</label>
           <input type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(Number(e.target.value))}
                  style={inputStyle} step="1" />
         </div>
         <div>
-          <label style={labelStyle}>max_hold (h)</label>
+          <label style={labelStyle}>最长持仓 (H)</label>
           <input type="number" value={maxHold} onChange={e => setMaxHold(Number(e.target.value))}
                  style={inputStyle} step="1" />
         </div>
         <div>
-          <label style={labelStyle}>min_hold (h)</label>
+          <label style={labelStyle}>最少持仓 (H)</label>
           <input type="number" value={minHold} onChange={e => setMinHold(Number(e.target.value))}
                  style={inputStyle} step="1" />
         </div>
         <div>
-          <label style={labelStyle}>exit_diff_apr (%)</label>
+          <label style={labelStyle}>退出 APR (%)</label>
           <input type="number" value={exitDiff} onChange={e => setExitDiff(Number(e.target.value))}
                  style={inputStyle} step="1" />
         </div>
@@ -941,28 +1068,42 @@ function PerpBasisBacktestSection() {
       {/* 单次回测结果 */}
       {result && (
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
-          <SectionHeader title={t('回测结果')} subtitle={`${result.summary.snapshots_loaded ?? '?'} snapshots · ${result.trades.length} trades`} />
+          <SectionHeader title={t('回测结果')} subtitle={`${result.summary.snapshots_loaded ?? '?'} 个快照 · ${result.trades.length} 笔交易`} />
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
             gap: 12, marginTop: 12,
           }}>
-            {Object.entries(result.summary).map(([k, v]) => (
-              <div key={k} style={{
-                padding: 12, background: 'var(--bg-deepest)',
-                border: '1px solid var(--border-subtle)', borderRadius: 4,
-              }}>
-                <div style={{
-                  fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
-                  textTransform: 'uppercase', letterSpacing: '0.06em',
-                }}>{k}</div>
-                <div style={{
-                  fontFamily: 'var(--font-mono)', fontSize: 16, marginTop: 4,
-                  color: 'var(--text-primary)',
+            {(() => {
+              const SUMMARY_LABELS: Record<string, string> = {
+                num_trades:          '交易数',
+                win_rate_pct:        '胜率 (%)',
+                total_pnl_usd:       '净盈亏 ($)',
+                total_pnl_pct:       '净盈亏 (%)',
+                roi_on_margin_pct:   '保证金 ROI (%)',
+                margin_deployed_usd: '保证金上限 ($)',
+                total_funding_usd:   '资金费收入 ($)',
+                total_fees_usd:      '手续费支出 ($)',
+                final_equity_usd:    '最终权益 ($)',
+                snapshots_loaded:    '快照数',
+              }
+              return Object.entries(result.summary).map(([k, v]) => (
+                <div key={k} style={{
+                  padding: 12, background: 'var(--bg-deepest)',
+                  border: '1px solid var(--border-subtle)', borderRadius: 4,
                 }}>
-                  {String(v)}
+                  <div style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-tertiary)',
+                    letterSpacing: '0.06em',
+                  }}>{SUMMARY_LABELS[k] ?? k}</div>
+                  <div style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 16, marginTop: 4,
+                    color: 'var(--text-primary)',
+                  }}>
+                    {String(v)}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            })()}
           </div>
 
           {result.trades.length > 0 && (
@@ -973,7 +1114,7 @@ function PerpBasisBacktestSection() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ background: 'var(--bg-deepest)', position: 'sticky', top: 0 }}>
                   <tr>
-                    {[t('symbol'), t('long→short'), t('开仓'), t('held'), t('入场 diff%'), t('funding'), t('fees'), t('PnL'), t('reason')].map(h => (
+                    {['币对', '做多→做空', '开仓时间', '持仓时长', '入场 APR%', '资金费', '手续费', '盈亏', '退出原因'].map(h => (
                       <th key={h} style={{
                         padding: '8px', textAlign: 'left', fontWeight: 500,
                         fontSize: 11, textTransform: 'uppercase',
@@ -1009,7 +1150,7 @@ function PerpBasisBacktestSection() {
                           {pnl >= 0 ? '+' : ''}{tr.realized_pnl}
                         </td>
                         <td style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-tertiary)' }}>
-                          {tr.exit_reason}
+                          {({'diff_decay':'差值衰减','diff_vanished':'差值消失','max_hold':'超时平仓','force_close_eob':'回测结束','manual':'手动平仓'} as Record<string,string>)[tr.exit_reason ?? ''] ?? tr.exit_reason}
                         </td>
                       </tr>
                     )
@@ -1026,13 +1167,13 @@ function PerpBasisBacktestSection() {
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
           <SectionHeader
             title={t('阈值 Sweep 对比')}
-            subtitle={`${sweep.snapshots_loaded} snapshots · 6 thresholds`}
+            subtitle={`${sweep.snapshots_loaded} 个快照 · 6 阈值对比`}
           />
           <div style={{ marginTop: 12, overflow: 'auto', border: '1px solid var(--border-subtle)', borderRadius: 4 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead style={{ background: 'var(--bg-deepest)' }}>
                 <tr>
-                  {['min_diff_apr (%)', 'trades', 'win%', 'funding $', 'fees $', 'PnL $', 'PnL %'].map(h => (
+                  {['入场 APR (%)', '交易数', '胜率', '资金费 $', '手续费 $', '净盈亏 $', '净盈亏 %', '保证金 ROI %'].map(h => (
                     <th key={h} style={{
                       padding: '10px 12px', textAlign: 'left', fontWeight: 500,
                       fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
@@ -1049,12 +1190,17 @@ function PerpBasisBacktestSection() {
                   // 找最优行（PnL 最大）
                   const maxPnl = Math.max(...sweep.rows.map(x => parseFloat(x.total_pnl_usd)))
                   const isBest = pnl === maxPnl && pnl > 0
+                  const isLive = liveMinDiff !== null && r.min_diff_apr_pct === liveMinDiff
                   return (
                     <tr key={r.min_diff_apr_pct} style={{
                       borderBottom: '1px solid var(--border-subtle)',
-                      background: isBest ? 'rgba(16,185,129,0.08)' : 'transparent',
+                      background: isLive
+                        ? 'rgba(99,102,241,0.12)'
+                        : isBest ? 'rgba(16,185,129,0.08)' : 'transparent',
+                      outline: isLive ? '1px solid rgba(99,102,241,0.35)' : 'none',
                     }}>
                       <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        {isLive && <span style={{ color: '#818cf8', marginRight: 4, fontSize: 11 }}>◆ 生产</span>}
                         {isBest && '★ '}{r.min_diff_apr_pct}
                       </td>
                       <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)' }}>{r.num_trades}</td>
@@ -1077,6 +1223,12 @@ function PerpBasisBacktestSection() {
                       }}>
                         {pnl >= 0 ? '+' : ''}{r.total_pnl_pct}%
                       </td>
+                      <td style={{
+                        padding: '10px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600,
+                        color: pnl >= 0 ? '#10b981' : '#ef4444',
+                      }}>
+                        {pnl >= 0 ? '+' : ''}{r.roi_on_margin_pct}%
+                      </td>
                     </tr>
                   )
                 })}
@@ -1087,7 +1239,7 @@ function PerpBasisBacktestSection() {
             marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 11,
             color: 'var(--text-muted)',
           }}>
-            ★ {t('标记 = PnL 最优阈值。win_rate 越高 + PnL 越大 = 实盘建议参数')}
+            ★ {t('最优阈值')}　◆ <span style={{ color: '#818cf8' }}>{t('生产')}</span> {t('= 当前运行值。胜率越高 + 净盈亏越大 = 实盘建议参数')}
           </div>
         </div>
       )}
