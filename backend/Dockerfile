@@ -33,6 +33,7 @@ RUN uv pip install --system --no-cache \
 
 # Copy application code
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
