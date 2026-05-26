@@ -109,6 +109,22 @@ class DgrBtcStrategyConfig:
     backtest_funding_constant: Decimal = Decimal("0.0001")
     backtest_funding_interval_hours: int = 8
 
+    # ---------- Martingale 新内核 (P4 引入, P6 yaml schema 重写) ----------
+    # 跨 6 窗口验证最优 (sl=10%)，详见 MARTINGALE_RECENTER_VALIDATED_20260526.md
+    mart_grid_step: Decimal = Decimal("0.05")  # 每跌 5% 加一档
+    mart_factor: Decimal = Decimal("1.5")  # 每档加仓 ×1.5
+    mart_max_layers: int = 5
+    mart_tp_pct: Decimal = Decimal("0.05")  # 平均成本 +5% 止盈
+    mart_sl_pct: Decimal = Decimal("0.10")  # 平均成本 -10% 止损
+    mart_layer_weights: tuple = (
+        Decimal("0.0760"),
+        Decimal("0.1141"),
+        Decimal("0.1711"),
+        Decimal("0.2566"),
+        Decimal("0.3822"),
+    )
+    mart_fee_pct: Decimal = Decimal("0.0006")  # 0.04% taker + 0.02% slippage
+
     # ------------------------------------------------------------------
     # yaml 加载
     # ------------------------------------------------------------------
