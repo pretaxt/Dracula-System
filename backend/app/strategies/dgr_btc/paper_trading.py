@@ -237,23 +237,31 @@ class DgrBtcPaperSession:
     # ──────────────────── tick ────────────────────
 
     async def _tick(self) -> None:
-        """每 tick: 拉价 → engine.decide loop → mock fill → apply_fill → persist"""
+        """LIVE/paper tick: 拉价 → process_decisions → persist"""
         self._n_ticks += 1
         self._last_tick_at = datetime.now(timezone.utc)
 
-        # 拉价
         try:
             price = await self._fetch_spot_price()
         except Exception:
-            return  # 拉价失败跳过本 tick
+            return
 
         self._last_spot_px = price
+        # paper 简化: 5s tick 内 low == price (高频 tick 已足够)
+        # LIVE 实盘可改成从 ws bar 高低价拉
+        self._process_decisions(price, price)
 
-        # 维护 rolling_low（在 tick interval 内的最低价；tick=5s 时基本等于 price）
-        # 实际 LIVE 中应该用 1m bar 的 low；paper mode 用 price 当 low
-        low = price  # paper 简化: tick 内 low == price (5s tick 已经很高频)
+        try:
+            self._persist_state()
+        except Exception:
+            logger.exception("dgr_btc_paper_persist_failed")
 
-        # process decisions
+    def _process_decisions(self, price: Decimal, low: Decimal) -> None:
+        """核心决策循环 (sync, 不含 IO)，与 MartingaleBacktestRunner 同形。
+
+        被 _tick() 调用 (LIVE/paper, low=price 简化)
+        也可被 mirror test 调用 (传 bar 真实 low) 验证 LIVE/backtest 等价。
+        """
         for _ in range(self._engine.cfg.max_layers + 3):
             d = self._engine.decide(self._state, price, low)
             if d.kind == DecisionKind.NOOP:
@@ -285,13 +293,7 @@ class DgrBtcPaperSession:
                     "dgr_btc_paper_%s_SELL qty=%s proceeds=%s reason=%s",
                     action, qty, proceeds, d.reason,
                 )
-                break  # 一个 tick 一个 exit
-
-        # persist
-        try:
-            self._persist_state()
-        except Exception:
-            logger.exception("dgr_btc_paper_persist_failed")
+                break
 
     # ──────────────────── price fetch ────────────────────
 
