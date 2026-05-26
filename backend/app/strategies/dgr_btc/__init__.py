@@ -1,39 +1,27 @@
 """
-app.strategies.dgr_btc — 动态网格 + 再定心策略 (#13)
+app.strategies.dgr_btc — 单边 Martingale + Recenter + Stop Loss (#13 v2)
 
-paired_inverse + dynamic bounds + price-deviation recenter + trend filter halt
-+ RiskEngine 多重风控。
-
-完全独立实现, 不复用其他策略（#11/#12 等）代码。
+Revamp 2026-05-26: from paired_inverse spot+perp hedge → single-side martingale.
 
 入口:
+  - MartingaleEngine / EngineConfig / StrategyState / Layer / Decision / DecisionKind
+    （新核心：pure logic，回测与 LIVE 共享）
   - DgrBtcStrategyConfig: dataclass + from_yaml / apply_overrides
-  - DgrBtcStrategy: 主控制器 (on_tick / on_trade / apply_funding / maybe_recenter / get_snapshot)
-  - GridManager / GridTrigger: 动态网格 + recenter rebuild
-  - DeltaHedger / DeltaState / HedgeAction: Delta 约束
-  - RiskFilter / RiskLevel / RiskReport / RiskTrigger: 7 维风控
+  - GridManager / GridTrigger: 单向网格（layers list）
+  - RiskFilter / RiskLevel / RiskReport / RiskTrigger: 风控
   - Position / Trade / MarketState / PortfolioSnapshot: 策略内部类型
+
+旧模块（已删除，本注释作历史标记）:
+  - atomic_pair, delta_hedger, maker_reprice（paired_inverse 专属，单边不需要）
 """
-from app.strategies.dgr_btc.config import DgrBtcStrategyConfig
-from app.strategies.dgr_btc.delta_hedger import (
-    DeltaHedger,
-    DeltaState,
-    HedgeAction,
-)
-from app.strategies.dgr_btc.grid_manager import (
-    GridManager,
-    GridTrigger,
-)
-from app.strategies.dgr_btc.risk_filter import (
-    RiskFilter,
-    RiskLevel,
-    RiskReport,
-    RiskTrigger,
-)
-from app.strategies.dgr_btc.strategy_core import (
-    DgrBtcStrategy,
-    OrderIntent,
-    RecenterEvent,
+# NEW core (Martingale + Recenter + SL) — pure logic
+from app.strategies.dgr_btc.engine import (
+    Decision,
+    DecisionKind,
+    EngineConfig,
+    Layer,
+    MartingaleEngine,
+    StrategyState,
 )
 from app.strategies.dgr_btc.types import (
     GridLevel,
@@ -48,21 +36,20 @@ from app.strategies.dgr_btc.types import (
     Trade,
 )
 
+# Legacy modules (待 P3 后续 phase 改造为调用 engine)
+# 注：不在此 __init__ import 它们，避免目前 delta_hedger 已删除的破坏性 ImportError。
+# Caller 需直接 from app.strategies.dgr_btc.<module> import ...
+# 改造完成后会重新加回这里。
 
 __all__ = [
-    "DgrBtcStrategyConfig",
-    "DgrBtcStrategy",
-    "OrderIntent",
-    "RecenterEvent",
-    "GridManager",
-    "GridTrigger",
-    "DeltaHedger",
-    "DeltaState",
-    "HedgeAction",
-    "RiskFilter",
-    "RiskLevel",
-    "RiskReport",
-    "RiskTrigger",
+    # Engine (new core)
+    "MartingaleEngine",
+    "EngineConfig",
+    "StrategyState",
+    "Layer",
+    "Decision",
+    "DecisionKind",
+    # Types (保留通用)
     "Position",
     "Trade",
     "MarketState",
