@@ -29,6 +29,7 @@ RUN uv pip install --system --no-cache \
     websockets \
     "python-jose[cryptography]" \
     httpx \
+    pandas \
     web3
 
 # Copy application code
