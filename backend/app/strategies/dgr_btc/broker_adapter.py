@@ -24,11 +24,21 @@ from typing import Any, Optional
 
 import structlog
 
-from app.strategies.dgr_btc.maker_reprice import RejectError
-from app.strategies.dgr_btc.strategy_core import OrderIntent
-from app.strategies.dgr_btc.types import MarketType, Side, Trade
+from app.strategies.dgr_btc.types import MarketType, OrderIntent, Side, Trade
 
 logger = structlog.get_logger(__name__)
+
+
+class RejectError(Exception):
+    """Order rejection (maker cross / no fill / safety block / API error).
+
+    NOTE: originally defined in maker_reprice.py; inlined here after maker_reprice
+    was removed in P2 cleanup (revamp 2026-05-26).
+    """
+
+    def __init__(self, message: str, original_error: Exception | None = None):
+        super().__init__(message)
+        self.original_error = original_error
 
 
 @dataclass

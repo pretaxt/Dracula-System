@@ -189,6 +189,22 @@ class GridLevel:
 
 
 @dataclass
+class OrderIntent:
+    """订单意图（策略生成, broker_adapter 下单层执行）。
+
+    NOTE: originally defined in strategy_core.py; moved to types.py after
+    strategy_core was removed in P3 cleanup (revamp 2026-05-26).
+    """
+
+    market: MarketType
+    side: Side
+    price: Decimal
+    quantity: Decimal
+    grid_level: Optional[Decimal] = None
+    reason: str = ""
+
+
+@dataclass
 class MarketState:
     """市场快照。"""
 

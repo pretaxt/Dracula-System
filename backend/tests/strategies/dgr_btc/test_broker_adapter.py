@@ -11,7 +11,7 @@ from app.strategies.dgr_btc.broker_adapter import (
     DgrBtcBrokerAdapter,
     DgrBtcBrokerConfig,
 )
-from app.strategies.dgr_btc.maker_reprice import RejectError
+from app.strategies.dgr_btc.broker_adapter import RejectError
 from app.strategies.dgr_btc.types import MarketType, Side
 
 
