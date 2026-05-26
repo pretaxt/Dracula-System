@@ -1,122 +1,130 @@
-# 策略 #13 — 动态网格 + 再定心 (dgr_btc / paired_inverse + dynamic bounds + recenter)
-# 完全独立实现, 不复用 #11/#12 代码; 共享 Dracula FastAPI/DB/Position 模型层
-# 算法验证: backtest +42.76% / 142d / DD -0.79% (Codex 复现 byte-equal)
-# Phase A 单测 38/38 全绿 · Phase B replay 误差 +0.24% (实质性复现)
+# 策略 #13 v2 — Martingale + Recenter + Stop Loss (单边做多 BTC)
+# Revamp 2026-05-26: paired_inverse spot+perp hedge → single-side long martingale
+#
+# 跨 6 窗口验证最优 (MARTINGALE_RECENTER_VALIDATED_20260526.md):
+#   - W7 训练: 夏普 +1.05 / 收益 +26.77% / 回撤 -16.88% / TP 39 / SL 5
+#   - W1-W5 跨窗口: 4/5 正夏普, 5/5 胜 B&H
+#   - W3 2022 全年大熊: 策略 -5.10% vs B&H -64.5% (省 59 个点)
+#
+# v1 yaml (paired_inverse) 备份: config/strategies/dgr_btc_main.yaml.bak_v1_NOGO_20260526
 
-instance_name: "动态网格再定心"
+instance_name: "Martingale + 再定心"
 strategy_type: dgr_btc
 
 # ============================================================
-# 启停 — 默认 disabled, UI 切 enabled=true 启动
+# 启停 — 部署后默认 disabled, KILL switch ON, 用户显式开启
 # ============================================================
-enabled: false  # NO-GO 永久禁用 (2026-05-26): 7月回测 -3.01% BTC同所网格零售alpha不足
-live_mode: false  # NO-GO 永久禁用 (2026-05-26)
+enabled: false  # P10 部署后 user 手动 PATCH 改 true
+live_mode: false  # paper 14 天通过后才考虑 LIVE
 
 # ============================================================
-# 交易标的 (仅 binance)
+# 交易标的 (binance spot)
 # ============================================================
 symbol:
   spot: "BTC/USDT"
-  perp: "BTC/USDT:USDT"      # ccxt 格式
+  perp: "BTC/USDT:USDT"  # 保留字段供 v1 caller 兼容，不再使用
   base: "BTC"
   quote: "USDT"
   exchange: "binance"
 
 # ============================================================
-# 资金 — Paper 起步 (= doc 默认 $100k / 10)
+# 资金 — Paper 起步 $10k
 # ============================================================
 capital:
-  total_usdt: 10000          # paper 起步 (= doc $100k / 10)
-  spot_initial_btc: 0.02     # qty × 10 (容纳 trend_halt 5 笔单向 SELL)
-  short_initial_btc: 0.02    # 同 (Delta = 0 起始)
-  reserve_ratio: 0.2
+  total_usdt: 10000
+  # v1 paired-hedge 字段保留向后兼容 (单边版本忽略)
+  spot_initial_btc: 0
+  short_initial_btc: 0
+  reserve_ratio: 0
 
 # ============================================================
-# 网格
+# Martingale 内核 (新)
 # ============================================================
-grid:
-  center_price: 0            # 0 = 启动时取实时 BTC 价
-  step_usdt: 250             # 网格间距
-  qty_per_grid: 0.002        # 每格交易量 (0.02 × 0.1)
-
-  # Dynamic bounds (doc §2 + §3) — recenter 时按新 center × width_pct 重算
-  dynamic_bounds:
-    enabled: true
-    width_pct: 0.15          # ±15%
-    min_width_pct: 0.15
-    max_width_pct: 0.20
-    # Recenter (doc §9 + §10)
-    recenter_enabled: true
-    recenter_trigger_pct: 0.12   # |price-center|/center >= 12%
-    recenter_cooldown_sec: 600   # 10min
-
-# ============================================================
-# Delta 对冲 — 双向硬刹车 (paper 缩小 10x)
-# ============================================================
-delta:
-  target: 0.0
-  upper_limit: 0.02          # paper: doc 0.2 × 0.1
-  lower_limit: -0.02
-  rebalance_threshold: 0.05
-
-# ============================================================
-# 仓位上限 — ⭐ 审计修正: leverage 3 (不是 doc 10)
-# 原因: paper cap $10k + short 0.05 BTC + 10x leverage,
-#   BTC 涨 12% → margin lock $44 < unrealized loss $53 = 爆仓
-#   降到 leverage 3 → margin lock $146, 撑得住 30% 涨幅
-# ============================================================
-position_limits:
-  max_spot_btc: 0.04         # qty × 20 (= spot_initial 10 + 5 笔 trend + safety)
-  max_short_btc: 0.04
-  leverage: 3                # ⭐ Phase C 审计修正 (从 10 → 3)
-
-# ============================================================
-# 风控 — 实战触发, 不能像 backtest 那样 hardcode 0/1.0
-# ============================================================
-risk:
-  trend_grids_threshold: 5           # ⭐ 核心 alpha 保护 (v2 漏掉的)
-  trend_density_factor: 2.0
-  hourly_vol_threshold: 1.5          # 1H 年化波动 > 此值 → DEFENSIVE
-  margin_ratio_min: 0.35             # 保证金率 < 0.35 → LOW_MARGIN → DEFENSIVE
-  liquidation_buffer: 0.20
-  funding_filter_enabled: true
-  funding_threshold: 0.0
-  min_orderbook_depth_usdt: 50000
-  max_daily_loss_pct: 0.05           # 日损 > 5% → EMERGENCY
-  max_drawdown_pct: 0.15             # 回撤 > 15% → EMERGENCY
+martingale:
+  grid_step: 0.05         # 每跌 5% 加一档
+  factor: 1.5             # 每档加仓 ×1.5
+  max_layers: 5           # 最多 5 档 (满层后 SL 兜底)
+  tp_pct: 0.05            # 平均成本 +5% 止盈清仓
+  sl_pct: 0.10            # 平均成本 -10% 强制止损
+  layer_weights:          # 归一化权重 (factor=1.5, 5 层)
+    - 0.0760
+    - 0.1141
+    - 0.1711
+    - 0.2566
+    - 0.3822
 
 # ============================================================
 # 执行
 # ============================================================
 execution:
-  order_type: "LIMIT_MAKER"
-  post_only: true
-  retry_on_fail: 3
-  retry_delay_ms: 500
-  slippage_tolerance_bps: 5
+  fee_pct: 0.0006         # 0.04% taker + 0.02% slippage
+  order_type: "MARKET"    # paper 用市价模拟，LIVE 阶段决定 maker 优化
+  tick_interval_seconds: 5
 
 # ============================================================
-# Live safety — Phase E 才生效, Phase C paper 阶段 kill switch ON
+# 风控 — 5 层 KILL (mirror v1 dgr_btc live_safety)
+# ============================================================
+risk:
+  daily_loss_cap_pct: 0.05      # 单日 -5% 触发 KILL
+  max_forced_holds_hours: 24    # 满层卡死 > 24h 触发 KILL (防 LUNA 锁死)
+  max_drawdown_pct: 0.30        # 总回撤 > 30% 触发 KILL
+  alert_on_sl: true
+  alert_on_kill: true
+  alert_on_max_layer: true      # 触达第 5 层时告警
+
+# ============================================================
+# Live Safety (Phase E 后才用)
 # ============================================================
 live_safety:
-  enabled: true              # 总开关 (false = paper-only)
-  dry_run: false             # live_mode=true + dry_run=true 走完整流程不真发单
+  enabled: false
+  dry_run: false
   telegram_alerts_enabled: true
-  max_order_usd: 500         # 0.001 BTC×$77k=$77 + buffer
-  max_daily_order_count: 500
-  max_daily_notional_usd: 50000
-  max_price_deviation_pct: 0.005  # 0.5% from mark (修: 0.5=>0.005 单位 fix)
+  max_order_usd: 100
+  max_daily_order_count: 100
+  max_daily_notional_usd: 5000
+  max_price_deviation_pct: 0.5
+  kill_switch_path: "/app/state/dgr_btc_KILL"
   audit_log_path: "/app/state/dgr_btc_audit.jsonl"
+  require_kill_to_start: true  # 部署后 KILL 必须存在才不交易
 
 # ============================================================
-# 回测专用 (Phase B 已用, 留作 backtest API 参考)
+# State 持久化
+# ============================================================
+state:
+  paper_state_file: "/app/state/dgr_btc_paper_state.json"
+  live_state_file: "/app/state/dgr_btc_state.json"
+  trades_jsonl_path: "/app/state/dgr_btc_trades.jsonl"
+
+# ============================================================
+# 回测 (P5 backtest_runner 直读)
 # ============================================================
 backtest:
-  spot_fee: 0.001            # binance spot taker (worst case)
-  perp_maker_fee: 0.0002     # binance perp maker
-  perp_taker_fee: 0.0005     # binance perp taker
-  slippage_bps: 1
-  maker_ratio: 0.85          # ⭐ Phase E 审计: 实盘 maker rate ~85%
-  funding_mode: "historical"
-  funding_constant: 0.0001
-  funding_interval_hours: 8
+  fee_pct: 0.0006
+  klines_dir: "/Users/YANG/Desktop/Dracula/backtest_windows"
+  default_window: "W7_full_cycle_25_26_1h.csv"
+
+# ============================================================
+# v1 兼容字段 (保留让 v1 caller 不崩，但单边版本不使用)
+# P10 部署后 host 上 v1 yaml 文件可保留作历史，新策略不依赖这些
+# ============================================================
+grid:
+  center_price: 0
+  step_usdt: 250
+  qty_per_grid: 0.002
+  dynamic_bounds:
+    enabled: false
+    width_pct: 0.15
+    recenter_enabled: false
+    recenter_trigger_pct: 0.12
+    recenter_cooldown_sec: 600
+
+delta:
+  target: 0.0
+  upper_limit: 0
+  lower_limit: 0
+  rebalance_threshold: 0
+
+position_limits:
+  max_spot_btc: 0.5
+  max_short_btc: 0
+  leverage: 1
