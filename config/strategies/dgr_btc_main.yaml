@@ -1,0 +1,122 @@
+# 策略 #13 — 动态网格 + 再定心 (dgr_btc / paired_inverse + dynamic bounds + recenter)
+# 完全独立实现, 不复用 #11/#12 代码; 共享 Dracula FastAPI/DB/Position 模型层
+# 算法验证: backtest +42.76% / 142d / DD -0.79% (Codex 复现 byte-equal)
+# Phase A 单测 38/38 全绿 · Phase B replay 误差 +0.24% (实质性复现)
+
+instance_name: "动态网格再定心"
+strategy_type: dgr_btc
+
+# ============================================================
+# 启停 — 默认 disabled, UI 切 enabled=true 启动
+# ============================================================
+enabled: false  # NO-GO 永久禁用 (2026-05-26): 7月回测 -3.01% BTC同所网格零售alpha不足
+live_mode: false  # NO-GO 永久禁用 (2026-05-26)
+
+# ============================================================
+# 交易标的 (仅 binance)
+# ============================================================
+symbol:
+  spot: "BTC/USDT"
+  perp: "BTC/USDT:USDT"      # ccxt 格式
+  base: "BTC"
+  quote: "USDT"
+  exchange: "binance"
+
+# ============================================================
+# 资金 — Paper 起步 (= doc 默认 $100k / 10)
+# ============================================================
+capital:
+  total_usdt: 10000          # paper 起步 (= doc $100k / 10)
+  spot_initial_btc: 0.02     # qty × 10 (容纳 trend_halt 5 笔单向 SELL)
+  short_initial_btc: 0.02    # 同 (Delta = 0 起始)
+  reserve_ratio: 0.2
+
+# ============================================================
+# 网格
+# ============================================================
+grid:
+  center_price: 0            # 0 = 启动时取实时 BTC 价
+  step_usdt: 250             # 网格间距
+  qty_per_grid: 0.002        # 每格交易量 (0.02 × 0.1)
+
+  # Dynamic bounds (doc §2 + §3) — recenter 时按新 center × width_pct 重算
+  dynamic_bounds:
+    enabled: true
+    width_pct: 0.15          # ±15%
+    min_width_pct: 0.15
+    max_width_pct: 0.20
+    # Recenter (doc §9 + §10)
+    recenter_enabled: true
+    recenter_trigger_pct: 0.12   # |price-center|/center >= 12%
+    recenter_cooldown_sec: 600   # 10min
+
+# ============================================================
+# Delta 对冲 — 双向硬刹车 (paper 缩小 10x)
+# ============================================================
+delta:
+  target: 0.0
+  upper_limit: 0.02          # paper: doc 0.2 × 0.1
+  lower_limit: -0.02
+  rebalance_threshold: 0.05
+
+# ============================================================
+# 仓位上限 — ⭐ 审计修正: leverage 3 (不是 doc 10)
+# 原因: paper cap $10k + short 0.05 BTC + 10x leverage,
+#   BTC 涨 12% → margin lock $44 < unrealized loss $53 = 爆仓
+#   降到 leverage 3 → margin lock $146, 撑得住 30% 涨幅
+# ============================================================
+position_limits:
+  max_spot_btc: 0.04         # qty × 20 (= spot_initial 10 + 5 笔 trend + safety)
+  max_short_btc: 0.04
+  leverage: 3                # ⭐ Phase C 审计修正 (从 10 → 3)
+
+# ============================================================
+# 风控 — 实战触发, 不能像 backtest 那样 hardcode 0/1.0
+# ============================================================
+risk:
+  trend_grids_threshold: 5           # ⭐ 核心 alpha 保护 (v2 漏掉的)
+  trend_density_factor: 2.0
+  hourly_vol_threshold: 1.5          # 1H 年化波动 > 此值 → DEFENSIVE
+  margin_ratio_min: 0.35             # 保证金率 < 0.35 → LOW_MARGIN → DEFENSIVE
+  liquidation_buffer: 0.20
+  funding_filter_enabled: true
+  funding_threshold: 0.0
+  min_orderbook_depth_usdt: 50000
+  max_daily_loss_pct: 0.05           # 日损 > 5% → EMERGENCY
+  max_drawdown_pct: 0.15             # 回撤 > 15% → EMERGENCY
+
+# ============================================================
+# 执行
+# ============================================================
+execution:
+  order_type: "LIMIT_MAKER"
+  post_only: true
+  retry_on_fail: 3
+  retry_delay_ms: 500
+  slippage_tolerance_bps: 5
+
+# ============================================================
+# Live safety — Phase E 才生效, Phase C paper 阶段 kill switch ON
+# ============================================================
+live_safety:
+  enabled: true              # 总开关 (false = paper-only)
+  dry_run: false             # live_mode=true + dry_run=true 走完整流程不真发单
+  telegram_alerts_enabled: true
+  max_order_usd: 500         # 0.001 BTC×$77k=$77 + buffer
+  max_daily_order_count: 500
+  max_daily_notional_usd: 50000
+  max_price_deviation_pct: 0.005  # 0.5% from mark (修: 0.5=>0.005 单位 fix)
+  audit_log_path: "/app/state/dgr_btc_audit.jsonl"
+
+# ============================================================
+# 回测专用 (Phase B 已用, 留作 backtest API 参考)
+# ============================================================
+backtest:
+  spot_fee: 0.001            # binance spot taker (worst case)
+  perp_maker_fee: 0.0002     # binance perp maker
+  perp_taker_fee: 0.0005     # binance perp taker
+  slippage_bps: 1
+  maker_ratio: 0.85          # ⭐ Phase E 审计: 实盘 maker rate ~85%
+  funding_mode: "historical"
+  funding_constant: 0.0001
+  funding_interval_hours: 8
