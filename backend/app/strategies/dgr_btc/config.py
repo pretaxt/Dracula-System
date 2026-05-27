@@ -98,7 +98,7 @@ class DgrBtcStrategyConfig:
     live_safety_max_order_usd: Decimal = Decimal("50")  # paper: $50 单笔上限
     live_safety_max_daily_order_count: int = 200
     live_safety_max_daily_notional_usd: Decimal = Decimal("1000")
-    live_safety_max_price_deviation_pct: Decimal = Decimal("0.5")
+    live_safety_max_price_deviation_pct: Decimal = Decimal("0.005")  # fraction (0.5% from mark) — 与 LiveSafetyConfig 单位一致
     live_safety_audit_log_path: str = "/app/state/dgr_btc_audit.jsonl"
 
     # ---------- 回测专用 ----------

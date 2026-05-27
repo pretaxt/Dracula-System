@@ -87,7 +87,7 @@ live_safety:
   max_order_usd: 100
   max_daily_order_count: 100
   max_daily_notional_usd: 5000
-  max_price_deviation_pct: 0.5
+  max_price_deviation_pct: 0.005   # fix: 必须是 fraction (0.5% from mark), 不是百分比. 0.5 等于 50% = 几乎禁用
   kill_switch_path: "/app/state/dgr_btc_KILL"
   audit_log_path: "/app/state/dgr_btc_audit.jsonl"
   require_kill_to_start: true  # 部署后 KILL 必须存在才不交易
