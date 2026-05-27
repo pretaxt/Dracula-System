@@ -37,7 +37,7 @@ class DgrBtcStrategyConfig:
     exchange: str = "binance"
 
     # ---------- 资金（paper 起步 $10k = doc $100k / 10）----------
-    total_capital_usdt: Decimal = Decimal("10000")
+    total_capital_usdt: Decimal = Decimal("100000")  # 2026-05-27: 10× paper
     spot_initial_btc: Decimal = Decimal("0.05")
     short_initial_btc: Decimal = Decimal("0.05")
     reserve_ratio: Decimal = Decimal("0.2")

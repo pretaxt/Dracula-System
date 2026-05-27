@@ -31,7 +31,7 @@ symbol:
 # 资金 — Paper 起步 $10k
 # ============================================================
 capital:
-  total_usdt: 10000
+  total_usdt: 100000   # 2026-05-27 加大资金 10× (paper, B-config 不变)
   # v1 paired-hedge 字段保留向后兼容 (单边版本忽略)
   spot_initial_btc: 0
   short_initial_btc: 0
