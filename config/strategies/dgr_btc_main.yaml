@@ -32,6 +32,8 @@ symbol:
 # ============================================================
 capital:
   total_usdt: 100000   # 2026-05-27 加大资金 10× (paper, B-config 不变)
+  # 注意: LIVE 模式下 total_usdt = 名义全额; 实际抵押 = total_usdt / position_limits.leverage
+  # 例如 100000 + 10x = 抵押 10000 真钱
   # v1 paired-hedge 字段保留向后兼容 (单边版本忽略)
   spot_initial_btc: 0
   short_initial_btc: 0
@@ -130,4 +132,4 @@ delta:
 position_limits:
   max_spot_btc: 0.5
   max_short_btc: 0
-  leverage: 1
+  leverage: 10           # 2026-05-27 LIVE 准备: 10x 杠杆 (告警基准 maintenance_margin=5%)

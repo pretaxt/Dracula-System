@@ -281,6 +281,11 @@ class DgrBtcPaperSession:
 
         self._last_spot_px = close
         self._process_decisions(close, low)
+        # 保证金健康监控 (杠杆 > 1 时启用, 跨阈值告警)
+        try:
+            self._check_margin_health(close, alert=True)
+        except Exception:
+            logger.debug("margin_check_failed", exc_info=True)
 
         try:
             self._persist_state()
@@ -398,6 +403,101 @@ class DgrBtcPaperSession:
                 notify_system(full)
         except Exception:
             logger.debug("dgr_btc_fill_snapshot_failed", exc_info=True)
+
+
+    # ──────────────────── margin health monitor ────────────────────
+
+    def _check_margin_health(self, mark_price: Decimal, alert: bool = True) -> dict | None:
+        """计算保证金健康度 (基于 cfg.leverage 杠杆假设)，发警报.
+
+        模拟币安统一账户 cross-margin: maintenance_margin = 5% 持仓名义。
+        - 抵押 = total_capital / leverage
+        - 权益 = 抵押 + 未实现盈亏
+        - 维护要求 = 持仓名义 × 5%
+        - 保证金率 = 权益 / 维护要求
+        - WARN < 1.5x, CRITICAL < 1.2x, 清算 < 1.0x
+        """
+        state = self._state
+        if not state.is_in_cycle or mark_price <= _ZERO:
+            return None
+        leverage = max(1, int(self.cfg.leverage))
+        if leverage <= 1:
+            return None
+
+        collateral = self.cfg.total_capital_usdt / Decimal(str(leverage))
+        notional = state.total_qty * mark_price
+        unrealized = state.unrealized_pnl(mark_price, self._engine.cfg.fee_pct)
+        equity = collateral + unrealized
+
+        maint_pct = Decimal("0.05")
+        maint_req = notional * maint_pct
+        margin_ratio = (equity / maint_req) if maint_req > _ZERO else Decimal("999")
+
+        qty = state.total_qty
+        if qty > _ZERO:
+            liq_price = (state.avg_cost * qty - collateral) / (qty * (Decimal("1") - maint_pct))
+            if liq_price < _ZERO:
+                liq_price = _ZERO
+        else:
+            liq_price = _ZERO
+        liq_distance_pct = ((mark_price - liq_price) / mark_price * Decimal("100")) if mark_price > _ZERO else _ZERO
+
+        health = {
+            "leverage": leverage,
+            "collateral_usdt": collateral,
+            "notional_usdt": notional,
+            "unrealized_pnl": unrealized,
+            "equity_usdt": equity,
+            "maintenance_req_usdt": maint_req,
+            "margin_ratio": margin_ratio,
+            "liq_price": liq_price,
+            "liq_distance_pct": liq_distance_pct,
+        }
+        if not alert:
+            return health
+
+        if margin_ratio < Decimal("1.2"):
+            level = "CRITICAL"
+        elif margin_ratio < Decimal("1.5"):
+            level = "WARN"
+        else:
+            level = None
+
+        last = getattr(self, "_last_margin_alert_level", None)
+        if level and level != last:
+            emoji = "\U0001F6A8" if level == "CRITICAL" else "\u26A0\uFE0F"
+            msg = (
+                f"{emoji} dgr_btc 保证金 {level}\n"
+                f"杠杆: {leverage}x | 名义: ${notional:,.0f} | 抵押: ${collateral:,.0f}\n"
+                f"权益: ${equity:,.2f} | 维护要求: ${maint_req:,.2f}\n"
+                f"保证金率: {margin_ratio:.2f}x (清算线 1.0x)\n"
+                f"清算价: ${liq_price:,.2f} | 距清算: {liq_distance_pct:.2f}%\n"
+                f"当前价: ${mark_price:,.2f} | avg_cost: ${state.avg_cost:,.2f}\n"
+                f"操作建议: " + (
+                    "立即追加保证金 OR 平仓减仓" if level == "CRITICAL"
+                    else "考虑追加保证金"
+                )
+            )
+            logger.warning("dgr_btc_margin_alert level=%s ratio=%.2f liq=%s",
+                          level, float(margin_ratio), liq_price)
+            if self.cfg.live_safety_telegram_alerts_enabled:
+                try:
+                    from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                    notify_risk_violation(f"DGR_BTC_MARGIN_{level}", msg)
+                except Exception:
+                    logger.debug("margin_alert_telegram_failed", exc_info=True)
+            self._last_margin_alert_level = level
+        elif not level and last:
+            logger.info("dgr_btc_margin_recovered ratio=%.2f", float(margin_ratio))
+            if self.cfg.live_safety_telegram_alerts_enabled:
+                try:
+                    from app.notifications.telegram import notify_system  # noqa: PLC0415
+                    notify_system(f"\u2705 dgr_btc 保证金恢复健康 (ratio {margin_ratio:.2f}x)")
+                except Exception:
+                    pass
+            self._last_margin_alert_level = None
+
+        return health
 
     # ──────────────────── price fetch ────────────────────
 
@@ -518,6 +618,14 @@ class DgrBtcPaperSession:
             "risk_level": "NORMAL",  # P6 接入 risk_filter 时填实
             "trend_count": 0,
             "spot_price": str(price),
+            "mark_price": str(price),       # alias for v1 caller (UI 读 mark_price)
+            "total_qty": str(state.total_qty),
+            "total_cost": str(state.total_cost),
+            "avg_cost": str(state.avg_cost),
+            "max_layers": cfg.mart_max_layers,
+            "margin_health": (
+                lambda h: {k: str(v) for k, v in h.items()} if h else None
+            )(self._check_margin_health(price, alert=False)),
             "positions": {
                 "spot": {
                     "qty": str(state.total_qty),
