@@ -294,21 +294,11 @@ async def main() -> int:
     df = await fetch_24h_bars()
     logger.info(f"fetched {len(df)} 1h bars for last 24h")
 
-    runner = MartingaleBacktestRunner(cfg)
-    # 注: backtest_runner 初始 cash 用 cfg.initial_capital
-    # 对于"续跑"场景，需要把 y_state 注入。我们这里用一个 hack:
-    # 把 cfg 临时改 initial_capital = y_cash 让 cash 起点对
-    cfg_replay = EngineConfig(
-        initial_capital=y_cash,
-        grid_step=cfg.grid_step, factor=cfg.factor, max_layers=cfg.max_layers,
-        tp_pct=cfg.tp_pct, sl_pct=cfg.sl_pct,
-        layer_weights=cfg.layer_weights, fee_pct=cfg.fee_pct,
-    )
-    runner_replay = MartingaleBacktestRunner(cfg_replay)
-    # 手工注入 y_state 替换 fresh state
-    # (backtest_runner 内 state 是 fresh, 这里用一个 trick: 直接调 engine.decide loop)
-    # 简化: 直接跑 runner 当成新 cycle (粗略)
-    result = runner_replay.run(df)
+    # P3 修复 (Codex medium): 用 init_state + init_cash 直接续跑昨日 state,
+    # 不再丢弃重建出来的 y_state. layers/avg_cost/next_buy/n_tp/n_sl/realized_pnl
+    # 完整延续, mirror 检验对比真正的"延续场景"行为.
+    runner_replay = MartingaleBacktestRunner(cfg)
+    result = runner_replay.run(df, init_state=y_state, init_cash=y_cash)
 
     expected_snap = StateSnapshot(
         ts=actual_snap.ts,

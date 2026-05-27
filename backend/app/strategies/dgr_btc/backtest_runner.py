@@ -88,20 +88,28 @@ class MartingaleBacktestRunner:
         self.engine = MartingaleEngine(config)
         self.cfg = config
 
-    def run(self, df: pd.DataFrame) -> BacktestResult:
+    def run(
+        self,
+        df: pd.DataFrame,
+        init_state: Optional[StrategyState] = None,
+        init_cash: Optional[Decimal] = None,
+    ) -> BacktestResult:
         """跑回测，返回最终结果与权益曲线。
 
         Args:
             df: DataFrame with columns: timestamp, open, high, low, close
                 timestamp 可为 string 或 datetime；自动转换
+            init_state: 起始 strategy state. None → 全新 fresh state (默认).
+                       传入则续跑 (P3 修复: mirror_check 续昨日场景).
+            init_cash:  起始 cash. None → cfg.initial_capital.
         """
         df = df.copy()
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp").reset_index(drop=True)
 
-        state = StrategyState()
-        cash = self.cfg.initial_capital
+        state = init_state if init_state is not None else StrategyState()
+        cash = init_cash if init_cash is not None else self.cfg.initial_capital
         equity_curve: List[EquityPoint] = []
         max_layer_hit = 0
 
