@@ -280,7 +280,11 @@ class DgrBtcPaperSession:
                 return  # 拉价完全失败跳过 tick
 
         self._last_spot_px = close
-        self._process_decisions(close, low)
+        # P1 修复 (Codex critical): LIVE 走 broker, paper 走 synthetic
+        if self.live_mode and self._broker_adapter is not None:
+            await self._process_decisions_live(close, low)
+        else:
+            self._process_decisions(close, low)
         # 保证金健康监控 (杠杆 > 1 时启用, 跨阈值告警)
         try:
             self._check_margin_health(close, alert=True)
@@ -347,6 +351,100 @@ class DgrBtcPaperSession:
                     f"{emoji} dgr_btc {action} cycle {self._state.cycle_id - 1} closed\n"
                     f"卖出: {pre_qty:.5f} BTC @ ${d.target_price:,.2f}\n"
                     f"avg ${pre_avg:,.2f} → 毛收入 ${proceeds:,.2f}\n"
+                    f"净 P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+                )
+                self._send_fill_snapshot(header)
+                break
+
+    # ──────────────────── LIVE broker 分支 (P1 修复) ────────────────────
+
+    async def _process_decisions_live(self, price: Decimal, low: Decimal) -> None:
+        """LIVE 决策环: 调 broker_adapter 实际下单, broker 确认 fill 后才 apply_fill.
+
+        与 _process_decisions (paper synthetic) 同形, 但每个决策走真实 broker:
+          - ADD_LAYER: broker.place_limit_maker (SPOT, BUY) at target_price
+          - TP/SL: broker.place_market_unwind (SPOT, SELL) total_qty
+          - broker reject/timeout → 不 apply_fill (fail-closed), 让下一 tick 重试
+          - 单次 tick 内最多处理 max_layers+3 个决策 (与 paper 同)
+        """
+        from app.strategies.dgr_btc.types import MarketType, Side  # noqa: PLC0415
+
+        for _ in range(self._engine.cfg.max_layers + 3):
+            d = self._engine.decide(self._state, price, low)
+            if d.kind == DecisionKind.NOOP:
+                break
+
+            if d.kind == DecisionKind.ADD_LAYER:
+                stake = d.stake_usdt
+                if self._cash < stake:
+                    stake = self._cash
+                if stake <= _ZERO:
+                    break
+                # 估算 qty (broker 实际成交可能小幅偏移; 用 target 估)
+                est_qty = stake / d.target_price
+                try:
+                    trade = await self._broker_adapter.place_limit_maker(
+                        MarketType.SPOT, Side.BUY,
+                        price=d.target_price, quantity=est_qty,
+                        no_wait=False,  # 等成交确认
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "dgr_btc_live_buy_reject layer=%d price=%s reason=%s",
+                        d.layer_index, d.target_price, str(e)[:120],
+                    )
+                    break  # fail-closed: 不 apply, 不前进
+                # broker 返回真实 fill_price + qty (扣过 binance fee)
+                fill_px = Decimal(str(getattr(trade, "price", d.target_price)))
+                qty = Decimal(str(getattr(trade, "quantity", est_qty)))
+                actual_stake = fill_px * qty * (Decimal("1") + self._engine.cfg.fee_pct)
+                self._cash -= actual_stake
+                self._engine.apply_fill(self._state, d, fill_px, qty, actual_stake)
+                self._n_trades_executed += 1
+                logger.info(
+                    "dgr_btc_LIVE_BUY layer=%d fill_px=%s qty=%s stake=%s",
+                    d.layer_index, fill_px, qty, actual_stake,
+                )
+                header = (
+                    f"🟢 dgr_btc LIVE BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
+                    f"成交: {qty:.5f} BTC | 投入 ${actual_stake:,.2f}"
+                )
+                self._send_fill_snapshot(header)
+
+            elif d.kind in (DecisionKind.TAKE_PROFIT, DecisionKind.STOP_LOSS):
+                pre_cost = self._state.total_cost
+                pre_qty = self._state.total_qty
+                pre_avg = self._state.avg_cost
+                try:
+                    trade = await self._broker_adapter.place_market_unwind(
+                        MarketType.SPOT, Side.SELL, quantity=pre_qty,
+                    )
+                except Exception as e:
+                    action = "TP" if d.kind == DecisionKind.TAKE_PROFIT else "SL"
+                    logger.error(
+                        "dgr_btc_LIVE_%s_FAIL qty=%s reason=%s",
+                        action, pre_qty, str(e)[:120],
+                    )
+                    break  # fail-closed: 不清仓, 下一 tick 重试
+                # broker 真实成交价 + 扣费后 proceeds
+                fill_px = Decimal(str(getattr(trade, "price", d.target_price)))
+                actual_qty = Decimal(str(getattr(trade, "quantity", pre_qty)))
+                proceeds = fill_px * actual_qty * (Decimal("1") - self._engine.cfg.fee_pct)
+                self._cash += proceeds
+                self._engine.apply_fill(self._state, d, fill_px, actual_qty, proceeds)
+                self._n_trades_executed += 1
+                action = "TP" if d.kind == DecisionKind.TAKE_PROFIT else "SL"
+                logger.info(
+                    "dgr_btc_LIVE_%s_SELL fill_px=%s qty=%s proceeds=%s",
+                    action, fill_px, actual_qty, proceeds,
+                )
+                pnl = proceeds - pre_cost
+                pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
+                emoji = "💰" if action == "TP" else "🔴"
+                header = (
+                    f"{emoji} dgr_btc LIVE {action} cycle {self._state.cycle_id - 1} closed\n"
+                    f"卖出: {actual_qty:.5f} BTC @ ${fill_px:,.2f}\n"
+                    f"avg ${pre_avg:,.2f} → proceeds ${proceeds:,.2f}\n"
                     f"净 P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
                 )
                 self._send_fill_snapshot(header)
