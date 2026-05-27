@@ -31,9 +31,9 @@ symbol:
 # 资金 — Paper 起步 $10k
 # ============================================================
 capital:
-  total_usdt: 100000   # 2026-05-27 加大资金 10× (paper, B-config 不变)
+  total_usdt: 200000   # 2026-05-27 2× 升级 (200k 名义 / 20k 抵押 / 10x 杠杆)
   # 注意: LIVE 模式下 total_usdt = 名义全额; 实际抵押 = total_usdt / position_limits.leverage
-  # 例如 100000 + 10x = 抵押 10000 真钱
+  # 例如 200000 + 10x = 抵押 20000 真钱
   # v1 paired-hedge 字段保留向后兼容 (单边版本忽略)
   spot_initial_btc: 0
   short_initial_btc: 0
