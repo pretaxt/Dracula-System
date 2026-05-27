@@ -90,6 +90,11 @@ class _MartingaleStrategyView:
         return self._state.n_tp + self._state.n_sl
 
     @property
+    def recenter_events(self) -> list:
+        """v1 "recenter_events" 历史；v2 不维护事件列表，返回空 list 让 endpoint 不报 500"""
+        return []
+
+    @property
     def total_fees(self) -> Decimal:
         # martingale engine fold 进 avg_cost；这里给 0（callers 用 snapshot 拿）
         return _ZERO
