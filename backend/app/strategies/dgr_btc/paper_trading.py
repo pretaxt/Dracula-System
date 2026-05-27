@@ -312,8 +312,18 @@ class DgrBtcPaperSession:
                     "dgr_btc_paper_BUY layer=%d price=%s qty=%s stake=%s reason=%s",
                     d.layer_index, fill_px, qty, stake, d.reason,
                 )
+                # 推送 fill 表 (telegram + log)
+                header = (
+                    f"🟢 dgr_btc BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
+                    f"成交: {qty:.5f} BTC | 投入 ${stake:,.2f}"
+                )
+                self._send_fill_snapshot(header)
 
             elif d.kind in (DecisionKind.TAKE_PROFIT, DecisionKind.STOP_LOSS):
+                # capture pre-fill state for P&L calc
+                pre_cost = self._state.total_cost
+                pre_qty = self._state.total_qty
+                pre_avg = self._state.avg_cost
                 proceeds = self._engine.compute_proceeds_sell(self._state.total_qty, d.target_price)
                 qty = self._state.total_qty
                 self._cash += proceeds
@@ -324,7 +334,70 @@ class DgrBtcPaperSession:
                     "dgr_btc_paper_%s_SELL qty=%s proceeds=%s reason=%s",
                     action, qty, proceeds, d.reason,
                 )
+                # 推送 cycle close 表
+                pnl = proceeds - pre_cost
+                pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
+                emoji = "💰" if action == "TP" else "🔴"
+                header = (
+                    f"{emoji} dgr_btc {action} cycle {self._state.cycle_id - 1} closed\n"
+                    f"卖出: {pre_qty:.5f} BTC @ ${d.target_price:,.2f}\n"
+                    f"avg ${pre_avg:,.2f} → 毛收入 ${proceeds:,.2f}\n"
+                    f"净 P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+                )
+                self._send_fill_snapshot(header)
                 break
+
+    # ──────────────────── fill snapshot (telegram + log) ────────────────────
+
+    def _format_snapshot(self) -> str:
+        """格式化当前 strategy state 表 (在 fill 之后调用)."""
+        cfg = self._engine.cfg
+        s = self._state
+        price = self._last_spot_px or _ZERO
+
+        if not s.is_in_cycle:
+            # cycle closed (TP/SL just fired)
+            next_l0 = self._cash * cfg.layer_weights[0] if cfg.layer_weights else _ZERO
+            return (
+                f"📊 cycle {s.cycle_id} (closed) | 累计 TP {s.n_tp} / SL {s.n_sl}\n"
+                f"现金: ${self._cash:,.2f} | 等待新 ENTRY L0\n"
+                f"下一 ENTRY L0 预计 ${next_l0:,.2f}"
+            )
+
+        floating = s.unrealized_pnl(price, cfg.fee_pct) if price > _ZERO else _ZERO
+        next_tp = s.avg_cost * (Decimal("1") + cfg.tp_pct)
+        next_sl = s.avg_cost * (Decimal("1") - cfg.sl_pct)
+
+        lines = [
+            f"📊 layers {s.n_layers}/{cfg.max_layers} | cycle {s.cycle_id} | TP/SL 累计 {s.n_tp}/{s.n_sl}",
+            f"持仓: {s.total_qty:.5f} BTC / 成本 ${s.total_cost:,.2f}",
+            f"avg_cost: ${s.avg_cost:,.2f} | 当前价: ${price:,.2f}",
+            f"现金: ${self._cash:,.2f} | 浮动 P&L: ${floating:+,.2f}",
+        ]
+
+        if s.n_layers < cfg.max_layers and s.next_buy_price:
+            drop = (s.avg_cost - s.next_buy_price) / s.avg_cost * Decimal("100")
+            lines.append(f"下一档 ADD L{s.n_layers}: ${s.next_buy_price:,.2f} (-{drop:.2f}%)")
+        else:
+            lines.append(f"下一档 ADD: 满层 (max {cfg.max_layers})")
+
+        tp_pct_disp = float(cfg.tp_pct) * 100
+        sl_pct_disp = float(cfg.sl_pct) * 100
+        lines.append(f"TP @ ${next_tp:,.2f} (+{tp_pct_disp:.1f}%)")
+        lines.append(f"SL @ ${next_sl:,.2f} (-{sl_pct_disp:.1f}%)")
+        return "\n".join(lines)
+
+    def _send_fill_snapshot(self, header: str) -> None:
+        """每笔 fill 后推送：log 必发, telegram 按 cfg 开关."""
+        try:
+            snapshot = self._format_snapshot()
+            full = f"{header}\n{snapshot}"
+            logger.info("dgr_btc_fill_snapshot\n%s", full)
+            if self.cfg.live_safety_telegram_alerts_enabled:
+                from app.notifications.telegram import notify_system  # noqa: PLC0415
+                notify_system(full)
+        except Exception:
+            logger.debug("dgr_btc_fill_snapshot_failed", exc_info=True)
 
     # ──────────────────── price fetch ────────────────────
 
