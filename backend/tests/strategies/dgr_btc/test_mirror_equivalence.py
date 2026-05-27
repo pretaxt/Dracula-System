@@ -59,7 +59,16 @@ def _run_paper_on_bars(df: pd.DataFrame, tmp_path) -> tuple[dict, Decimal, Decim
     import os
     os.environ["DGR_BTC_STATE_DIR"] = str(tmp_path)
 
-    cfg = DgrBtcStrategyConfig()
+    # 显式对齐 _engine_config() (测 byte-equal，不依赖默认值)
+    cfg = DgrBtcStrategyConfig(
+        mart_grid_step=Decimal("0.05"),
+        mart_factor=Decimal("1.5"),
+        mart_max_layers=5,
+        mart_tp_pct=Decimal("0.05"),
+        mart_sl_pct=Decimal("0.10"),
+        mart_layer_weights=tuple(WEIGHTS),
+        mart_fee_pct=Decimal("0.0006"),
+    )
     session = DgrBtcPaperSession(
         cfg=cfg,
         adapter=None,  # 不调 adapter；直接走 _process_decisions
@@ -141,7 +150,16 @@ def test_paper_state_serialization_round_trip_matches_backtest(tmp_path):
     # paper 跑前半段 → persist → 重启 → 继续
     import os
     os.environ["DGR_BTC_STATE_DIR"] = str(tmp_path)
-    cfg = DgrBtcStrategyConfig()
+    # 显式对齐 _engine_config() A baseline
+    cfg = DgrBtcStrategyConfig(
+        mart_grid_step=Decimal("0.05"),
+        mart_factor=Decimal("1.5"),
+        mart_max_layers=5,
+        mart_tp_pct=Decimal("0.05"),
+        mart_sl_pct=Decimal("0.10"),
+        mart_layer_weights=tuple(WEIGHTS),
+        mart_fee_pct=Decimal("0.0006"),
+    )
 
     mid = len(df) // 2
     df_first = df.iloc[:mid].copy()

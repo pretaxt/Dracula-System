@@ -237,19 +237,45 @@ class DgrBtcPaperSession:
     # ──────────────────── tick ────────────────────
 
     async def _tick(self) -> None:
-        """LIVE/paper tick: 拉价 → process_decisions → persist"""
+        """LIVE/paper tick: KILL check → 拉 1m bar → process_decisions → persist"""
         self._n_ticks += 1
         self._last_tick_at = datetime.now(timezone.utc)
 
-        try:
-            price = await self._fetch_spot_price()
-        except Exception:
+        # KILL switch 检查 (paper + LIVE 都遵守)
+        kill_path = "/app/state/dgr_btc_KILL"
+        if os.path.exists(kill_path):
+            # 仍 fetch price 让 _last_spot_px 更新 (UI 显示用)，但不调 engine.decide
+            try:
+                price = await self._fetch_spot_price()
+                self._last_spot_px = price
+            except Exception:
+                pass
             return
 
-        self._last_spot_px = price
-        # paper 简化: 5s tick 内 low == price (高频 tick 已足够)
-        # LIVE 实盘可改成从 ws bar 高低价拉
-        self._process_decisions(price, price)
+        # 拉最新 1m bar，含当前分钟 intrabar low (P11 修复: 让 paper 接近回测 intrabar mode)
+        # 用 dracula adapter.fetch_klines(Symbol, interval, limit, InstrumentType.SPOT)
+        close: Decimal
+        low: Decimal
+        try:
+            from app.exchanges.models import InstrumentType, Symbol  # noqa: PLC0415
+            sym = Symbol(self.cfg.symbol_base, self.cfg.symbol_quote)
+            klines = await self.adapter.fetch_klines(sym, "1m", limit=2, instrument=InstrumentType.SPOT)
+            if klines and len(klines) > 0:
+                k = klines[-1]  # 最新（可能未收盘）的 1m bar
+                close = Decimal(str(k.close))
+                low = Decimal(str(k.low))
+            else:
+                raise RuntimeError("empty klines response")
+        except Exception:
+            # fallback: 拉 ticker 当 close_only mode (旧行为)
+            try:
+                close = await self._fetch_spot_price()
+                low = close
+            except Exception:
+                return  # 拉价完全失败跳过 tick
+
+        self._last_spot_px = close
+        self._process_decisions(close, low)
 
         try:
             self._persist_state()
@@ -298,22 +324,23 @@ class DgrBtcPaperSession:
     # ──────────────────── price fetch ────────────────────
 
     async def _fetch_spot_price(self) -> Decimal:
-        """从 binance adapter 拉 spot 现价"""
-        # 优先用 market_data_hub (实时 ticker)
+        """从 dracula adapter 拉 spot 现价（用 Symbol obj，与 v1 路径一致）"""
+        # 优先用 market_data_hub
         if self.hub is not None:
             try:
-                px = self.hub.get_last_price(self.cfg.exchange, self.cfg.symbol_spot)
-                if px:
-                    return Decimal(str(px))
+                t = self.hub.get_ticker(self.cfg.exchange, self.cfg.symbol_spot)
+                if t and t.last:
+                    return Decimal(str(t.last))
             except Exception:
                 pass
 
-        # fallback: binance adapter fetch_ticker
-        ticker = await self.adapter.fetch_ticker(self.cfg.symbol_spot)
-        last = ticker.get("last") if isinstance(ticker, dict) else getattr(ticker, "last", None)
-        if last is None:
-            raise RuntimeError(f"no last price for {self.cfg.symbol_spot}")
-        return Decimal(str(last))
+        # fallback: adapter.fetch_ticker(Symbol, InstrumentType.SPOT)
+        from app.exchanges.models import InstrumentType, Symbol  # noqa: PLC0415
+        sym = Symbol(self.cfg.symbol_base, self.cfg.symbol_quote)
+        t = await self.adapter.fetch_ticker(sym, InstrumentType.SPOT)
+        if t and getattr(t, "last", None):
+            return Decimal(str(t.last))
+        raise RuntimeError(f"no last price for {self.cfg.symbol_spot}")
 
     # ──────────────────── state persistence ────────────────────
 

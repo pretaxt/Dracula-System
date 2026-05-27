@@ -110,18 +110,20 @@ class DgrBtcStrategyConfig:
     backtest_funding_interval_hours: int = 8
 
     # ---------- Martingale 新内核 (P4 引入, P6 yaml schema 重写) ----------
-    # 跨 6 窗口验证最优 (sl=10%)，详见 MARTINGALE_RECENTER_VALIDATED_20260526.md
-    mart_grid_step: Decimal = Decimal("0.05")  # 每跌 5% 加一档
+    # 2026-05-27 rebaseline 为 B-config (参见 CROSS_WINDOW_REPORT_B_CONFIG)
+    # 跨 6 窗口 stress: W7 +29.38% / W3 -19.77% (alpha +44pp) / 2026-H1 +3.11%
+    mart_grid_step: Decimal = Decimal("0.04")  # 每跌 4% 加一档
     mart_factor: Decimal = Decimal("1.5")  # 每档加仓 ×1.5
     mart_max_layers: int = 5
-    mart_tp_pct: Decimal = Decimal("0.05")  # 平均成本 +5% 止盈
+    mart_tp_pct: Decimal = Decimal("0.04")  # 平均成本 +4% 止盈
     mart_sl_pct: Decimal = Decimal("0.10")  # 平均成本 -10% 止损
+    # factor-derived weights (canonical, NOT rounded — 防止 +25.32% 再现)
     mart_layer_weights: tuple = (
-        Decimal("0.0760"),
-        Decimal("0.1141"),
-        Decimal("0.1711"),
-        Decimal("0.2566"),
-        Decimal("0.3822"),
+        Decimal("0.07583"),
+        Decimal("0.11374"),
+        Decimal("0.17062"),
+        Decimal("0.25592"),
+        Decimal("0.38389"),
     )
     mart_fee_pct: Decimal = Decimal("0.0006")  # 0.04% taker + 0.02% slippage
 
@@ -284,6 +286,23 @@ class DgrBtcStrategyConfig:
             backtest_funding_interval_hours=int(
                 _get(["backtest", "funding_interval_hours"], 8)
             ),
+            # martingale 内核 (P11 修复: 之前漏映射，导致 yaml 改值不生效)
+            mart_grid_step=_D(_get(["martingale", "grid_step"]), Decimal("0.04")),
+            mart_factor=_D(_get(["martingale", "factor"]), Decimal("1.5")),
+            mart_max_layers=int(_get(["martingale", "max_layers"], 5)),
+            mart_tp_pct=_D(_get(["martingale", "tp_pct"]), Decimal("0.04")),
+            mart_sl_pct=_D(_get(["martingale", "sl_pct"]), Decimal("0.10")),
+            mart_layer_weights=tuple(
+                Decimal(str(w))
+                for w in (
+                    _get(
+                        ["martingale", "layer_weights"],
+                        [0.07583, 0.11374, 0.17062, 0.25592, 0.38389],
+                    )
+                    or []
+                )
+            ),
+            mart_fee_pct=_D(_get(["martingale", "fee_pct"]), Decimal("0.0006")),
         )
 
     def apply_overrides(self, overrides: dict | None) -> "DgrBtcStrategyConfig":
@@ -451,6 +470,26 @@ class DgrBtcStrategyConfig:
             if "max_daily_order_count" in ls:
                 kwargs["live_safety_max_daily_order_count"] = int(
                     ls["max_daily_order_count"]
+                )
+
+        # martingale (P11 修复: PATCH /config 也要支持热改)
+        m = overrides.get("martingale", {})
+        if isinstance(m, dict):
+            if "grid_step" in m:
+                kwargs["mart_grid_step"] = _D(m["grid_step"], self.mart_grid_step)
+            if "factor" in m:
+                kwargs["mart_factor"] = _D(m["factor"], self.mart_factor)
+            if "max_layers" in m:
+                kwargs["mart_max_layers"] = int(m["max_layers"])
+            if "tp_pct" in m:
+                kwargs["mart_tp_pct"] = _D(m["tp_pct"], self.mart_tp_pct)
+            if "sl_pct" in m:
+                kwargs["mart_sl_pct"] = _D(m["sl_pct"], self.mart_sl_pct)
+            if "fee_pct" in m:
+                kwargs["mart_fee_pct"] = _D(m["fee_pct"], self.mart_fee_pct)
+            if "layer_weights" in m and isinstance(m["layer_weights"], (list, tuple)):
+                kwargs["mart_layer_weights"] = tuple(
+                    Decimal(str(w)) for w in m["layer_weights"]
                 )
 
         return replace(self, **kwargs)
