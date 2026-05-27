@@ -61,6 +61,7 @@ def _run_paper_on_bars(df: pd.DataFrame, tmp_path) -> tuple[dict, Decimal, Decim
 
     # 显式对齐 _engine_config() (测 byte-equal，不依赖默认值)
     cfg = DgrBtcStrategyConfig(
+        total_capital_usdt=Decimal("10000"),
         mart_grid_step=Decimal("0.05"),
         mart_factor=Decimal("1.5"),
         mart_max_layers=5,
@@ -152,6 +153,7 @@ def test_paper_state_serialization_round_trip_matches_backtest(tmp_path):
     os.environ["DGR_BTC_STATE_DIR"] = str(tmp_path)
     # 显式对齐 _engine_config() A baseline
     cfg = DgrBtcStrategyConfig(
+        total_capital_usdt=Decimal("10000"),
         mart_grid_step=Decimal("0.05"),
         mart_factor=Decimal("1.5"),
         mart_max_layers=5,

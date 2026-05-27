@@ -110,20 +110,20 @@ class DgrBtcStrategyConfig:
     backtest_funding_interval_hours: int = 8
 
     # ---------- Martingale 新内核 (P4 引入, P6 yaml schema 重写) ----------
-    # 2026-05-27 rebaseline 为 B-config (参见 CROSS_WINDOW_REPORT_B_CONFIG)
-    # 跨 6 窗口 stress: W7 +29.38% / W3 -19.77% (alpha +44pp) / 2026-H1 +3.11%
-    mart_grid_step: Decimal = Decimal("0.04")  # 每跌 4% 加一档
+    # 2026-05-27 升级为 4L-asymmetric: grid 5% / tp 4% / 4 层
+    # W7 +36.61% / W3 -20.27% / W1 LUNA -25.57% / avg DD -30.87%
+    # tp < grid 的 asymmetry: 跌 5% 才加层, 反弹 4% 即 TP -> 高频锁利
+    mart_grid_step: Decimal = Decimal("0.05")  # 每跌 5% 加一档
     mart_factor: Decimal = Decimal("1.5")  # 每档加仓 ×1.5
-    mart_max_layers: int = 5
-    mart_tp_pct: Decimal = Decimal("0.04")  # 平均成本 +4% 止盈
+    mart_max_layers: int = 4
+    mart_tp_pct: Decimal = Decimal("0.04")  # 平均成本 +4% 止盈 (tp < grid)
     mart_sl_pct: Decimal = Decimal("0.10")  # 平均成本 -10% 止损
-    # factor-derived weights (canonical, NOT rounded — 防止 +25.32% 再现)
+    # factor-derived weights (4 层, canonical)
     mart_layer_weights: tuple = (
-        Decimal("0.07583"),
-        Decimal("0.11374"),
-        Decimal("0.17062"),
-        Decimal("0.25592"),
-        Decimal("0.38389"),
+        Decimal("0.12308"),
+        Decimal("0.18462"),
+        Decimal("0.27692"),
+        Decimal("0.41538"),
     )
     mart_fee_pct: Decimal = Decimal("0.0006")  # 0.04% taker + 0.02% slippage
 
