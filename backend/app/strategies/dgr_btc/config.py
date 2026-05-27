@@ -37,7 +37,9 @@ class DgrBtcStrategyConfig:
     exchange: str = "binance"
 
     # ---------- 资金（paper 起步 $10k = doc $100k / 10）----------
-    total_capital_usdt: Decimal = Decimal("200000")  # 2026-05-27 2× scale (200k 名义, 20k 抵押 @10x)
+    # NOTE: 默认 = test_defaults_match_spec 期望的 paper $10k。
+    # 实际部署值由 yaml.capital.total_usdt 覆盖（生产现为 $200,000 名义 / $20k 抵押 @ 10x）
+    total_capital_usdt: Decimal = Decimal("10000")
     spot_initial_btc: Decimal = Decimal("0.05")
     short_initial_btc: Decimal = Decimal("0.05")
     reserve_ratio: Decimal = Decimal("0.2")
