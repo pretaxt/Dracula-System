@@ -216,27 +216,38 @@ def compare_states(
             return Decimal("100") if b != 0 else Decimal("0")
         return abs((b - a) / a) * Decimal("100")
 
-    # cycle_id, n_tp, n_sl: 整数差异
+    # cycle_id, n_tp, n_sl, n_layers: 整数差异
     if expected.cycle_id != actual.cycle_id:
         diffs.append(f"周期 ID 不一致 预期={expected.cycle_id} 实际={actual.cycle_id}")
     if abs(expected.n_tp - actual.n_tp) > 0:
         diffs.append(f"止盈次数不一致 预期={expected.n_tp} 实际={actual.n_tp}")
     if abs(expected.n_sl - actual.n_sl) > 0:
         diffs.append(f"止损次数不一致 预期={expected.n_sl} 实际={actual.n_sl}")
+    if expected.n_layers != actual.n_layers:
+        diffs.append(f"持仓层数不一致 预期={expected.n_layers} 实际={actual.n_layers}")
 
-    # cash: % 差异
-    exp_cash = Decimal(expected.cash)
-    act_cash = Decimal(actual.cash)
-    cash_pct = pct_diff(exp_cash, act_cash)
-    if cash_pct > threshold_pct:
-        diffs.append(f"现金偏差 {cash_pct:.2f}% 预期=${exp_cash:.2f} 实际=${act_cash:.2f}")
+    # 持仓 BTC 数量偏差 (取代旧 cash 偏差; cash 字段语义在 expected/actual 中不一致)
+    exp_qty = Decimal(expected.total_qty)
+    act_qty = Decimal(actual.total_qty)
+    qty_diff_abs = abs(act_qty - exp_qty)
+    # 容差: 0.001 BTC 或 10% 取大
+    if qty_diff_abs > Decimal("0.001") and pct_diff(exp_qty, act_qty) > threshold_pct:
+        diffs.append(f"持仓 BTC 数量偏差 {qty_diff_abs:.5f} 预期={exp_qty:.5f} 实际={act_qty:.5f}")
+
+    # 平均成本偏差 (持仓时才比)
+    if exp_qty > 0 and act_qty > 0:
+        exp_avg = Decimal(expected.avg_cost)
+        act_avg = Decimal(actual.avg_cost)
+        avg_pct = pct_diff(exp_avg, act_avg)
+        if avg_pct > threshold_pct:
+            diffs.append(f"平均成本偏差 {avg_pct:.2f}% 预期=${exp_avg:,.2f} 实际=${act_avg:,.2f}")
 
     # realized_pnl: 绝对 USDT 差异 (容差 $5 或 10% 取大)
     exp_pnl = Decimal(expected.realized_pnl)
     act_pnl = Decimal(actual.realized_pnl)
     pnl_diff_abs = abs(act_pnl - exp_pnl)
     if pnl_diff_abs > Decimal("5") and pct_diff(exp_pnl, act_pnl) > threshold_pct:
-        diffs.append(f"已实现盈亏偏差 ${pnl_diff_abs:.2f} 预期=${exp_pnl:.2f} 实际=${act_pnl:.2f}")
+        diffs.append(f"已实现盈亏偏差 ${pnl_diff_abs:,.2f} 预期=${exp_pnl:,.2f} 实际=${act_pnl:,.2f}")
 
     return (len(diffs) > 0, diffs)
 
@@ -300,16 +311,20 @@ async def main() -> int:
     runner_replay = MartingaleBacktestRunner(cfg)
     result = runner_replay.run(df, init_state=y_state, init_cash=y_cash)
 
+    # 直接读 backtest_runner 暴露的 final_state + final_cash (P11 改造):
+    # 不再用 final_equity 假装当 cash, 不再写 n_layers=0 / total_qty=0 占位.
+    # 现在 expected 跟 actual 字段语义对齐, 可做真实 apples-to-apples 对比.
+    final_state = result.final_state
     expected_snap = StateSnapshot(
         ts=actual_snap.ts,
-        cycle_id=y_snap.cycle_id + result.n_cycles,
-        n_layers=0,  # 终态不一定保留 layers，简化
-        avg_cost="0",
-        total_qty="0",
-        cash=str(result.final_equity),
-        n_tp=y_snap.n_tp + result.n_tp,
-        n_sl=y_snap.n_sl + result.n_sl,
-        realized_pnl=str(Decimal(y_snap.realized_pnl) + (result.final_equity - y_cash)),
+        cycle_id=final_state.cycle_id,
+        n_layers=final_state.n_layers,
+        avg_cost=str(final_state.avg_cost),
+        total_qty=str(final_state.total_qty),
+        cash=str(result.final_cash),
+        n_tp=final_state.n_tp,
+        n_sl=final_state.n_sl,
+        realized_pnl=str(final_state.realized_pnl_usdt),
     )
 
     # 对比

@@ -59,6 +59,9 @@ class BacktestResult:
     max_layer_hit: int
     max_drawdown_pct: Decimal
     equity_curve: List[EquityPoint] = field(default_factory=list)
+    # 终态 (P11 mirror_check 需要用真实 layers / qty / avg 做对比, 不再用 final_equity 当 cash)
+    final_state: Optional[StrategyState] = None
+    final_cash: Decimal = field(default_factory=lambda: Decimal("0"))
 
     def summary(self) -> dict:
         return {
@@ -175,6 +178,8 @@ class MartingaleBacktestRunner:
             max_layer_hit=max_layer_hit,
             max_drawdown_pct=max_dd_pct,
             equity_curve=equity_curve,
+            final_state=state,
+            final_cash=cash,
         )
 
     # ─── 内部 fill 模拟（与 W7 参考脚本完全一致） ───
