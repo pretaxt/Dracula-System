@@ -261,22 +261,30 @@ class DgrBtcPaperSession:
             except Exception:
                 logger.exception("dgr_btc_inflight_reconcile_failed")
 
-        # §6.2 #4: LIVE 模式启动 alert watcher (paper 模式无 broker_adapter, 无 metrics)
-        if self.live_mode and self._broker_adapter is not None:
-            try:
-                from app.strategies.dgr_btc.live_metrics import run_alert_watcher  # noqa: PLC0415
-                instance = getattr(self._broker_adapter, "instance_name", "dgr_btc")
+        # §6.2 #4 (round 2 audit arch): metrics 采集 + alert watcher
+        # paper 也启用 — 让 paper 90d 验证期能用同样的 metrics dashboard, 三维 mirror 补齐
+        try:
+            from app.strategies.dgr_btc.live_metrics import (  # noqa: PLC0415
+                get_collector, run_alert_watcher,
+            )
+            instance_name = "dgr_btc_paper" if not self.live_mode else "dgr_btc_live"
+            self._metrics_collector = get_collector(instance_name)
+            # LIVE 模式启动告警 watcher; paper 不启 (paper 合成数据永远 maker=True 不会告警)
+            if self.live_mode and self._broker_adapter is not None:
                 self._metrics_alert_task = asyncio.create_task(
                     run_alert_watcher(
-                        instance_name=instance,
+                        instance_name=instance_name,
                         poll_interval_sec=60.0,
                         telegram_enabled=self.cfg.live_safety_telegram_alerts_enabled,
                     ),
-                    name=f"dgr_btc_metrics_alert_watcher_{instance}",
+                    name=f"dgr_btc_metrics_alert_watcher_{instance_name}",
                 )
-                logger.info("dgr_btc_metrics_alert_watcher_spawned instance=%s", instance)
-            except Exception:
-                logger.exception("dgr_btc_metrics_alert_watcher_spawn_failed")
+                logger.info("dgr_btc_metrics_alert_watcher_spawned instance=%s", instance_name)
+            else:
+                logger.info("dgr_btc_metrics_collector_paper_mode instance=%s", instance_name)
+        except Exception:
+            logger.exception("dgr_btc_metrics_init_failed")
+            self._metrics_collector = None
 
         self._running = True
 
@@ -543,6 +551,8 @@ class DgrBtcPaperSession:
                     self._state, d, fill.price, fill.qty, fill.cost_or_proceeds,
                 )
                 self._n_trades_executed += 1
+                # §6.2 #4 (round 2): metrics record — paper 合成 maker=True/latency=10ms, LIVE 真值
+                self._record_metric_buy(fill)
                 logger.info(
                     "dgr_btc_%s_BUY layer=%d fill_px=%s qty=%s stake=%s reason=%s",
                     mode_label, d.layer_index, fill.price, fill.qty,
@@ -584,6 +594,7 @@ class DgrBtcPaperSession:
                     self._state, d, fill.price, fill.qty, fill.cost_or_proceeds,
                 )
                 self._n_trades_executed += 1
+                self._record_metric_unwind(fill, action)
                 logger.info(
                     "dgr_btc_%s_%s_SELL fill_px=%s qty=%s proceeds=%s reason=%s",
                     mode_label, action, fill.price, fill.qty,
@@ -793,6 +804,32 @@ class DgrBtcPaperSession:
                 )
         except Exception:
             logger.exception("dgr_btc_margin_blind_kill_failed")
+
+    # ──────────────────── §6.2 #4 metrics helpers (round 2 audit arch) ────────────────────
+
+    def _record_metric_buy(self, fill: Any) -> None:
+        """记录 BUY fill 到 metrics collector. paper 合成 maker=True/latency=10ms."""
+        if not getattr(self, "_metrics_collector", None):
+            return
+        try:
+            latency_ms = 10.0 if not self.live_mode else getattr(fill, "latency_ms", 50.0)
+            self._metrics_collector.record_maker_outcome(
+                market="SPOT", side="BUY", outcome="filled", latency_ms=latency_ms,
+            )
+        except Exception:
+            logger.debug("metrics_record_buy_failed", exc_info=True)
+
+    def _record_metric_unwind(self, fill: Any, action: str) -> None:
+        """记录 TP/SL/KILL_FLAT/PRE_LIQ unwind 到 metrics collector."""
+        if not getattr(self, "_metrics_collector", None):
+            return
+        try:
+            latency_ms = 10.0 if not self.live_mode else getattr(fill, "latency_ms", 50.0)
+            self._metrics_collector.record_unwind_outcome(
+                market="SPOT", side="SELL", latency_ms=latency_ms,
+            )
+        except Exception:
+            logger.debug("metrics_record_unwind_failed", exc_info=True)
 
     # ──────────────────── B3 KILL flat-on-trigger (round 2 audit risk) ────────────────────
 

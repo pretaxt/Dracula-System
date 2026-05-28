@@ -1014,6 +1014,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "dgr_btc_runtime_overrides_loaded",
                     keys=list(_dgr_runtime.keys()),
                 )
+                # round 2 audit arch: yaml SoT 治理
+                # 检测 yaml 字段被 overrides.json 覆盖 → WARN log (不阻塞启动)
+                # 提醒运维: 改 yaml 不一定生效, overrides.json 才是 SoT
+                _ov_keys_topl = set()
+                for _k in _dgr_runtime.keys():
+                    if _k in _dgr_yaml or (
+                        isinstance(_dgr_runtime.get(_k), dict)
+                        and _k in _dgr_yaml
+                    ):
+                        _ov_keys_topl.add(_k)
+                if _ov_keys_topl:
+                    logger.warning(
+                        "dgr_btc_yaml_overridden_by_overrides_json",
+                        overridden_keys=sorted(_ov_keys_topl),
+                        note="overrides.json is SoT for these keys. yaml-only edits will be silently ignored.",
+                    )
             _dgr_live_mode = _dgr_cfg.live_mode
             dgr_btc_paper_session = DgrBtcPaperSession(
                 cfg=_dgr_cfg,

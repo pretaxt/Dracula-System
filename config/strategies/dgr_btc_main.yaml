@@ -1,4 +1,12 @@
 # 策略 #13 v2 — Martingale + Recenter + Stop Loss (单边做多 BTC)
+#
+# ⚠️ Source of Truth 规则 (round 2 audit arch):
+#   - 此 yaml 是策略 **默认配置 (immutable defaults)**
+#   - **运行时调参一律走 PATCH /api/v1/strategies/dgr-btc/config**, 写入 overrides.json
+#   - host 手改此 yaml 后 scp 部署会被覆盖! (已发生过事故)
+#   - main.py 启动检测 overrides.json 覆盖了哪些 yaml 字段会 WARN log
+#   - 想知道运行时实际 effective 值: GET /api/v1/strategies/dgr-btc/config
+#
 # Revamp 2026-05-26: paired_inverse spot+perp hedge → single-side long martingale
 #
 # 跨 6 窗口验证最优 (MARTINGALE_RECENTER_VALIDATED_20260526.md):
