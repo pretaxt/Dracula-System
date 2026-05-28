@@ -77,12 +77,18 @@ def _run_paper_on_bars(df: pd.DataFrame, tmp_path) -> tuple[dict, Decimal, Decim
         live_mode=False,
     )
 
-    # 逐 bar 喂 (price, low)
-    for _, row in df.iterrows():
-        price = Decimal(str(row["close"]))
-        low = Decimal(str(row["low"]))
-        session._last_spot_px = price
-        session._process_decisions(price, low)
+    # 逐 bar 喂 (price, low) —— §6.2 #1 后 _process_decisions 为 async,
+    # 用单个 event loop 跑完整段, 避免每 bar 开新 loop 的开销.
+    import asyncio as _asyncio
+    loop = _asyncio.new_event_loop()
+    try:
+        for _, row in df.iterrows():
+            price = Decimal(str(row["close"]))
+            low = Decimal(str(row["low"]))
+            session._last_spot_px = price
+            loop.run_until_complete(session._process_decisions(price, low))
+    finally:
+        loop.close()
 
     # 计算 final equity (与 backtest_runner 同公式)
     last_price = Decimal(str(df["close"].iloc[-1]))
@@ -167,27 +173,35 @@ def test_paper_state_serialization_round_trip_matches_backtest(tmp_path):
     df_first = df.iloc[:mid].copy()
     df_second = df.iloc[mid:].copy()
 
+    import asyncio
     s1 = DgrBtcPaperSession(cfg=cfg, adapter=None, tick_interval_seconds=0.01, live_mode=False)
-    for _, row in df_first.iterrows():
-        price = Decimal(str(row["close"]))
-        low = Decimal(str(row["low"]))
-        s1._last_spot_px = price
-        s1._process_decisions(price, low)
+    loop1 = asyncio.new_event_loop()
+    try:
+        for _, row in df_first.iterrows():
+            price = Decimal(str(row["close"]))
+            low = Decimal(str(row["low"]))
+            s1._last_spot_px = price
+            loop1.run_until_complete(s1._process_decisions(price, low))
+    finally:
+        loop1.close()
     s1._persist_state()
     state_file = s1._state_file
     assert state_file.exists()
 
     # 新 session, restore, 继续后半
-    import asyncio
     s2 = DgrBtcPaperSession(cfg=cfg, adapter=None, tick_interval_seconds=0.01, live_mode=False)
     restored = asyncio.run(s2._try_restore_state())
     assert restored, "state restore failed"
 
-    for _, row in df_second.iterrows():
-        price = Decimal(str(row["close"]))
-        low = Decimal(str(row["low"]))
-        s2._last_spot_px = price
-        s2._process_decisions(price, low)
+    loop2 = asyncio.new_event_loop()
+    try:
+        for _, row in df_second.iterrows():
+            price = Decimal(str(row["close"]))
+            low = Decimal(str(row["low"]))
+            s2._last_spot_px = price
+            loop2.run_until_complete(s2._process_decisions(price, low))
+    finally:
+        loop2.close()
 
     # 比对最终
     assert s2._state.n_tp == bt.n_tp

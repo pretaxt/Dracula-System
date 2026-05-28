@@ -33,6 +33,7 @@ from app.strategies.dgr_btc.engine import (
     MartingaleEngine,
     StrategyState,
 )
+from app.strategies.dgr_btc.execution_adapter import BacktestBroker
 
 
 _ZERO = Decimal("0")
@@ -90,6 +91,9 @@ class MartingaleBacktestRunner:
     def __init__(self, config: EngineConfig):
         self.engine = MartingaleEngine(config)
         self.cfg = config
+        # §6.2 #1: 经 BacktestBroker 路径计算 fill (与 paper / LIVE 同抽象),
+        # 内部仍 sync (sync_place_buy / sync_place_unwind_sell) 不引 async 开销.
+        self._broker = BacktestBroker(self.engine)
 
     def run(
         self,
@@ -185,7 +189,7 @@ class MartingaleBacktestRunner:
     # ─── 内部 fill 模拟（与 W7 参考脚本完全一致） ───
 
     def _handle_add_layer(self, state, decision: Decision, cash: Decimal) -> tuple[Decimal, Decimal]:
-        """ADD_LAYER fill: 计算 effective price + btc qty, 扣 cash, apply_fill.
+        """ADD_LAYER fill via BacktestBroker (§6.2 #1).
 
         Returns (new_cash, fill_qty)
         """
@@ -195,14 +199,14 @@ class MartingaleBacktestRunner:
         if stake <= _ZERO:
             return cash, _ZERO
 
-        fill_px, qty = self.engine.compute_fill_qty_buy(stake, decision.target_price)
-        new_cash = cash - stake
-        self.engine.apply_fill(state, decision, fill_px, qty, stake)
-        return new_cash, qty
+        fill = self._broker.sync_place_buy(decision.target_price, stake)
+        new_cash = cash - fill.cost_or_proceeds
+        self.engine.apply_fill(state, decision, fill.price, fill.qty, fill.cost_or_proceeds)
+        return new_cash, fill.qty
 
     def _handle_exit(self, state, decision: Decision, cash: Decimal) -> Decimal:
-        """TP/SL fill: 计算 proceeds, 加 cash, apply_fill."""
-        proceeds = self.engine.compute_proceeds_sell(state.total_qty, decision.target_price)
-        new_cash = cash + proceeds
-        self.engine.apply_fill(state, decision, decision.target_price, state.total_qty, proceeds)
+        """TP/SL fill via BacktestBroker."""
+        fill = self._broker.sync_place_unwind_sell(state.total_qty, decision.target_price)
+        new_cash = cash + fill.cost_or_proceeds
+        self.engine.apply_fill(state, decision, fill.price, fill.qty, fill.cost_or_proceeds)
         return new_cash

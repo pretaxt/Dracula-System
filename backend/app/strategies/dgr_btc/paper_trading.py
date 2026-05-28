@@ -33,6 +33,13 @@ from app.strategies.dgr_btc.engine import (
     MartingaleEngine,
     StrategyState,
 )
+from app.strategies.dgr_btc.execution_adapter import (
+    BrokerError,
+    ExecutionAdapter,
+    FillResult,
+    LiveBroker,
+    PaperBroker,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -146,6 +153,14 @@ class DgrBtcPaperSession:
         self._engine = MartingaleEngine(self._build_engine_config())
         self._state = StrategyState()
         self._cash: Decimal = cfg.total_capital_usdt
+
+        # §6.2 #1: ExecutionAdapter — paper/LIVE 单分支入口.
+        # LIVE 模式需 broker_adapter; paper 模式合成 fill.
+        self._broker: ExecutionAdapter
+        if live_mode and broker_adapter is not None:
+            self._broker = LiveBroker(broker_adapter, self._engine.cfg.fee_pct)
+        else:
+            self._broker = PaperBroker(self._engine)
 
         # Compat layer
         self.strategy = _MartingaleStrategyView(self._state, self._engine, cfg)
@@ -425,11 +440,8 @@ class DgrBtcPaperSession:
                 return  # 拉价完全失败跳过 tick
 
         self._last_spot_px = close
-        # P1 修复 (Codex critical): LIVE 走 broker, paper 走 synthetic
-        if self.live_mode and self._broker_adapter is not None:
-            await self._process_decisions_live(close, low)
-        else:
-            self._process_decisions(close, low)
+        # §6.2 #1: 单分支 — broker 已封装 paper synthetic / LIVE binance 差异
+        await self._process_decisions(close, low)
         # 保证金健康监控 (杠杆 > 1 时启用, 跨阈值告警)
         try:
             self._check_margin_health(close, alert=True)
@@ -446,12 +458,17 @@ class DgrBtcPaperSession:
         except Exception:
             logger.exception("dgr_btc_paper_persist_failed")
 
-    def _process_decisions(self, price: Decimal, low: Decimal) -> None:
-        """核心决策循环 (sync, 不含 IO)，与 MartingaleBacktestRunner 同形。
+    async def _process_decisions(self, price: Decimal, low: Decimal) -> None:
+        """核心决策循环 (async, 单分支)，与 MartingaleBacktestRunner 同形。
 
-        被 _tick() 调用 (LIVE/paper, low=price 简化)
-        也可被 mirror test 调用 (传 bar 真实 low) 验证 LIVE/backtest 等价。
+        §6.2 #1 revamp: paper / LIVE 共用此环, broker 抽象隔离 IO 细节.
+          - paper / backtest: self._broker = PaperBroker → 合成 fill, never fails
+          - LIVE: self._broker = LiveBroker → 调真实 binance broker_adapter
+        失败 (BrokerError) 一致 fail-closed: log + break, 不 apply_fill, 下 tick 重试.
+
+        Mirror test 仍可调此方法 (asyncio.run 包) 验证 paper ≡ backtest 等价.
         """
+        mode_label = "LIVE" if self.live_mode else "paper"
         for _ in range(self._engine.cfg.max_layers + 3):
             d = self._engine.decide(self._state, price, low)
             if d.kind == DecisionKind.NOOP:
@@ -463,136 +480,41 @@ class DgrBtcPaperSession:
                     stake = self._cash
                 if stake <= _ZERO:
                     break
-                fill_px, qty = self._engine.compute_fill_qty_buy(stake, d.target_price)
-                self._cash -= stake
-                self._engine.apply_fill(self._state, d, fill_px, qty, stake)
-                self._n_trades_executed += 1
-                logger.info(
-                    "dgr_btc_paper_BUY layer=%d price=%s qty=%s stake=%s reason=%s",
-                    d.layer_index, fill_px, qty, stake, d.reason,
-                )
-                # 追加到 trades jsonl (append-only ledger)
-                self._append_trade_jsonl({
-                    "action": "BUY",
-                    "layer_index": d.layer_index,
-                    "fill_price": str(fill_px),
-                    "qty": str(qty),
-                    "stake": str(stake),
-                    "target_price": str(d.target_price),
-                    "reason": d.reason,
-                })
-                # 推送 fill 表 (telegram + log)
-                header = (
-                    f"🟢 dgr_btc BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
-                    f"成交: {qty:.5f} BTC | 投入 ${stake:,.2f}"
-                )
-                self._send_fill_snapshot(header)
-
-            elif d.kind in (DecisionKind.TAKE_PROFIT, DecisionKind.STOP_LOSS):
-                # capture pre-fill state for P&L calc
-                pre_cost = self._state.total_cost
-                pre_qty = self._state.total_qty
-                pre_avg = self._state.avg_cost
-                proceeds = self._engine.compute_proceeds_sell(self._state.total_qty, d.target_price)
-                qty = self._state.total_qty
-                self._cash += proceeds
-                self._engine.apply_fill(self._state, d, d.target_price, qty, proceeds)
-                self._n_trades_executed += 1
-                action = "TP" if d.kind == DecisionKind.TAKE_PROFIT else "SL"
-                logger.info(
-                    "dgr_btc_paper_%s_SELL qty=%s proceeds=%s reason=%s",
-                    action, qty, proceeds, d.reason,
-                )
-                # 推送 cycle close 表
-                pnl = proceeds - pre_cost
-                pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
-                # 追加到 trades jsonl (append-only ledger)
-                self._append_trade_jsonl({
-                    "action": action,
-                    "fill_price": str(d.target_price),
-                    "qty": str(qty),
-                    "proceeds": str(proceeds),
-                    "pre_avg": str(pre_avg),
-                    "pre_qty": str(pre_qty),
-                    "pre_cost": str(pre_cost),
-                    "pnl": str(pnl),
-                    "pnl_pct": str(pnl_pct),
-                    "target_price": str(d.target_price),
-                    "reason": d.reason,
-                })
-                emoji = "💰" if action == "TP" else "🔴"
-                header = (
-                    f"{emoji} dgr_btc {action} cycle {self._state.cycle_id - 1} closed\n"
-                    f"卖出: {pre_qty:.5f} BTC @ ${d.target_price:,.2f}\n"
-                    f"avg ${pre_avg:,.2f} → 毛收入 ${proceeds:,.2f}\n"
-                    f"净 P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
-                )
-                self._send_fill_snapshot(header)
-                break
-
-    # ──────────────────── LIVE broker 分支 (P1 修复) ────────────────────
-
-    async def _process_decisions_live(self, price: Decimal, low: Decimal) -> None:
-        """LIVE 决策环: 调 broker_adapter 实际下单, broker 确认 fill 后才 apply_fill.
-
-        与 _process_decisions (paper synthetic) 同形, 但每个决策走真实 broker:
-          - ADD_LAYER: broker.place_limit_maker (SPOT, BUY) at target_price
-          - TP/SL: broker.place_market_unwind (SPOT, SELL) total_qty
-          - broker reject/timeout → 不 apply_fill (fail-closed), 让下一 tick 重试
-          - 单次 tick 内最多处理 max_layers+3 个决策 (与 paper 同)
-        """
-        from app.strategies.dgr_btc.types import MarketType, Side  # noqa: PLC0415
-
-        for _ in range(self._engine.cfg.max_layers + 3):
-            d = self._engine.decide(self._state, price, low)
-            if d.kind == DecisionKind.NOOP:
-                break
-
-            if d.kind == DecisionKind.ADD_LAYER:
-                stake = d.stake_usdt
-                if self._cash < stake:
-                    stake = self._cash
-                if stake <= _ZERO:
-                    break
-                # 估算 qty (broker 实际成交可能小幅偏移; 用 target 估)
-                est_qty = stake / d.target_price
                 try:
-                    trade = await self._broker_adapter.place_limit_maker(
-                        MarketType.SPOT, Side.BUY,
-                        price=d.target_price, quantity=est_qty,
-                        no_wait=False,  # 等成交确认
+                    fill = await self._broker.place_buy(
+                        d.layer_index, d.target_price, stake,
                     )
-                except Exception as e:
+                except BrokerError as e:
                     logger.warning(
-                        "dgr_btc_live_buy_reject layer=%d price=%s reason=%s",
-                        d.layer_index, d.target_price, str(e)[:120],
+                        "dgr_btc_%s_buy_reject layer=%d target=%s reason=%s",
+                        mode_label, d.layer_index, d.target_price, str(e)[:120],
                     )
-                    break  # fail-closed: 不 apply, 不前进
-                # broker 返回真实 fill_price + qty (扣过 binance fee)
-                fill_px = Decimal(str(getattr(trade, "price", d.target_price)))
-                qty = Decimal(str(getattr(trade, "quantity", est_qty)))
-                actual_stake = fill_px * qty * (Decimal("1") + self._engine.cfg.fee_pct)
-                self._cash -= actual_stake
-                self._engine.apply_fill(self._state, d, fill_px, qty, actual_stake)
+                    break  # fail-closed
+                self._cash -= fill.cost_or_proceeds
+                self._engine.apply_fill(
+                    self._state, d, fill.price, fill.qty, fill.cost_or_proceeds,
+                )
                 self._n_trades_executed += 1
                 logger.info(
-                    "dgr_btc_LIVE_BUY layer=%d fill_px=%s qty=%s stake=%s",
-                    d.layer_index, fill_px, qty, actual_stake,
+                    "dgr_btc_%s_BUY layer=%d fill_px=%s qty=%s stake=%s reason=%s",
+                    mode_label, d.layer_index, fill.price, fill.qty,
+                    fill.cost_or_proceeds, d.reason,
                 )
-                # 追加到 trades jsonl (LIVE 真实成交 ledger)
-                self._append_trade_jsonl({
+                jsonl_record: dict[str, Any] = {
                     "action": "BUY",
                     "layer_index": d.layer_index,
-                    "fill_price": str(fill_px),
-                    "qty": str(qty),
-                    "stake": str(actual_stake),
+                    "fill_price": str(fill.price),
+                    "qty": str(fill.qty),
+                    "stake": str(fill.cost_or_proceeds),
                     "target_price": str(d.target_price),
-                    "broker_order_id": str(getattr(trade, "id", None) or getattr(trade, "order_id", None) or ""),
                     "reason": d.reason,
-                })
+                }
+                if fill.broker_order_id:
+                    jsonl_record["broker_order_id"] = fill.broker_order_id
+                self._append_trade_jsonl(jsonl_record)
                 header = (
-                    f"🟢 dgr_btc LIVE BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
-                    f"成交: {qty:.5f} BTC | 投入 ${actual_stake:,.2f}"
+                    f"🟢 dgr_btc {mode_label} BUY L{d.layer_index} @ ${fill.price:,.2f}\n"
+                    f"成交: {fill.qty:.5f} BTC | 投入 ${fill.cost_or_proceeds:,.2f}"
                 )
                 self._send_fill_snapshot(header)
 
@@ -600,51 +522,48 @@ class DgrBtcPaperSession:
                 pre_cost = self._state.total_cost
                 pre_qty = self._state.total_qty
                 pre_avg = self._state.avg_cost
-                try:
-                    trade = await self._broker_adapter.place_market_unwind(
-                        MarketType.SPOT, Side.SELL, quantity=pre_qty,
-                    )
-                except Exception as e:
-                    action = "TP" if d.kind == DecisionKind.TAKE_PROFIT else "SL"
-                    logger.error(
-                        "dgr_btc_LIVE_%s_FAIL qty=%s reason=%s",
-                        action, pre_qty, str(e)[:120],
-                    )
-                    break  # fail-closed: 不清仓, 下一 tick 重试
-                # broker 真实成交价 + 扣费后 proceeds
-                fill_px = Decimal(str(getattr(trade, "price", d.target_price)))
-                actual_qty = Decimal(str(getattr(trade, "quantity", pre_qty)))
-                proceeds = fill_px * actual_qty * (Decimal("1") - self._engine.cfg.fee_pct)
-                self._cash += proceeds
-                self._engine.apply_fill(self._state, d, fill_px, actual_qty, proceeds)
-                self._n_trades_executed += 1
                 action = "TP" if d.kind == DecisionKind.TAKE_PROFIT else "SL"
-                logger.info(
-                    "dgr_btc_LIVE_%s_SELL fill_px=%s qty=%s proceeds=%s",
-                    action, fill_px, actual_qty, proceeds,
+                try:
+                    fill = await self._broker.place_unwind_sell(pre_qty, d.target_price)
+                except BrokerError as e:
+                    logger.error(
+                        "dgr_btc_%s_%s_FAIL qty=%s reason=%s",
+                        mode_label, action, pre_qty, str(e)[:120],
+                    )
+                    break  # fail-closed
+                self._cash += fill.cost_or_proceeds
+                self._engine.apply_fill(
+                    self._state, d, fill.price, fill.qty, fill.cost_or_proceeds,
                 )
-                pnl = proceeds - pre_cost
+                self._n_trades_executed += 1
+                logger.info(
+                    "dgr_btc_%s_%s_SELL fill_px=%s qty=%s proceeds=%s reason=%s",
+                    mode_label, action, fill.price, fill.qty,
+                    fill.cost_or_proceeds, d.reason,
+                )
+                pnl = fill.cost_or_proceeds - pre_cost
                 pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
-                # 追加到 trades jsonl (LIVE 真实平仓 ledger)
-                self._append_trade_jsonl({
+                jsonl_record = {
                     "action": action,
-                    "fill_price": str(fill_px),
-                    "qty": str(actual_qty),
-                    "proceeds": str(proceeds),
+                    "fill_price": str(fill.price),
+                    "qty": str(fill.qty),
+                    "proceeds": str(fill.cost_or_proceeds),
                     "pre_avg": str(pre_avg),
                     "pre_qty": str(pre_qty),
                     "pre_cost": str(pre_cost),
                     "pnl": str(pnl),
                     "pnl_pct": str(pnl_pct),
                     "target_price": str(d.target_price),
-                    "broker_order_id": str(getattr(trade, "id", None) or getattr(trade, "order_id", None) or ""),
                     "reason": d.reason,
-                })
+                }
+                if fill.broker_order_id:
+                    jsonl_record["broker_order_id"] = fill.broker_order_id
+                self._append_trade_jsonl(jsonl_record)
                 emoji = "💰" if action == "TP" else "🔴"
                 header = (
-                    f"{emoji} dgr_btc LIVE {action} cycle {self._state.cycle_id - 1} closed\n"
-                    f"卖出: {actual_qty:.5f} BTC @ ${fill_px:,.2f}\n"
-                    f"avg ${pre_avg:,.2f} → proceeds ${proceeds:,.2f}\n"
+                    f"{emoji} dgr_btc {mode_label} {action} cycle {self._state.cycle_id - 1} closed\n"
+                    f"卖出: {fill.qty:.5f} BTC @ ${fill.price:,.2f}\n"
+                    f"avg ${pre_avg:,.2f} → proceeds ${fill.cost_or_proceeds:,.2f}\n"
                     f"净 P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
                 )
                 self._send_fill_snapshot(header)

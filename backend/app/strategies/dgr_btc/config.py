@@ -11,6 +11,9 @@ vs HedgedGridStrategyConfig 关键增量:
 
 不可变模式: apply_overrides() 返回新副本。
 不 import hedged_grid 任何代码（完全独立）。
+
+§6.2 #1: from_yaml() / apply_overrides() 出口调 validate() 跑 pydantic schema
+校验, 阻挡单位 / 范围错误 (见 config_schema.py).
 """
 from __future__ import annotations
 
@@ -142,11 +145,20 @@ class DgrBtcStrategyConfig:
     # yaml 加载
     # ------------------------------------------------------------------
 
+    def validate(self) -> "DgrBtcStrategyConfig":
+        """Pydantic schema sanity (单位 / 范围). 失败 raise ValidationError.
+
+        Called by from_yaml() and apply_overrides() to fail-fast on bad config.
+        Returns self on success (chainable).
+        """
+        from app.strategies.dgr_btc.config_schema import validate_strategy_config  # noqa: PLC0415
+        return validate_strategy_config(self)
+
     @classmethod
     def from_yaml(cls, yaml_data: dict | None) -> "DgrBtcStrategyConfig":
         """从 yaml dict 构造（dgr_btc_main.yaml schema）。"""
         if not yaml_data:
-            return cls()
+            return cls().validate()
         d = yaml_data
 
         def _D(v, default):
@@ -323,7 +335,7 @@ class DgrBtcStrategyConfig:
                 )
             ),
             mart_fee_pct=_D(_get(["martingale", "fee_pct"]), Decimal("0.0006")),
-        )
+        ).validate()
 
     def apply_overrides(self, overrides: dict | None) -> "DgrBtcStrategyConfig":
         """从 runtime override dict 生成新副本（不可变模式）。
@@ -512,4 +524,4 @@ class DgrBtcStrategyConfig:
                     Decimal(str(w)) for w in m["layer_weights"]
                 )
 
-        return replace(self, **kwargs)
+        return replace(self, **kwargs).validate()
