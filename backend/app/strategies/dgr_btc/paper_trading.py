@@ -172,6 +172,10 @@ class DgrBtcPaperSession:
         self._state_file = state_dir / (
             "dgr_btc_state.json" if live_mode else "dgr_btc_paper_state.json"
         )
+        # 交易明细 jsonl (append-only, 每笔 fill 1 行 JSON, LIVE 对账+回放用)
+        self._trades_jsonl = state_dir / (
+            "dgr_btc_live_trades.jsonl" if live_mode else "dgr_btc_trades.jsonl"
+        )
 
     # ──────────────────── private: config wiring ────────────────────
 
@@ -321,6 +325,16 @@ class DgrBtcPaperSession:
                     "dgr_btc_paper_BUY layer=%d price=%s qty=%s stake=%s reason=%s",
                     d.layer_index, fill_px, qty, stake, d.reason,
                 )
+                # 追加到 trades jsonl (append-only ledger)
+                self._append_trade_jsonl({
+                    "action": "BUY",
+                    "layer_index": d.layer_index,
+                    "fill_price": str(fill_px),
+                    "qty": str(qty),
+                    "stake": str(stake),
+                    "target_price": str(d.target_price),
+                    "reason": d.reason,
+                })
                 # 推送 fill 表 (telegram + log)
                 header = (
                     f"🟢 dgr_btc BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
@@ -346,6 +360,20 @@ class DgrBtcPaperSession:
                 # 推送 cycle close 表
                 pnl = proceeds - pre_cost
                 pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
+                # 追加到 trades jsonl (append-only ledger)
+                self._append_trade_jsonl({
+                    "action": action,
+                    "fill_price": str(d.target_price),
+                    "qty": str(qty),
+                    "proceeds": str(proceeds),
+                    "pre_avg": str(pre_avg),
+                    "pre_qty": str(pre_qty),
+                    "pre_cost": str(pre_cost),
+                    "pnl": str(pnl),
+                    "pnl_pct": str(pnl_pct),
+                    "target_price": str(d.target_price),
+                    "reason": d.reason,
+                })
                 emoji = "💰" if action == "TP" else "🔴"
                 header = (
                     f"{emoji} dgr_btc {action} cycle {self._state.cycle_id - 1} closed\n"
@@ -405,6 +433,17 @@ class DgrBtcPaperSession:
                     "dgr_btc_LIVE_BUY layer=%d fill_px=%s qty=%s stake=%s",
                     d.layer_index, fill_px, qty, actual_stake,
                 )
+                # 追加到 trades jsonl (LIVE 真实成交 ledger)
+                self._append_trade_jsonl({
+                    "action": "BUY",
+                    "layer_index": d.layer_index,
+                    "fill_price": str(fill_px),
+                    "qty": str(qty),
+                    "stake": str(actual_stake),
+                    "target_price": str(d.target_price),
+                    "broker_order_id": str(getattr(trade, "id", None) or getattr(trade, "order_id", None) or ""),
+                    "reason": d.reason,
+                })
                 header = (
                     f"🟢 dgr_btc LIVE BUY L{d.layer_index} @ ${fill_px:,.2f}\n"
                     f"成交: {qty:.5f} BTC | 投入 ${actual_stake:,.2f}"
@@ -440,6 +479,21 @@ class DgrBtcPaperSession:
                 )
                 pnl = proceeds - pre_cost
                 pnl_pct = (pnl / pre_cost * Decimal("100")) if pre_cost > _ZERO else _ZERO
+                # 追加到 trades jsonl (LIVE 真实平仓 ledger)
+                self._append_trade_jsonl({
+                    "action": action,
+                    "fill_price": str(fill_px),
+                    "qty": str(actual_qty),
+                    "proceeds": str(proceeds),
+                    "pre_avg": str(pre_avg),
+                    "pre_qty": str(pre_qty),
+                    "pre_cost": str(pre_cost),
+                    "pnl": str(pnl),
+                    "pnl_pct": str(pnl_pct),
+                    "target_price": str(d.target_price),
+                    "broker_order_id": str(getattr(trade, "id", None) or getattr(trade, "order_id", None) or ""),
+                    "reason": d.reason,
+                })
                 emoji = "💰" if action == "TP" else "🔴"
                 header = (
                     f"{emoji} dgr_btc LIVE {action} cycle {self._state.cycle_id - 1} closed\n"
@@ -617,6 +671,34 @@ class DgrBtcPaperSession:
         if t and getattr(t, "last", None):
             return Decimal(str(t.last))
         raise RuntimeError(f"no last price for {self.cfg.symbol_spot}")
+
+    # ──────────────────── trade jsonl (append-only) ────────────────────
+
+    def _append_trade_jsonl(self, record: dict) -> None:
+        """每笔 fill 追加一行 JSON 到 trades jsonl. Fail-soft: 写失败仅 log, 不阻塞策略.
+
+        共享 schema 字段 (writer 注入):
+          ts, mode (paper|live), cycle_id, n_layers_after, cash_after
+        Caller 提供:
+          action (BUY|TP|SL), fill_price, qty, target_price, reason
+          BUY: + stake, layer_index
+          TP/SL: + proceeds, pre_avg, pre_qty, pre_cost, pnl, pnl_pct
+        """
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "mode": "live" if self.live_mode else "paper",
+            "cycle_id": self._state.cycle_id,
+            "n_layers_after": self._state.n_layers,
+            "cash_after": str(self._cash),
+            **record,
+        }
+        try:
+            with self._trades_jsonl.open("a") as f:
+                f.write(json.dumps(payload, default=str) + "\n")
+        except Exception:
+            logger.exception(
+                "dgr_btc_trades_jsonl_write_failed action=%s", record.get("action"),
+            )
 
     # ──────────────────── state persistence ────────────────────
 

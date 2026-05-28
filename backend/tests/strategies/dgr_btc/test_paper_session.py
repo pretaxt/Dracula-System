@@ -180,3 +180,106 @@ def test_live_mode_uses_different_state_file(cfg, mock_adapter, tmpdir_state):
     s_live = DgrBtcPaperSession(cfg=cfg, adapter=mock_adapter, live_mode=True)
     assert s_paper._state_file != s_live._state_file
     assert "paper" in s_paper._state_file.name
+
+
+# ─── E. Trades JSONL ledger (append-only, LIVE 对账+回放) ───
+
+
+def _make_kline_mock(close: str, low: str = None):
+    """Build a kline-shaped mock (has .close, .low attributes)"""
+    k = MagicMock()
+    k.close = close
+    k.low = low or close
+    return k
+
+
+def _make_klines_adapter(close: str):
+    """Build adapter with both fetch_klines and fetch_ticker returning live-shaped objects"""
+    adapter = MagicMock()
+    adapter.fetch_klines = AsyncMock(return_value=[_make_kline_mock(close)])
+    ticker = MagicMock()
+    ticker.last = close
+    adapter.fetch_ticker = AsyncMock(return_value=ticker)
+    return adapter
+
+
+def test_jsonl_path_differs_paper_vs_live(cfg, mock_adapter, tmpdir_state):
+    s_paper = DgrBtcPaperSession(cfg=cfg, adapter=mock_adapter, live_mode=False)
+    s_live = DgrBtcPaperSession(cfg=cfg, adapter=mock_adapter, live_mode=True)
+    assert s_paper._trades_jsonl != s_live._trades_jsonl
+    assert s_paper._trades_jsonl.name == "dgr_btc_trades.jsonl"
+    assert s_live._trades_jsonl.name == "dgr_btc_live_trades.jsonl"
+
+
+@pytest.mark.asyncio
+async def test_buy_appends_jsonl_line(cfg, tmpdir_state):
+    """ENTRY (layer 0 BUY) 写一条 JSON 行到 trades jsonl"""
+    import json
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    await sess.start()
+    assert not sess._trades_jsonl.exists()  # 起初无文件
+    await sess._tick()
+
+    assert sess._state.n_layers == 1
+    assert sess._trades_jsonl.exists()
+    lines = sess._trades_jsonl.read_text().strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["mode"] == "paper"
+    assert rec["action"] == "BUY"
+    assert rec["layer_index"] == 0
+    assert rec["cycle_id"] == 0
+    assert rec["n_layers_after"] == 1
+    assert Decimal(rec["fill_price"]) > Decimal("0")
+    assert Decimal(rec["qty"]) > Decimal("0")
+    assert Decimal(rec["stake"]) > Decimal("0")
+    assert Decimal(rec["cash_after"]) < cfg.total_capital_usdt  # 减了 stake
+
+
+@pytest.mark.asyncio
+async def test_tp_appends_second_jsonl_line(cfg, tmpdir_state):
+    """ENTRY → 价格涨过 avg×1.04 → TP 触发 → jsonl 第二行 action=TP, pnl>0"""
+    import json
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    await sess.start()
+    await sess._tick()  # ENTRY @ 75000
+    assert sess._state.n_layers == 1
+
+    # 翻转 mock 为高价让 TP 触发 (avg×1.04 ≈ 78045; 给 79000 留余地)
+    adapter.fetch_klines = AsyncMock(return_value=[_make_kline_mock("79000.0")])
+    await sess._tick()
+
+    lines = sess._trades_jsonl.read_text().strip().splitlines()
+    assert len(lines) == 2
+    rec_buy = json.loads(lines[0])
+    rec_tp = json.loads(lines[1])
+    assert rec_buy["action"] == "BUY"
+    assert rec_tp["action"] == "TP"
+    assert Decimal(rec_tp["pnl"]) > Decimal("0")
+    assert Decimal(rec_tp["proceeds"]) > Decimal(rec_tp["pre_cost"])
+    assert rec_tp["n_layers_after"] == 0  # cycle closed
+
+
+@pytest.mark.asyncio
+async def test_jsonl_write_failure_does_not_crash_tick(cfg, tmpdir_state, monkeypatch):
+    """Fail-soft: jsonl 写失败 (例如磁盘满 / 权限) 不能阻塞 tick / engine.apply_fill"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    await sess.start()
+
+    # 让 jsonl 的 open 抛 PermissionError (但不能影响 state file open)
+    real_open = Path.open
+
+    def selective_boom(self, *args, **kwargs):
+        if self.name.endswith("trades.jsonl"):
+            raise PermissionError("simulated")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", selective_boom)
+    # tick 仍应完成, layer 仍应入仓 (apply_fill 在 jsonl 写之前)
+    await sess._tick()
+    assert sess._state.n_layers == 1
