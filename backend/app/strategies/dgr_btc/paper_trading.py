@@ -825,9 +825,18 @@ class DgrBtcPaperSession:
             "cash_after": str(self._cash),
             **record,
         }
+        # 审查 #6: fsync 防止 power loss / kernel crash 丢失最近 fills.
+        # buffered write 在 process crash 时安全 (kernel page cache 会 flush),
+        # 但在硬关机/掉电时未 sync 的数据会丢失. LIVE 真金不能丢账.
         try:
             with self._trades_jsonl.open("a") as f:
                 f.write(json.dumps(payload, default=str) + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    # 某些文件系统 (tmpfs / overlay) 不支持 fsync, 不影响逻辑
+                    pass
         except Exception:
             logger.exception(
                 "dgr_btc_trades_jsonl_write_failed action=%s", record.get("action"),

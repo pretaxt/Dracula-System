@@ -392,6 +392,28 @@ async def test_pre_liq_deleverage_disabled(cfg, tmpdir_state):
 
 
 @pytest.mark.asyncio
+async def test_trades_jsonl_fsynced_on_write(cfg, tmpdir_state, monkeypatch):
+    """审查 #6: 每笔 fill 必须 fsync 防止 power loss 丢账"""
+    import os as _os
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    await sess.start()
+
+    fsync_calls = []
+    real_fsync = _os.fsync
+
+    def spy_fsync(fd):
+        fsync_calls.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr("app.strategies.dgr_btc.paper_trading.os.fsync", spy_fsync)
+    await sess._tick()  # ENTRY → triggers 1 jsonl write
+    # fsync 至少被调一次 (BUY 写一行)
+    assert len(fsync_calls) >= 1, "fsync 应在每次 jsonl 写后被调用"
+
+
+@pytest.mark.asyncio
 async def test_pre_liq_deleverage_no_leverage(cfg, tmpdir_state):
     """无杠杆 (leverage=1) 时不触发 (无强平风险)"""
     adapter = _make_klines_adapter("75000.0")
