@@ -975,6 +975,89 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     app.state.telegram_bot = telegram_bot
 
+    dgr_btc_paper_session = None
+    dgr_btc_paper_task = None
+    try:
+        with open("config/strategies/dgr_btc_main.yaml") as _f:
+            _dgr_yaml = yaml.safe_load(_f) or {}
+    except FileNotFoundError:
+        _dgr_yaml = {}
+    try:
+        from app.services.runtime_overrides import (  # noqa: PLC0415
+            load_dgr_btc_overrides,
+        )
+        _dgr_runtime = load_dgr_btc_overrides()
+    except Exception:
+        logger.exception("dgr_btc_runtime_overrides_load_failed")
+        _dgr_runtime = {}
+    _dgr_yaml_enabled = bool(_dgr_yaml.get("enabled", False))
+    _dgr_ov_enabled = _dgr_runtime.get("enabled", None) if isinstance(_dgr_runtime, dict) else None
+    _dgr_enabled = bool(_dgr_ov_enabled) if _dgr_ov_enabled is not None else _dgr_yaml_enabled
+    if not _dgr_enabled:
+        logger.info(
+            "dgr_btc_disabled_in_config",
+            yaml_enabled=_dgr_yaml_enabled,
+            override_enabled=_dgr_ov_enabled,
+        )
+    if _dgr_enabled and "binance" in adapters:
+        try:
+            from app.strategies.dgr_btc.config import (  # noqa: PLC0415
+                DgrBtcStrategyConfig as _DgrCfg,
+            )
+            from app.strategies.dgr_btc.paper_trading import (  # noqa: PLC0415
+                DgrBtcPaperSession,
+            )
+            _dgr_cfg = _DgrCfg.from_yaml(_dgr_yaml)
+            if _dgr_runtime:
+                _dgr_cfg = _dgr_cfg.apply_overrides(_dgr_runtime)
+                logger.info(
+                    "dgr_btc_runtime_overrides_loaded",
+                    keys=list(_dgr_runtime.keys()),
+                )
+            _dgr_live_mode = _dgr_cfg.live_mode
+            dgr_btc_paper_session = DgrBtcPaperSession(
+                cfg=_dgr_cfg,
+                adapter=adapters["binance"],
+                market_data_hub=market_data_hub,
+                position_manager=None,   # Phase C: DB persist disabled, jsonl-only
+                tick_interval_seconds=30.0,
+                live_mode=_dgr_live_mode,
+                broker_adapter=None,     # Phase E 才接
+            )
+            await dgr_btc_paper_session.start()
+            dgr_btc_paper_task = asyncio.create_task(
+                dgr_btc_paper_session.run_forever(),
+                name="dgr_btc_paper_session",
+            )
+            task_supervisor.register(
+                "dgr_btc_paper_session", dgr_btc_paper_task,
+            )
+            logger.info(
+                "dgr_btc_paper_session_task_created",
+                instance=_dgr_cfg.instance_name,
+                cap=str(_dgr_cfg.total_capital_usdt),
+                spot_initial=str(_dgr_cfg.spot_initial_btc),
+                short_initial=str(_dgr_cfg.short_initial_btc),
+                width_pct=str(_dgr_cfg.width_pct),
+                recenter_trigger=str(_dgr_cfg.recenter_trigger_pct),
+                trend_threshold=_dgr_cfg.risk_trend_grids_threshold,
+                leverage=_dgr_cfg.leverage,
+                live_mode=_dgr_live_mode,
+            )
+        except Exception:
+            logger.exception("dgr_btc_paper_session_init_failed")
+
+    app.state.dgr_btc_paper = dgr_btc_paper_session
+
+    # --- dgr_btc P11 daily mirror divergence scheduler ---
+    # 替代 host crontab — in-process scheduler 复用 TaskSupervisor 的 backoff/告警/health
+    try:
+        from app.strategies.dgr_btc.mirror_scheduler import run_forever as _mirror_run  # noqa: PLC0415
+        task_supervisor.spawn("dgr_btc_mirror_scheduler", _mirror_run)
+        logger.info("dgr_btc_mirror_scheduler_spawned")
+    except Exception:
+        logger.exception("dgr_btc_mirror_scheduler_spawn_failed")
+
     yield  # ← application handles requests here
 
     # --- Graceful shutdown ---
