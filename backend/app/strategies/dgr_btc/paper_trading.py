@@ -455,9 +455,10 @@ class DgrBtcPaperSession:
             self._check_margin_health(close, alert=True)
         except Exception:
             logger.debug("margin_check_failed", exc_info=True)
-        # 预清算自动减仓 (审查 #3 救命级) — 在 margin alert 之后, 距强平太近时执行
+        # 预清算自动减仓 (审查 #3 救命级 + B1 修复 LIVE 真下单) —
+        # 在 margin alert 之后, 距强平太近时执行
         try:
-            self._trigger_pre_liq_deleverage(close)
+            await self._trigger_pre_liq_deleverage(close)
         except Exception:
             logger.exception("dgr_btc_pre_liq_deleverage_failed")
 
@@ -729,7 +730,7 @@ class DgrBtcPaperSession:
 
     # ──────────────────── pre-liq auto-deleverage (审查 #3 救命级) ────────────────────
 
-    def _trigger_pre_liq_deleverage(self, mark_price: Decimal) -> bool:
+    async def _trigger_pre_liq_deleverage(self, mark_price: Decimal) -> bool:
         """救命级风控: 距强平 < threshold 时自动平 deleverage_pct 的仓位.
 
         risk-manager 审查指出: 策略 SL (avg×0.90) 在 10x 杠杆下永远不会触发
@@ -741,16 +742,19 @@ class DgrBtcPaperSession:
           - 距上次触发 > cfg.risk_pre_liq_cooldown_seconds (默认 1h)
           - state.is_in_cycle (有持仓)
 
-        执行:
-          - 按 deleverage_pct (默认 50%) 比例减仓
-          - 每层 layer qty + cost 同比例缩减 (保持 avg_cost 不变)
-          - 现金 += proceeds (扣 sell fee)
-          - 累计 realized_pnl_usdt += pnl_on_sold_portion
-          - 写 jsonl + telegram 强告警
+        执行 (B1 修复 2026-05-28 第二轮 audit):
+          - **LIVE 模式**: 调 broker.place_market_unwind 真下市价卖单,
+            broker 拒单 → fail-closed (不改本地账面, log + telegram 紧急告警,
+            下一 tick 重试). 真实 fill_px/qty 来自 broker.
+          - **paper 模式**: 用 mark_price 合成 fill, 直接改 state.layers/cash.
+          - 通用: 每层 layer qty + cost 同比例缩减 (保持 avg_cost 不变);
+            现金 += proceeds; realized_pnl_usdt += pnl; 写 jsonl + telegram.
           - 不增加 cycle_id (仍是同一 cycle, 只是 size 缩了)
 
         Returns:
-          True if deleverage triggered, False otherwise.
+          True if deleverage triggered (LIVE 真单成功 / paper 模拟成功),
+          False if skipped (not enabled / no position / cooldown / threshold not breached /
+          LIVE broker reject / no leverage).
         """
         if not self.cfg.risk_pre_liq_enabled:
             return False
@@ -785,20 +789,68 @@ class DgrBtcPaperSession:
             logger.error("dgr_btc_pre_liq_invalid_deleverage_pct=%s", deleverage_pct)
             return False
 
-        # 计算卖出数量 + proceeds
+        # 计算卖出数量 + 预期 proceeds (LIVE 实际 proceeds 来自 broker 真单)
         from app.strategies.dgr_btc.engine import Layer  # noqa: PLC0415
         fee_pct = self._engine.cfg.fee_pct
         qty_sold = self._state.total_qty * deleverage_pct
         cost_basis_sold = self._state.total_cost * deleverage_pct
-        proceeds = qty_sold * mark_price * (_ONE - fee_pct)
-        pnl = proceeds - cost_basis_sold
 
-        # 缩减每层 (按比例 keep, avg_cost 保持不变)
+        # ─── B1 修复: LIVE 模式必须调 broker 真下平仓单 ───
+        # paper 模式才用 mark_price 合成. 不调 broker 是 commit 5dc23cd 留下的
+        # 致命 bug — LIVE 切换后本地账面减仓但 binance 仓位不动 → 强平照样发生.
+        fill_price: Decimal
+        actual_qty: Decimal
+        if self.live_mode and self._broker_adapter is not None:
+            from app.strategies.dgr_btc.types import MarketType, Side  # noqa: PLC0415
+            try:
+                trade = await self._broker_adapter.place_market_unwind(
+                    MarketType.SPOT, Side.SELL, quantity=qty_sold,
+                )
+            except Exception as e:
+                # Fail-closed: log + telegram critical, **不改本地账面**, 下 tick 重试.
+                # 这比"本地以为减仓但实际没减"安全得多.
+                logger.error(
+                    "dgr_btc_pre_liq_LIVE_BROKER_REJECT ratio=%.3f qty=%s reason=%s",
+                    float(margin_ratio), qty_sold, str(e)[:200],
+                )
+                if self.cfg.live_safety_telegram_alerts_enabled:
+                    try:
+                        from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                        notify_risk_violation(
+                            "DGR_BTC_PRE_LIQ_BROKER_REJECT",
+                            (
+                                f"🚨🚨 dgr_btc 预清算救命单被 broker 拒绝!\n"
+                                f"保证金率 {float(margin_ratio):.3f}x (距强平 {health['liq_distance_pct']:.2f}%)\n"
+                                f"尝试卖出 {qty_sold:.5f} BTC @ market\n"
+                                f"原因: {str(e)[:120]}\n"
+                                f"⚠️ 本地账面**未减仓**, 下 tick 重试. "
+                                f"距强平太近时建议人工立即手动 unwind 50%."
+                            ),
+                        )
+                    except Exception:
+                        logger.debug("pre_liq_reject_telegram_failed", exc_info=True)
+                return False  # 没成交, 等下 tick 重试
+            # broker 返回真实成交价 + 扣费后 proceeds
+            fill_price = Decimal(str(getattr(trade, "price", mark_price)))
+            actual_qty = Decimal(str(getattr(trade, "quantity", qty_sold)))
+            proceeds = fill_price * actual_qty * (_ONE - fee_pct)
+        else:
+            # paper / backtest 路径: 用 mark_price 合成 fill
+            fill_price = mark_price
+            actual_qty = qty_sold
+            proceeds = actual_qty * mark_price * (_ONE - fee_pct)
+
+        # 真实卖出后按实际成交比例缩减每层
+        # 注: 若 broker 部分成交导致 actual_qty < qty_sold, 缩减比例对应调整
+        actual_deleverage_pct = (actual_qty / self._state.total_qty) if self._state.total_qty > _ZERO else deleverage_pct
+        actual_keep_ratio = _ONE - actual_deleverage_pct
+        pnl = proceeds - (self._state.total_cost * actual_deleverage_pct)
+
         new_layers = [
             Layer(
                 entry_price=l.entry_price,
-                qty_btc=l.qty_btc * keep_ratio,
-                cost_usdt=l.cost_usdt * keep_ratio,
+                qty_btc=l.qty_btc * actual_keep_ratio,
+                cost_usdt=l.cost_usdt * actual_keep_ratio,
             )
             for l in self._state.layers
         ]
@@ -813,21 +865,24 @@ class DgrBtcPaperSession:
         if self._state.is_in_cycle:
             self._state.next_buy_price = self._state.avg_cost * (_ONE - self._engine.cfg.grid_step)
 
+        mode_label = "LIVE" if (self.live_mode and self._broker_adapter is not None) else "paper"
         logger.warning(
-            "dgr_btc_pre_liq_deleverage_triggered ratio=%.3f qty_sold=%s proceeds=%s pnl=%s remaining_qty=%s",
-            float(margin_ratio), qty_sold, proceeds, pnl, self._state.total_qty,
+            "dgr_btc_pre_liq_deleverage_triggered mode=%s ratio=%.3f fill_px=%s actual_qty=%s proceeds=%s pnl=%s remaining_qty=%s",
+            mode_label, float(margin_ratio), fill_price, actual_qty, proceeds, pnl, self._state.total_qty,
         )
 
         # 写 trades jsonl
         self._append_trade_jsonl({
             "action": "PRE_LIQ_DELEVERAGE",
-            "fill_price": str(mark_price),
-            "qty": str(qty_sold),
+            "mode": mode_label,
+            "fill_price": str(fill_price),
+            "qty": str(actual_qty),
             "proceeds": str(proceeds),
             "pre_avg": str(self._state.avg_cost),  # avg 缩后不变
-            "pre_cost": str(cost_basis_sold),
+            "pre_cost": str(self._state.total_cost * actual_deleverage_pct),
             "pnl": str(pnl),
-            "pnl_pct": str((pnl / cost_basis_sold * Decimal("100")) if cost_basis_sold > _ZERO else _ZERO),
+            "pnl_pct": str((pnl / (self._state.total_cost * actual_deleverage_pct) * Decimal("100"))
+                           if self._state.total_cost * actual_deleverage_pct > _ZERO else _ZERO),
             "margin_ratio_at_trigger": str(margin_ratio),
             "reason": "pre_liquidation_deleverage",
         })
@@ -837,10 +892,10 @@ class DgrBtcPaperSession:
             try:
                 from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
                 msg = (
-                    f"\U0001F6A8 dgr_btc 预清算自动减仓触发\n"
+                    f"\U0001F6A8 dgr_btc 预清算自动减仓 [{mode_label}]\n"
                     f"保证金率: {float(margin_ratio):.3f}x (阈值 {self.cfg.risk_pre_liq_margin_ratio_threshold}x)\n"
                     f"清算价 ${health['liq_price']:,.2f} 距现价 {health['liq_distance_pct']:.2f}%\n"
-                    f"卖出 {qty_sold:.5f} BTC @ ${mark_price:,.2f}\n"
+                    f"卖出 {actual_qty:.5f} BTC @ ${fill_price:,.2f}\n"
                     f"得到现金 ${proceeds:,.2f} | 实现盈亏 ${pnl:+,.2f}\n"
                     f"剩余持仓 {self._state.total_qty:.5f} BTC | 平均成本 ${self._state.avg_cost:,.2f}\n"
                     f"累计触发 {self._n_deleverages} 次"

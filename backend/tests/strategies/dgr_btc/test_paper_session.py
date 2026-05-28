@@ -326,7 +326,7 @@ async def test_pre_liq_deleverage_triggers_below_threshold(cfg, tmpdir_state):
 
     # 注入低 margin_ratio (1.05 < 1.10 threshold)
     _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
-    triggered = sess._trigger_pre_liq_deleverage(Decimal("65000"))
+    triggered = await sess._trigger_pre_liq_deleverage(Decimal("65000"))
 
     assert triggered is True, "应该触发 deleverage"
     assert sess._n_deleverages == 1
@@ -353,7 +353,7 @@ async def test_pre_liq_deleverage_skips_above_threshold(cfg, tmpdir_state):
     await sess._tick()  # ENTRY @ 75000
 
     # 当前价 = entry, margin_ratio 在初始资本下应该 >> 1.1
-    triggered = sess._trigger_pre_liq_deleverage(Decimal("75000"))
+    triggered = await sess._trigger_pre_liq_deleverage(Decimal("75000"))
     assert triggered is False
     assert sess._n_deleverages == 0
 
@@ -369,11 +369,11 @@ async def test_pre_liq_deleverage_cooldown(cfg, tmpdir_state):
     _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
 
     # 第一次触发
-    assert sess._trigger_pre_liq_deleverage(Decimal("65000")) is True
+    assert await sess._trigger_pre_liq_deleverage(Decimal("65000")) is True
     assert sess._n_deleverages == 1
 
     # 紧跟着再调一次 (cooldown 内) — 应跳过
-    assert sess._trigger_pre_liq_deleverage(Decimal("65000")) is False
+    assert await sess._trigger_pre_liq_deleverage(Decimal("65000")) is False
     assert sess._n_deleverages == 1
 
 
@@ -387,7 +387,7 @@ async def test_pre_liq_deleverage_disabled(cfg, tmpdir_state):
     await sess.start()
     await sess._tick()
 
-    assert sess._trigger_pre_liq_deleverage(Decimal("60000")) is False
+    assert await sess._trigger_pre_liq_deleverage(Decimal("60000")) is False
     assert sess._n_deleverages == 0
 
 
@@ -504,6 +504,106 @@ async def test_reconcile_handles_empty_open_orders(cfg, tmpdir_state):
     assert sess.inflight_manager.total_inflight() == 0
 
 
+# ─── F.2 B1 修复: LIVE 模式 pre-liq deleverage 必须真调 broker ───
+
+
+def _inject_layer(sess, entry_price: str = "75000", qty: str = "0.328", cost: str = "24616"):
+    """手动注入一个 layer 到 state, 跳过 _tick BUY 路径 (避免依赖 broker.place_buy mock).
+
+    用于 pre_liq deleverage 测试聚焦在 deleverage 本身, 不被 ENTRY 路径干扰.
+    """
+    from app.strategies.dgr_btc.engine import Layer
+    sess._state.layers = [
+        Layer(
+            entry_price=Decimal(entry_price),
+            qty_btc=Decimal(qty),
+            cost_usdt=Decimal(cost),
+        )
+    ]
+    sess._state.cycle_id = 0
+    sess._state.next_buy_price = Decimal(entry_price) * Decimal("0.95")
+    sess._cash = Decimal("175384")  # = 200000 - 24616
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_live_calls_broker(cfg, tmpdir_state):
+    """LIVE 模式触发 deleverage 时必须调 broker.place_market_unwind, 不是只改本地账面.
+
+    B1 致命 bug 修复 (审查 round 2 risk-manager 发现):
+    commit 5dc23cd 原版 paper/LIVE 都直接改 state.layers + cash,
+    LIVE 切换后 binance 实际仓位不动 → 强平照样发生.
+    修复后 LIVE 必走 broker.place_market_unwind, 用真实 fill_px/qty 更新本地账面.
+    """
+    from app.strategies.dgr_btc.types import MarketType, Side
+
+    adapter = _make_klines_adapter("75000.0")
+    # Mock LIVE broker: place_market_unwind 返回 fill 对象
+    fake_broker = MagicMock()
+    fill_trade = MagicMock()
+    fill_trade.price = "65100"  # 真实成交价 (vs mark_price 65000)
+    fill_trade.quantity = "0.164"  # 真实成交 qty (= 0.328 × 50%)
+    fake_broker.place_market_unwind = AsyncMock(return_value=fill_trade)
+
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    sess.cfg.leverage = 10
+    # 注: 不走 _tick 避免 broker.place_buy mock 麻烦, 直接手动注入 layer
+    _inject_layer(sess)
+
+    _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
+    triggered = await sess._trigger_pre_liq_deleverage(Decimal("65000"))
+
+    assert triggered is True
+    # 关键断言: broker.place_market_unwind 被真调
+    fake_broker.place_market_unwind.assert_called_once()
+    call_args = fake_broker.place_market_unwind.call_args
+    assert call_args.args[0] == MarketType.SPOT
+    assert call_args.args[1] == Side.SELL
+    # quantity 应为持仓的 50%
+    assert call_args.kwargs["quantity"] > Decimal("0")
+    # jsonl 应记 mode=LIVE
+    import json as _json
+    lines = sess._trades_jsonl.read_text().strip().splitlines()
+    rec = _json.loads(lines[-1])
+    assert rec["action"] == "PRE_LIQ_DELEVERAGE"
+    assert rec["mode"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_live_broker_reject_fail_closed(cfg, tmpdir_state):
+    """LIVE broker 拒单时: fail-closed (本地账面不动, 等下 tick 重试).
+
+    比"本地以为已减仓但 binance 没动"安全得多.
+    """
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fake_broker.place_market_unwind = AsyncMock(side_effect=ConnectionError("simulated reject"))
+
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    sess.cfg.leverage = 10
+    _inject_layer(sess)
+
+    pre_qty = sess._state.total_qty
+    pre_cash = sess._cash
+    pre_n_deleverages = sess._n_deleverages
+
+    _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
+    triggered = await sess._trigger_pre_liq_deleverage(Decimal("65000"))
+
+    # 关键: 触发失败, 本地账面**不变** (fail-closed)
+    assert triggered is False
+    assert sess._state.total_qty == pre_qty  # 持仓没变
+    assert sess._cash == pre_cash  # cash 没变
+    assert sess._n_deleverages == pre_n_deleverages  # 计数器没增
+    # 没有 cooldown 锚点更新 (允许下 tick 重试)
+    assert sess._last_deleverage_at is None
+
+
 @pytest.mark.asyncio
 async def test_pre_liq_deleverage_no_leverage(cfg, tmpdir_state):
     """无杠杆 (leverage=1) 时不触发 (无强平风险)"""
@@ -514,5 +614,5 @@ async def test_pre_liq_deleverage_no_leverage(cfg, tmpdir_state):
     await sess._tick()
 
     # 即便价格暴跌, 1x spot 没强平也不应触发
-    assert sess._trigger_pre_liq_deleverage(Decimal("30000")) is False
+    assert await sess._trigger_pre_liq_deleverage(Decimal("30000")) is False
     assert sess._n_deleverages == 0
