@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, date
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 
@@ -70,6 +70,23 @@ class LiveSafetyGuard:
         self.n_block_borrow_cap = 0
         self._cached_borrowed_usdt: Decimal = Decimal("0")
         self._borrowed_cache_ts: Optional[datetime] = None
+        # §6.2 #4: LIVE 关键运行指标 collector (broker 通过 attach_metrics 注入)
+        self._metrics: Any | None = None
+
+    def attach_metrics(self, metrics: Any) -> None:
+        """broker_adapter 在 __init__ 调用, 注入 LiveMetricsCollector 引用.
+
+        所有 reject 分支会调 metrics.record_safety_reject(reason).
+        """
+        self._metrics = metrics
+
+    def _record_reject(self, reason: str) -> None:
+        """统一 reject 计数入口 (兼容 metrics 未注入的场景)."""
+        if self._metrics is not None:
+            try:
+                self._metrics.record_safety_reject(reason)
+            except Exception:
+                logger.debug("dgr_btc_safety_metrics_record_failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # 检查接口
@@ -100,6 +117,7 @@ class LiveSafetyGuard:
         # 1. kill_switch
         if self._is_killed():
             self.n_block_killswitch += 1
+            self._record_reject("kill_switch_active")
             return False, "kill_switch_active"
 
         notional = price * quantity
@@ -107,32 +125,40 @@ class LiveSafetyGuard:
         # 2. max_order_usd
         if notional > self.cfg.max_order_usd:
             self.n_block_max_order += 1
-            return False, f"max_order_usd ${notional} > ${self.cfg.max_order_usd}"
+            reason = f"max_order_usd ${notional} > ${self.cfg.max_order_usd}"
+            self._record_reject(reason)
+            return False, reason
 
         # 3. max_daily_notional_usd (含 pending reservation)
         total_notional = self._daily_notional + self._pending_notional + notional
         if total_notional > self.cfg.max_daily_notional_usd:
             self.n_block_daily_notional += 1
-            return False, (
+            reason = (
                 f"max_daily_notional commit ${self._daily_notional}+pending ${self._pending_notional}"
                 f"+new ${notional} = ${total_notional} > ${self.cfg.max_daily_notional_usd}"
             )
+            self._record_reject(reason)
+            return False, reason
 
         # 4. max_daily_order_count (含 pending)
         total_count = self._daily_count + self._pending_count + 1
         if total_count > self.cfg.max_daily_order_count:
             self.n_block_daily_count += 1
-            return False, (
+            reason = (
                 f"max_daily_order_count commit {self._daily_count}+pending {self._pending_count}"
                 f"+1 = {total_count} > {self.cfg.max_daily_order_count}"
             )
+            self._record_reject(reason)
+            return False, reason
 
         # 5. max_price_deviation_pct (vs mark)
         if mark_price is not None and mark_price > 0:
             dev = abs(price - mark_price) / mark_price
             if dev > self.cfg.max_price_deviation_pct:
                 self.n_block_price_dev += 1
-                return False, f"price_deviation {dev:.4f} > {self.cfg.max_price_deviation_pct}"
+                reason = f"price_deviation {dev:.4f} > {self.cfg.max_price_deviation_pct}"
+                self._record_reject(reason)
+                return False, reason
 
         # CRITICAL #3: PM cross margin BUY 自动借 USDT 累计上限
         # 仅对 spot BUY 检查 (perp 不涉及现货借贷; spot SELL 走 AUTO_REPAY 是还款不是借)
@@ -140,10 +166,12 @@ class LiveSafetyGuard:
             projected_borrow = self._cached_borrowed_usdt + notional
             if projected_borrow > self.cfg.max_open_borrow_usd:
                 self.n_block_borrow_cap += 1
-                return False, (
+                reason = (
                     f"max_open_borrow_usd cached_borrowed=${self._cached_borrowed_usdt} "
                     f"+ new=${notional} = ${projected_borrow} > ${self.cfg.max_open_borrow_usd}"
                 )
+                self._record_reject(reason)
+                return False, reason
 
         # C3: 预扣 reservation (派单 in-flight, 即使未 fill 也占 cap)
         self._pending_notional += notional

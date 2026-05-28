@@ -170,6 +170,9 @@ class DgrBtcPaperSession:
         self._last_deleverage_at: Optional[datetime] = None
         self._n_deleverages: int = 0  # 累计触发次数 (审计用)
 
+        # §6.2 #4: LIVE 关键运行指标告警 watcher (后台 task, LIVE 模式 + telegram 开启时启动)
+        self._metrics_alert_task: Optional[asyncio.Task] = None
+
         # 持久化路径
         state_dir = Path(os.environ.get("DGR_BTC_STATE_DIR", "/app/state"))
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -225,6 +228,23 @@ class DgrBtcPaperSession:
                 await self._reconcile_inflight_on_startup()
             except Exception:
                 logger.exception("dgr_btc_inflight_reconcile_failed")
+
+        # §6.2 #4: LIVE 模式启动 alert watcher (paper 模式无 broker_adapter, 无 metrics)
+        if self.live_mode and self._broker_adapter is not None:
+            try:
+                from app.strategies.dgr_btc.live_metrics import run_alert_watcher  # noqa: PLC0415
+                instance = getattr(self._broker_adapter, "instance_name", "dgr_btc")
+                self._metrics_alert_task = asyncio.create_task(
+                    run_alert_watcher(
+                        instance_name=instance,
+                        poll_interval_sec=60.0,
+                        telegram_enabled=self.cfg.live_safety_telegram_alerts_enabled,
+                    ),
+                    name=f"dgr_btc_metrics_alert_watcher_{instance}",
+                )
+                logger.info("dgr_btc_metrics_alert_watcher_spawned instance=%s", instance)
+            except Exception:
+                logger.exception("dgr_btc_metrics_alert_watcher_spawn_failed")
 
         self._running = True
 
@@ -346,6 +366,19 @@ class DgrBtcPaperSession:
     async def stop(self) -> None:
         self._stop_event.set()
         self._running = False
+        # §6.2 #4: cancel metrics alert watcher + unregister collector
+        if self._metrics_alert_task is not None:
+            self._metrics_alert_task.cancel()
+            try:
+                await self._metrics_alert_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._metrics_alert_task = None
+        if self._broker_adapter is not None and hasattr(self._broker_adapter, "close"):
+            try:
+                self._broker_adapter.close()
+            except Exception:
+                logger.debug("dgr_btc_broker_close_failed", exc_info=True)
         try:
             self._persist_state()
         except Exception:

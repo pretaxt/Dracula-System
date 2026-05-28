@@ -761,3 +761,49 @@ async def all_opportunities(_: CurrentUser, request: Request) -> dict:
     out.sort(key=_key, reverse=True)
     return {"data": out, "count": len(out)}
 
+
+# ----------------------------------------------------------------------
+# dgr_btc LIVE runtime metrics (§6.2 #4)
+# ----------------------------------------------------------------------
+
+
+@router.get("/dgr-btc/health")
+async def get_dgr_btc_health(_: CurrentUser) -> dict:
+    """dgr_btc LIVE 模式 3 个关键运行指标:
+      - maker_fill_rate (post-only 拒单率)
+      - latency p95 (broker 健康度)
+      - safety_reject_per_hour (配置 bug 信号)
+
+    每个指标含 value / threshold / status (ok/warning/breach/insufficient_data).
+    无活跃 collector 时返回 active=false (策略未启动或非 LIVE 模式).
+    """
+    from app.strategies.dgr_btc.live_metrics import list_collectors  # noqa: PLC0415
+
+    collectors = list_collectors()
+    if not collectors:
+        return {
+            "active": False,
+            "message": "no dgr_btc LIVE collector active (strategy not started or not in LIVE mode)",
+            "instances": [],
+        }
+
+    instances = [c.health() for c in collectors.values()]
+    # 聚合 overall status: 任一 breach → breach; 任一 warning → warning; 否则 ok
+    overall = "ok"
+    for inst in instances:
+        for m in inst.get("metrics", {}).values():
+            st = m.get("status")
+            if st == "breach":
+                overall = "breach"
+                break
+            if st == "warning" and overall == "ok":
+                overall = "warning"
+        if overall == "breach":
+            break
+
+    return {
+        "active": True,
+        "overall_status": overall,
+        "instances": instances,
+        "n_instances": len(instances),
+    }

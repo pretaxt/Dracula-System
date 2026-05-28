@@ -70,12 +70,17 @@ class DgrBtcBrokerAdapter:
         cfg: Optional[DgrBtcBrokerConfig] = None,
         safety: Any | None = None,
         dry_run: bool = False,
+        instance_name: str = "dgr_btc",
     ) -> None:
         from app.execution.live_broker import LiveBroker
+        from app.strategies.dgr_btc.live_metrics import (  # noqa: PLC0415
+            LiveMetricsCollector, register_collector,
+        )
         self.adapter = adapter
         self.cfg = cfg or DgrBtcBrokerConfig()
         self.safety = safety
         self.dry_run = dry_run
+        self.instance_name = instance_name
         self._broker = LiveBroker(
             adapter=adapter,
             fee_rate=self.cfg.fee_rate_perp_maker,
@@ -86,6 +91,16 @@ class DgrBtcBrokerAdapter:
         self.n_reject = 0
         self.n_market_unwind = 0
         self.n_cancel = 0
+        # §6.2 #4: LIVE 关键运行指标 collector (实时 fill rate / latency / safety reject)
+        self.metrics = LiveMetricsCollector(instance_name=instance_name)
+        if not dry_run:
+            register_collector(instance_name, self.metrics)
+        # 将 metrics 注入 safety, 让 safety reject 也计入 (统一入口)
+        if self.safety is not None and hasattr(self.safety, "attach_metrics"):
+            try:
+                self.safety.attach_metrics(self.metrics)
+            except Exception:
+                logger.debug("dgr_btc_broker_safety_attach_metrics_failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # 0. place_order(intent) — atomic_pair 期望的统一入口
@@ -122,6 +137,9 @@ class DgrBtcBrokerAdapter:
         fill 检测在后续 tick 的 fetch_open_orders 路径完成 (sync_fills).
         """
         self.n_place_limit_maker += 1
+        # §6.2 #4: order 开始时间 (latency 测量起点)
+        import time as _time  # noqa: PLC0415
+        _t_start = _time.monotonic()
         # C3 修复: safety reservation 预扣 — 后续 reject/fail 必须 rollback,
         # fill 时 record_filled commit 到 daily.
         notional_reserved = price * quantity
@@ -131,6 +149,7 @@ class DgrBtcBrokerAdapter:
             )
             if not ok:
                 # check 失败时未预扣 (check_pre_order 内部在通过时才 reserve)
+                # safety 内部已 record_safety_reject (经 attach_metrics 注入)
                 raise RejectError(f"safety_block:{reason}")
 
         if self.dry_run:
@@ -215,6 +234,14 @@ class DgrBtcBrokerAdapter:
                         self.safety.rollback_reservation(notional_reserved)
                     except Exception:
                         pass
+                # §6.2 #4: 记录 post-only reject (LIVE 主风险信号)
+                try:
+                    self.metrics.record_maker_outcome(
+                        market=market.value, side=side.value,
+                        outcome="rejected_post_only", latency_ms=None,
+                    )
+                except Exception:
+                    pass
                 logger.info(
                     "dgr_btc_broker_post_only_rejected",
                     market=market.value, side=side.value, price=str(price),
@@ -226,6 +253,13 @@ class DgrBtcBrokerAdapter:
                     self.safety.rollback_reservation(notional_reserved)
                 except Exception:
                     pass
+            try:
+                self.metrics.record_maker_outcome(
+                    market=market.value, side=side.value,
+                    outcome="rejected_other", latency_ms=None,
+                )
+            except Exception:
+                pass
             logger.exception("dgr_btc_broker_create_order_failed", market=market.value)
             raise RejectError(f"create_order_failed: {err[:120]}", original_error=e) from e
 
@@ -293,6 +327,18 @@ class DgrBtcBrokerAdapter:
                         self.safety.rollback_reservation(notional_reserved - partial_notional)
                     except Exception:
                         pass
+                # §6.2 #4: 中途 cancel/reject 算作 rejected_other (非 post-only)
+                try:
+                    _outcome = "filled" if filled > 0 else "rejected_other"
+                    _latency = (
+                        (_time.monotonic() - _t_start) * 1000.0 if filled > 0 else None
+                    )
+                    self.metrics.record_maker_outcome(
+                        market=market.value, side=side.value,
+                        outcome=_outcome, latency_ms=_latency,
+                    )
+                except Exception:
+                    pass
                 raise RejectError(f"order_{last_status} filled={filled}")
         else:
             # Timeout — C2 修复: cancel 失败后必须二次 fetch_order 确认最终状态,
@@ -377,6 +423,15 @@ class DgrBtcBrokerAdapter:
                         self.safety.record_filled(final_avg * final_filled)
                     except Exception:
                         pass
+                # §6.2 #4: partial fill 算 filled (虽然延迟到 timeout 后)
+                try:
+                    self.metrics.record_maker_outcome(
+                        market=market.value, side=side.value,
+                        outcome="filled",
+                        latency_ms=(_time.monotonic() - _t_start) * 1000.0,
+                    )
+                except Exception:
+                    pass
                 logger.warning(
                     "dgr_btc_broker_timeout_partial_fill_recovered",
                     order_id=order_id, market=market.value,
@@ -403,11 +458,28 @@ class DgrBtcBrokerAdapter:
                     self.safety.rollback_reservation(notional_reserved)
                 except Exception:
                     pass
+            # §6.2 #4: 完全 timeout → "timeout" outcome (不算 reject; 单可能流动性问题)
+            try:
+                self.metrics.record_maker_outcome(
+                    market=market.value, side=side.value,
+                    outcome="timeout", latency_ms=None,
+                )
+            except Exception:
+                pass
             raise RejectError(f"no_fill_within_{int(max_wait)}s filled={final_filled}")
 
         # Filled successfully
         if self.safety is not None:
             self.safety.record_filled(avg_price_dec * filled)
+        # §6.2 #4: 成功成交 → 记录 latency
+        try:
+            self.metrics.record_maker_outcome(
+                market=market.value, side=side.value,
+                outcome="filled",
+                latency_ms=(_time.monotonic() - _t_start) * 1000.0,
+            )
+        except Exception:
+            pass
 
         return Trade(
             trade_id=f"live_{_uuid.uuid4().hex[:12]}",
@@ -439,6 +511,8 @@ class DgrBtcBrokerAdapter:
         但保留单笔上限 (max_order_usd × 5 = 兜底单腿不会太大) + per-hour 计数,
         避免异常 qty 触发任意大单.
         """
+        import time as _time  # noqa: PLC0415
+        _t_start = _time.monotonic()
         self.n_market_unwind += 1
 
         # C4: 独立 safety check for unwind
@@ -488,6 +562,14 @@ class DgrBtcBrokerAdapter:
         result = await self._broker.execute(request)
         if not result or not getattr(result, "avg_price", None):
             raise RuntimeError("unwind_no_fill")
+        # §6.2 #4: unwind 也记 latency (taker, 用独立 counter, 不混入 maker fill rate)
+        try:
+            self.metrics.record_unwind_outcome(
+                market=market_type.value, side=side.value,
+                latency_ms=(_time.monotonic() - _t_start) * 1000.0,
+            )
+        except Exception:
+            pass
 
         return Trade(
             trade_id=f"unwind_{_uuid.uuid4().hex[:12]}",
@@ -796,4 +878,14 @@ class DgrBtcBrokerAdapter:
             "n_market_unwind": self.n_market_unwind,
             "n_cancel": self.n_cancel,
             "dry_run": self.dry_run,
+            "instance_name": self.instance_name,
+            "metrics": self.metrics.health(),
         }
+
+    def close(self) -> None:
+        """unregister metrics collector — strategy stop 时调用."""
+        try:
+            from app.strategies.dgr_btc.live_metrics import unregister_collector  # noqa: PLC0415
+            unregister_collector(self.instance_name)
+        except Exception:
+            pass
