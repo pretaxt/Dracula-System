@@ -101,9 +101,21 @@ class StateSnapshot:
     n_tp: int
     n_sl: int
     realized_pnl: str
+    # 审查 #5 三维对账: 加 unrealized_pnl_at_mark 捕捉 fee/mark_to_market 漂移
+    # 在 mark_price 处的浮动盈亏 (mark_to_market - total_cost)
+    # 可选字段, 旧 snapshot 无此字段时 None
+    unrealized_pnl_at_mark: Optional[str] = None
+    mark_price: Optional[str] = None
 
     @classmethod
-    def from_state(cls, state: StrategyState, cash: Decimal) -> "StateSnapshot":
+    def from_state(cls, state: StrategyState, cash: Decimal,
+                   mark_price: Optional[Decimal] = None,
+                   fee_pct: Decimal = Decimal("0.0006")) -> "StateSnapshot":
+        u_pnl: Optional[str] = None
+        m_px: Optional[str] = None
+        if mark_price is not None and state.is_in_cycle:
+            u_pnl = str(state.unrealized_pnl(mark_price, fee_pct))
+            m_px = str(mark_price)
         return cls(
             ts=datetime.now(timezone.utc).isoformat(),
             cycle_id=state.cycle_id,
@@ -114,6 +126,8 @@ class StateSnapshot:
             n_tp=state.n_tp,
             n_sl=state.n_sl,
             realized_pnl=str(state.realized_pnl_usdt),
+            unrealized_pnl_at_mark=u_pnl,
+            mark_price=m_px,
         )
 
 
@@ -249,6 +263,20 @@ def compare_states(
     if pnl_diff_abs > Decimal("5") and pct_diff(exp_pnl, act_pnl) > threshold_pct:
         diffs.append(f"已实现盈亏偏差 ${pnl_diff_abs:,.2f} 预期=${exp_pnl:,.2f} 实际=${act_pnl:,.2f}")
 
+    # 审查 #5 三维对账: 持仓时比 unrealized_pnl_at_mark (捕捉 fee/mark_to_market 漂移)
+    # 两边都有此字段才比 (向后兼容旧 snapshot)
+    if expected.unrealized_pnl_at_mark is not None and actual.unrealized_pnl_at_mark is not None:
+        exp_upnl = Decimal(expected.unrealized_pnl_at_mark)
+        act_upnl = Decimal(actual.unrealized_pnl_at_mark)
+        upnl_diff_abs = abs(act_upnl - exp_upnl)
+        # 容差: $5 或 5% 取大 (浮动估值, 容忍小漂移)
+        if upnl_diff_abs > Decimal("5") and pct_diff(exp_upnl, act_upnl) > Decimal("5.0"):
+            diffs.append(
+                f"浮动盈亏偏差 ${upnl_diff_abs:,.2f} "
+                f"预期=${exp_upnl:,.2f} 实际=${act_upnl:,.2f} "
+                f"(@ mark=${actual.mark_price})"
+            )
+
     return (len(diffs) > 0, diffs)
 
 
@@ -288,7 +316,15 @@ async def main() -> int:
     except FileNotFoundError:
         logger.warning("paper 状态文件未找到 (session 未启动?)")
         return 1
-    actual_snap = StateSnapshot.from_state(cur_state, cur_cash)
+
+    # 先拉 24h bars 用于 mark_price (即便首跑也需要给 baseline 留 mark)
+    cfg = _engine_config()
+    df = await fetch_24h_bars()
+    logger.info(f"已拉取最近 24h 共 {len(df)} 根 1h K 线")
+
+    # 三维对账 (#5): 在 today's last bar close 处计算 unrealized
+    today_mark = Decimal(str(df.iloc[-1]["close"])) if df is not None and len(df) > 0 else None
+    actual_snap = StateSnapshot.from_state(cur_state, cur_cash, mark_price=today_mark, fee_pct=cfg.fee_pct)
     save_snapshot(actual_snap, today)
 
     # 加载昨天 snapshot
@@ -298,12 +334,8 @@ async def main() -> int:
         write_audit({"event": "baseline_saved", "date": today, "snapshot": asdict(actual_snap)})
         return 0
 
-    # 用昨天 snapshot 重建 state + 喂今天 bars
-    cfg = _engine_config()
+    # 用昨天 snapshot 重建 state
     y_state, y_cash = reconstruct_state_from_snapshot(y_snap, cfg)
-
-    df = await fetch_24h_bars()
-    logger.info(f"已拉取最近 24h 共 {len(df)} 根 1h K 线")
 
     # P3 修复 (Codex medium): 用 init_state + init_cash 直接续跑昨日 state,
     # 不再丢弃重建出来的 y_state. layers/avg_cost/next_buy/n_tp/n_sl/realized_pnl
@@ -315,6 +347,12 @@ async def main() -> int:
     # 不再用 final_equity 假装当 cash, 不再写 n_layers=0 / total_qty=0 占位.
     # 现在 expected 跟 actual 字段语义对齐, 可做真实 apples-to-apples 对比.
     final_state = result.final_state
+    # 三维对账 (#5): 在 today_mark 处计算预期 unrealized
+    exp_upnl: Optional[str] = None
+    exp_mark: Optional[str] = None
+    if today_mark is not None and final_state.is_in_cycle:
+        exp_upnl = str(final_state.unrealized_pnl(today_mark, cfg.fee_pct))
+        exp_mark = str(today_mark)
     expected_snap = StateSnapshot(
         ts=actual_snap.ts,
         cycle_id=final_state.cycle_id,
@@ -325,6 +363,8 @@ async def main() -> int:
         n_tp=final_state.n_tp,
         n_sl=final_state.n_sl,
         realized_pnl=str(final_state.realized_pnl_usdt),
+        unrealized_pnl_at_mark=exp_upnl,
+        mark_price=exp_mark,
     )
 
     # 对比
