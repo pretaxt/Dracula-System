@@ -83,6 +83,15 @@ class DgrBtcStrategyConfig:
     risk_max_daily_loss_pct: Decimal = Decimal("0.05")
     risk_max_drawdown_pct: Decimal = Decimal("0.15")
 
+    # ---------- Pre-liquidation auto-deleverage (审查 #3 救命级补强 2026-05-28) ----------
+    # 距强平 N% (margin_ratio < threshold) → 自动平 deleverage_pct 的仓位救命
+    # risk-manager 审查指出: 策略 SL avg×0.90 永远不会触发, 强平在 avg×0.937 (10x)
+    # 这是唯一能在闪跌中救命的层 (LUNA / FTX / COVID 类)
+    risk_pre_liq_enabled: bool = True
+    risk_pre_liq_margin_ratio_threshold: Decimal = Decimal("1.10")  # 距清算 10% (10x 杠杆下约 avg×0.95)
+    risk_pre_liq_deleverage_pct: Decimal = Decimal("0.50")  # 平 50% 仓位
+    risk_pre_liq_cooldown_seconds: int = 3600  # 同一 cycle 内 1h 不重复触发
+
     # ---------- 执行 ----------
     exec_order_type: str = "LIMIT_MAKER"
     exec_post_only: bool = True
@@ -234,6 +243,15 @@ class DgrBtcStrategyConfig:
             risk_max_drawdown_pct=_D(
                 _get(["risk", "max_drawdown_pct"]), Decimal("0.15")
             ),
+            # pre-liquidation auto-deleverage (审查 #3)
+            risk_pre_liq_enabled=bool(_get(["risk", "pre_liq_enabled"], True)),
+            risk_pre_liq_margin_ratio_threshold=_D(
+                _get(["risk", "pre_liq_margin_ratio_threshold"]), Decimal("1.10")
+            ),
+            risk_pre_liq_deleverage_pct=_D(
+                _get(["risk", "pre_liq_deleverage_pct"]), Decimal("0.50")
+            ),
+            risk_pre_liq_cooldown_seconds=int(_get(["risk", "pre_liq_cooldown_seconds"], 3600)),
             # execution
             exec_order_type=str(_get(["execution", "order_type"], "LIMIT_MAKER")),
             exec_post_only=bool(_get(["execution", "post_only"], True)),

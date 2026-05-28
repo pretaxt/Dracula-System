@@ -76,6 +76,14 @@ risk:
   alert_on_sl: true
   alert_on_kill: true
   alert_on_max_layer: true      # 触达第 5 层时告警
+  # Pre-liquidation auto-deleverage (审查 #3 救命级 2026-05-28)
+  # 距强平 < threshold 时自动平 deleverage_pct 的仓位救命
+  # risk-manager 审查指出: 策略 SL (-10%) 在 10x 杠杆下永远不会触发, 强平在 -6.3%
+  # 这是唯一能在 LUNA/FTX/COVID 类闪跌中救命的层
+  pre_liq_enabled: true
+  pre_liq_margin_ratio_threshold: 1.10   # 距清算 10% (10x 杠杆下约 avg×0.95)
+  pre_liq_deleverage_pct: 0.50           # 平 50% 仓位
+  pre_liq_cooldown_seconds: 3600         # 同一 cycle 内 1h 不重复触发
 
 # ============================================================
 # Live Safety (Phase E 后才用)

@@ -166,6 +166,10 @@ class DgrBtcPaperSession:
         self._rolling_low: Optional[Decimal] = None
         self._last_bar_ts: Optional[datetime] = None
 
+        # Pre-liq auto-deleverage cooldown 跟踪 (审查 #3)
+        self._last_deleverage_at: Optional[datetime] = None
+        self._n_deleverages: int = 0  # 累计触发次数 (审计用)
+
         # 持久化路径
         state_dir = Path(os.environ.get("DGR_BTC_STATE_DIR", "/app/state"))
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -294,6 +298,11 @@ class DgrBtcPaperSession:
             self._check_margin_health(close, alert=True)
         except Exception:
             logger.debug("margin_check_failed", exc_info=True)
+        # 预清算自动减仓 (审查 #3 救命级) — 在 margin alert 之后, 距强平太近时执行
+        try:
+            self._trigger_pre_liq_deleverage(close)
+        except Exception:
+            logger.exception("dgr_btc_pre_liq_deleverage_failed")
 
         try:
             self._persist_state()
@@ -651,6 +660,130 @@ class DgrBtcPaperSession:
 
         return health
 
+    # ──────────────────── pre-liq auto-deleverage (审查 #3 救命级) ────────────────────
+
+    def _trigger_pre_liq_deleverage(self, mark_price: Decimal) -> bool:
+        """救命级风控: 距强平 < threshold 时自动平 deleverage_pct 的仓位.
+
+        risk-manager 审查指出: 策略 SL (avg×0.90) 在 10x 杠杆下永远不会触发
+        (强平在 avg×0.937), LUNA/FTX/COVID 类闪跌策略归零. 这是唯一能救命的层.
+
+        触发条件:
+          - cfg.risk_pre_liq_enabled = True
+          - margin_ratio < cfg.risk_pre_liq_margin_ratio_threshold (默认 1.10)
+          - 距上次触发 > cfg.risk_pre_liq_cooldown_seconds (默认 1h)
+          - state.is_in_cycle (有持仓)
+
+        执行:
+          - 按 deleverage_pct (默认 50%) 比例减仓
+          - 每层 layer qty + cost 同比例缩减 (保持 avg_cost 不变)
+          - 现金 += proceeds (扣 sell fee)
+          - 累计 realized_pnl_usdt += pnl_on_sold_portion
+          - 写 jsonl + telegram 强告警
+          - 不增加 cycle_id (仍是同一 cycle, 只是 size 缩了)
+
+        Returns:
+          True if deleverage triggered, False otherwise.
+        """
+        if not self.cfg.risk_pre_liq_enabled:
+            return False
+        if not self._state.is_in_cycle or mark_price <= _ZERO:
+            return False
+        if self.cfg.leverage <= 1:
+            return False  # 无杠杆无强平风险, 跳过
+
+        # 取健康度 (不触发 alert)
+        health = self._check_margin_health(mark_price, alert=False)
+        if health is None:
+            return False
+        margin_ratio = health["margin_ratio"]
+        if margin_ratio >= self.cfg.risk_pre_liq_margin_ratio_threshold:
+            return False
+
+        # Cooldown
+        now = datetime.now(timezone.utc)
+        if self._last_deleverage_at is not None:
+            elapsed = (now - self._last_deleverage_at).total_seconds()
+            if elapsed < self.cfg.risk_pre_liq_cooldown_seconds:
+                logger.info(
+                    "dgr_btc_pre_liq_skipped_cooldown margin_ratio=%.3f elapsed=%.0fs",
+                    float(margin_ratio), elapsed,
+                )
+                return False
+
+        # ─── 执行 deleverage ───
+        deleverage_pct = self.cfg.risk_pre_liq_deleverage_pct
+        keep_ratio = _ONE - deleverage_pct  # 保留比例 = 50%
+        if keep_ratio <= _ZERO or keep_ratio >= _ONE:
+            logger.error("dgr_btc_pre_liq_invalid_deleverage_pct=%s", deleverage_pct)
+            return False
+
+        # 计算卖出数量 + proceeds
+        from app.strategies.dgr_btc.engine import Layer  # noqa: PLC0415
+        fee_pct = self._engine.cfg.fee_pct
+        qty_sold = self._state.total_qty * deleverage_pct
+        cost_basis_sold = self._state.total_cost * deleverage_pct
+        proceeds = qty_sold * mark_price * (_ONE - fee_pct)
+        pnl = proceeds - cost_basis_sold
+
+        # 缩减每层 (按比例 keep, avg_cost 保持不变)
+        new_layers = [
+            Layer(
+                entry_price=l.entry_price,
+                qty_btc=l.qty_btc * keep_ratio,
+                cost_usdt=l.cost_usdt * keep_ratio,
+            )
+            for l in self._state.layers
+        ]
+        self._state.layers = new_layers
+        self._cash += proceeds
+        self._state.realized_pnl_usdt += pnl
+        self._last_deleverage_at = now
+        self._n_deleverages += 1
+        self._n_trades_executed += 1
+
+        # 重算 next_buy_price (avg_cost 不变所以理论上不变, 但保险起见)
+        if self._state.is_in_cycle:
+            self._state.next_buy_price = self._state.avg_cost * (_ONE - self._engine.cfg.grid_step)
+
+        logger.warning(
+            "dgr_btc_pre_liq_deleverage_triggered ratio=%.3f qty_sold=%s proceeds=%s pnl=%s remaining_qty=%s",
+            float(margin_ratio), qty_sold, proceeds, pnl, self._state.total_qty,
+        )
+
+        # 写 trades jsonl
+        self._append_trade_jsonl({
+            "action": "PRE_LIQ_DELEVERAGE",
+            "fill_price": str(mark_price),
+            "qty": str(qty_sold),
+            "proceeds": str(proceeds),
+            "pre_avg": str(self._state.avg_cost),  # avg 缩后不变
+            "pre_cost": str(cost_basis_sold),
+            "pnl": str(pnl),
+            "pnl_pct": str((pnl / cost_basis_sold * Decimal("100")) if cost_basis_sold > _ZERO else _ZERO),
+            "margin_ratio_at_trigger": str(margin_ratio),
+            "reason": "pre_liquidation_deleverage",
+        })
+
+        # Telegram 强告警
+        if self.cfg.live_safety_telegram_alerts_enabled:
+            try:
+                from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                msg = (
+                    f"\U0001F6A8 dgr_btc 预清算自动减仓触发\n"
+                    f"保证金率: {float(margin_ratio):.3f}x (阈值 {self.cfg.risk_pre_liq_margin_ratio_threshold}x)\n"
+                    f"清算价 ${health['liq_price']:,.2f} 距现价 {health['liq_distance_pct']:.2f}%\n"
+                    f"卖出 {qty_sold:.5f} BTC @ ${mark_price:,.2f}\n"
+                    f"得到现金 ${proceeds:,.2f} | 实现盈亏 ${pnl:+,.2f}\n"
+                    f"剩余持仓 {self._state.total_qty:.5f} BTC | 平均成本 ${self._state.avg_cost:,.2f}\n"
+                    f"累计触发 {self._n_deleverages} 次"
+                )
+                notify_risk_violation("DGR_BTC_PRE_LIQ_DELEVERAGE", msg)
+            except Exception:
+                logger.debug("pre_liq_telegram_failed", exc_info=True)
+
+        return True
+
     # ──────────────────── price fetch ────────────────────
 
     async def _fetch_spot_price(self) -> Decimal:
@@ -723,6 +856,9 @@ class DgrBtcPaperSession:
             ],
             "n_ticks": self._n_ticks,
             "n_trades_executed": self._n_trades_executed,
+            # Pre-liq deleverage 跟踪 (审查 #3)
+            "last_deleverage_at": self._last_deleverage_at.isoformat() if self._last_deleverage_at else None,
+            "n_deleverages": self._n_deleverages,
         }
         tmp = self._state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
@@ -753,6 +889,10 @@ class DgrBtcPaperSession:
             ]
             self._n_ticks = int(data.get("n_ticks", 0))
             self._n_trades_executed = int(data.get("n_trades_executed", 0))
+            # 恢复 pre-liq deleverage 状态 (审查 #3)
+            ld = data.get("last_deleverage_at")
+            self._last_deleverage_at = datetime.fromisoformat(ld) if ld else None
+            self._n_deleverages = int(data.get("n_deleverages", 0))
             logger.info(
                 "dgr_btc_paper_state_restored cycle=%d layers=%d cash=%s",
                 self._state.cycle_id, len(self._state.layers), self._cash,

@@ -283,3 +283,123 @@ async def test_jsonl_write_failure_does_not_crash_tick(cfg, tmpdir_state, monkey
     # tick 仍应完成, layer 仍应入仓 (apply_fill 在 jsonl 写之前)
     await sess._tick()
     assert sess._state.n_layers == 1
+
+
+# ─── F. Pre-liquidation auto-deleverage (审查 #3 救命级) ───
+
+
+def _mock_unhealthy_margin(sess, ratio: Decimal = Decimal("1.05")):
+    """Helper: monkey-patch _check_margin_health to return a fake low margin_ratio.
+    避免依赖具体 leverage/notional 数学, 单纯测 deleverage 逻辑.
+    """
+    def _fake(self_, mark_price, alert=True):
+        return {
+            "leverage": 10,
+            "collateral_usdt": Decimal("1000"),
+            "notional_usdt": Decimal("10000"),
+            "unrealized_pnl": Decimal("-450"),
+            "equity_usdt": Decimal("550"),
+            "maintenance_req_usdt": Decimal("500"),
+            "margin_ratio": ratio,
+            "liq_price": Decimal("62000"),
+            "liq_distance_pct": Decimal("3.2"),
+        }
+    sess._check_margin_health = _fake.__get__(sess, type(sess))
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_triggers_below_threshold(cfg, tmpdir_state):
+    """当 margin_ratio < threshold 时, 自动减仓 50%, cash 增加 proceeds"""
+    import json
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.leverage = 10
+    await sess.start()
+    await sess._tick()  # ENTRY L0 @ 75000
+
+    pre_qty = sess._state.total_qty
+    pre_avg = sess._state.avg_cost
+    pre_cash = sess._cash
+    assert pre_qty > Decimal("0")
+    assert sess._n_deleverages == 0
+
+    # 注入低 margin_ratio (1.05 < 1.10 threshold)
+    _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
+    triggered = sess._trigger_pre_liq_deleverage(Decimal("65000"))
+
+    assert triggered is True, "应该触发 deleverage"
+    assert sess._n_deleverages == 1
+    # 持仓减半
+    assert sess._state.total_qty == pre_qty * Decimal("0.5")
+    # avg_cost 保持不变 (按比例缩, cost/qty 同时减半)
+    assert sess._state.avg_cost == pre_avg
+    # cash 增加 (proceeds from selling 50% at $65000)
+    assert sess._cash > pre_cash
+    # jsonl 应写一行 PRE_LIQ_DELEVERAGE
+    lines = sess._trades_jsonl.read_text().strip().splitlines()
+    rec_last = json.loads(lines[-1])
+    assert rec_last["action"] == "PRE_LIQ_DELEVERAGE"
+    assert rec_last["reason"] == "pre_liquidation_deleverage"
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_skips_above_threshold(cfg, tmpdir_state):
+    """margin_ratio 安全时不触发"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.leverage = 10
+    await sess.start()
+    await sess._tick()  # ENTRY @ 75000
+
+    # 当前价 = entry, margin_ratio 在初始资本下应该 >> 1.1
+    triggered = sess._trigger_pre_liq_deleverage(Decimal("75000"))
+    assert triggered is False
+    assert sess._n_deleverages == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_cooldown(cfg, tmpdir_state):
+    """1h cooldown 内同样的 trigger 条件应被忽略"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.leverage = 10
+    await sess.start()
+    await sess._tick()
+    _mock_unhealthy_margin(sess, ratio=Decimal("1.05"))
+
+    # 第一次触发
+    assert sess._trigger_pre_liq_deleverage(Decimal("65000")) is True
+    assert sess._n_deleverages == 1
+
+    # 紧跟着再调一次 (cooldown 内) — 应跳过
+    assert sess._trigger_pre_liq_deleverage(Decimal("65000")) is False
+    assert sess._n_deleverages == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_disabled(cfg, tmpdir_state):
+    """cfg.risk_pre_liq_enabled = False 时不触发"""
+    adapter = _make_klines_adapter("75000.0")
+    cfg.risk_pre_liq_enabled = False
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.leverage = 10
+    await sess.start()
+    await sess._tick()
+
+    assert sess._trigger_pre_liq_deleverage(Decimal("60000")) is False
+    assert sess._n_deleverages == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_liq_deleverage_no_leverage(cfg, tmpdir_state):
+    """无杠杆 (leverage=1) 时不触发 (无强平风险)"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.leverage = 1
+    await sess.start()
+    await sess._tick()
+
+    # 即便价格暴跌, 1x spot 没强平也不应触发
+    assert sess._trigger_pre_liq_deleverage(Decimal("30000")) is False
+    assert sess._n_deleverages == 0
