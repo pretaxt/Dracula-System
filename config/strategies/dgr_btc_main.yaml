@@ -14,7 +14,7 @@ strategy_type: dgr_btc
 # ============================================================
 # 启停 — 部署后默认 disabled, KILL switch ON, 用户显式开启
 # ============================================================
-enabled: false  # P10 部署后 user 手动 PATCH 改 true
+enabled: false  # P10 设计默认; runtime override 在 host /app/state/overrides.json 才是 single source of truth — 切勿直接编辑此处
 live_mode: false  # paper 14 天通过后才考虑 LIVE
 
 # ============================================================
