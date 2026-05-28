@@ -413,6 +413,97 @@ async def test_trades_jsonl_fsynced_on_write(cfg, tmpdir_state, monkeypatch):
     assert len(fsync_calls) >= 1, "fsync 应在每次 jsonl 写后被调用"
 
 
+# ─── G. Startup inflight reconcile (审查 #2 LIVE 重启恢复) ───
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skipped_when_not_live_mode(cfg, mock_adapter, tmpdir_state):
+    """paper 模式不调 broker, reconcile 直接 skip"""
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=mock_adapter, live_mode=False, tick_interval_seconds=0.01)
+    # 不传 broker_adapter, 走 paper path
+    await sess._reconcile_inflight_on_startup()  # should not raise, returns silently
+    assert True  # no exception = pass
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_dgr_orphans(cfg, tmpdir_state):
+    """LIVE 模式启动时, broker 有 3 个 dgr_ 挂单 → 全 register_local (需注入真 InflightOrderManager)"""
+    from app.strategies.dgr_btc.inflight_manager import InflightOrderManager
+
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fake_broker.fetch_open_orders = AsyncMock(return_value=[
+        {"clientOrderId": "dgr_l1_abc123", "id": "broker_id_1", "side": "BUY", "price": "70000"},
+        {"clientOrderId": "dgr_l2_def456", "id": "broker_id_2", "side": "BUY", "price": "66500"},
+        {"clientOrderId": "dgr_tp_ghi789", "id": "broker_id_3", "side": "SELL", "price": "78000"},
+        {"clientOrderId": "not_dgr_ignored", "id": "other_strategy", "side": "BUY", "price": "50000"},  # 别的策略
+    ])
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    # 替换 _PaperInflightStub 为真 InflightOrderManager (LIVE 实际部署需类似 wiring)
+    sess.inflight_manager = InflightOrderManager(
+        max_inflight_per_side=10, broker_adapter=fake_broker, live_mode=True,
+    )
+
+    assert sess.inflight_manager.total_inflight() == 0
+    await sess._reconcile_inflight_on_startup()
+
+    # 3 个 dgr_ 单都被 register, 第 4 个非 dgr 不动
+    assert sess.inflight_manager.total_inflight() == 3
+    # broker 被调用过
+    fake_broker.fetch_open_orders.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stub_path_logs_but_does_not_register(cfg, tmpdir_state):
+    """paper stub 模式: 检测到 dgr_ 挂单时 log + telegram, 但不 register (stub 无 update_from_open_orders)"""
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fake_broker.fetch_open_orders = AsyncMock(return_value=[
+        {"clientOrderId": "dgr_l1_orphan", "id": "boid", "side": "BUY", "price": "70000"},
+    ])
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    # 保留默认 _PaperInflightStub
+    await sess._reconcile_inflight_on_startup()
+    # stub.total_inflight 仍 0 (没 register)
+    assert sess.inflight_manager.total_inflight() == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fail_soft_on_broker_error(cfg, tmpdir_state, caplog):
+    """broker.fetch_open_orders 抛异常时, reconcile 不阻塞启动 (fail-soft)"""
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fake_broker.fetch_open_orders = AsyncMock(side_effect=ConnectionError("simulated"))
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    # 不应抛, 只 log
+    await sess._reconcile_inflight_on_startup()
+    # 应有 warning log
+    assert any("reconcile_fetch_open_orders_failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handles_empty_open_orders(cfg, tmpdir_state):
+    """broker 端无任何挂单 → log + 0 recovery"""
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fake_broker.fetch_open_orders = AsyncMock(return_value=[])
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    await sess._reconcile_inflight_on_startup()
+    assert sess.inflight_manager.total_inflight() == 0
+
+
 @pytest.mark.asyncio
 async def test_pre_liq_deleverage_no_leverage(cfg, tmpdir_state):
     """无杠杆 (leverage=1) 时不触发 (无强平风险)"""

@@ -200,7 +200,7 @@ class DgrBtcPaperSession:
     # ──────────────────── lifecycle ────────────────────
 
     async def start(self) -> None:
-        """启动: restore state + 拉初始价"""
+        """启动: restore state + 拉初始价 + (live) 与 broker 对账孤儿单"""
         logger.info("dgr_btc_paper_start instance=%s live=%s cap=%s",
                     self.cfg.instance_name, self.live_mode, self.cfg.total_capital_usdt)
 
@@ -216,7 +216,111 @@ class DgrBtcPaperSession:
         except Exception as e:
             logger.exception("dgr_btc_paper_initial_price_fetch_failed: %s", e)
 
+        # 审查 #2: LIVE 重启 inflight reconcile.
+        # broker 端可能有 restart 前留下的 dgr_ 挂单. 本地 inflight 为空 (未持久化),
+        # 必须从 broker 拉回, 否则 (a) 这些单游离 / (b) 新订单 client_order_id 冲突 /
+        # (c) 撤单时漏撤 → 单边持仓风险.
+        if self.live_mode and self._broker_adapter is not None:
+            try:
+                await self._reconcile_inflight_on_startup()
+            except Exception:
+                logger.exception("dgr_btc_inflight_reconcile_failed")
+
         self._running = True
+
+    async def _reconcile_inflight_on_startup(self) -> None:
+        """重启时与 broker 对账, 把 dgr_ 前缀的存活挂单 re-register 到 inflight_manager.
+
+        策略: 启动安全优先
+          - 拿 broker.fetch_open_orders() (全 symbol 范围, 但 broker_adapter 内部已过滤当前 symbol)
+          - 按 client_order_id 前缀 'dgr_' 筛 (避免误伤别的策略)
+          - 调 inflight_manager.update_from_open_orders, orphan 部分自动 register_local
+          - 非 dgr_ 前缀的不动 (别人的策略 / 用户手动单)
+          - 异常 fail-soft: log 但不 raise (启动不应被对账阻塞)
+        """
+        from app.strategies.dgr_btc.types import MarketType  # noqa: PLC0415
+
+        if self._broker_adapter is None:
+            return
+        try:
+            open_orders = await self._broker_adapter.fetch_open_orders()
+        except Exception as e:
+            logger.warning("dgr_btc_reconcile_fetch_open_orders_failed: %s", str(e)[:120])
+            return
+
+        # 过滤 dgr_ 前缀的挂单 (我们的)
+        ours = []
+        for o in open_orders or []:
+            cid = str(o.get("clientOrderId") or o.get("clientOid") or "")
+            if cid.startswith("dgr_"):
+                ours.append(o)
+
+        if not ours:
+            logger.info("dgr_btc_reconcile_no_outstanding_orders")
+            return
+
+        # 真 InflightOrderManager 才有 update_from_open_orders. _PaperInflightStub 没有
+        # — 那种情况退化为 "只识别 + 记账 + 通知" 模式 (无 register_local).
+        has_full_manager = hasattr(self.inflight_manager, "update_from_open_orders") \
+            and hasattr(self.inflight_manager, "register_local")
+
+        recovered = 0
+        missing_count = 0
+        stale_count = 0
+        if has_full_manager:
+            try:
+                missing, stale, orphan = self.inflight_manager.update_from_open_orders(
+                    open_orders=ours, max_grid_drift=None, current_center=None,
+                )
+                missing_count = len(missing)
+                stale_count = len(stale)
+            except Exception:
+                logger.exception("dgr_btc_reconcile_update_failed")
+                return
+
+            # 重注册 orphan (restart recovery 主路径)
+            for o in orphan:
+                try:
+                    oid = str(o.get("id") or o.get("orderId") or o.get("clientOrderId") or "")
+                    side = (o.get("side") or "").upper()
+                    price = Decimal(str(o.get("price", "0")))
+                    self.inflight_manager.register_local(
+                        order_id=oid, market=MarketType.SPOT, grid_level=price, side=side,
+                    )
+                    recovered += 1
+                    logger.info(
+                        "dgr_btc_reconcile_recovered order_id=%s side=%s price=%s",
+                        oid, side, price,
+                    )
+                except Exception:
+                    logger.exception("dgr_btc_reconcile_register_orphan_failed o=%r", o)
+        else:
+            # Stub 模式: 只识别 + 日志 + telegram, 不调 register
+            for o in ours:
+                logger.info(
+                    "dgr_btc_reconcile_detected_orphan_(no_register) cid=%s side=%s price=%s",
+                    o.get("clientOrderId"), o.get("side"), o.get("price"),
+                )
+
+        logger.info(
+            "dgr_btc_reconcile_complete found=%d recovered=%d missing=%d stale=%d stub=%s",
+            len(ours), recovered, missing_count, stale_count, not has_full_manager,
+        )
+
+        # Telegram 简告知 (启动事件值得通知)
+        if len(ours) > 0 and self.cfg.live_safety_telegram_alerts_enabled:
+            try:
+                from app.notifications.telegram import notify_system  # noqa: PLC0415
+                detail = (
+                    f"♻️ dgr_btc 启动 inflight 对账: 发现 {len(ours)} 个 broker 端 dgr_ 挂单"
+                )
+                if has_full_manager:
+                    detail += f", 已 recover {recovered} 个到本地 inflight"
+                else:
+                    detail += " (paper stub 模式, 未重新注册)"
+                notify_system(detail)
+            except Exception:
+                logger.debug("reconcile_telegram_failed", exc_info=True)
 
     async def run_forever(self) -> None:
         """tick loop"""
