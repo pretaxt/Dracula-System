@@ -1049,6 +1049,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.state.dgr_btc_paper = dgr_btc_paper_session
 
+    # ---- dgr_btc (#13) pnl_timeseries writer (60s 周期, mirror hedged_grid) ----
+    async def _dgr_pnl_writer():
+        from decimal import Decimal as _Dec
+        from datetime import datetime as _dt, timezone as _tz
+        from sqlalchemy import text
+        from app.core.database import get_session
+        while True:
+            try:
+                await asyncio.sleep(60)
+                _sess = getattr(app.state, "dgr_btc_paper", None)
+                if _sess is None or not getattr(_sess, "_running", False):
+                    continue
+                _snap = _sess.snapshot()
+                _eq = _Dec(str(_snap.get("total_equity") or "0"))
+                _init = _Dec(str(_sess.cfg.total_capital_usdt))
+                _pnl = _eq - _init
+                _funding = _Dec(str(_snap.get("funding_paid") or "0"))
+                _fees = _Dec(str(_snap.get("total_fees") or "0"))
+                async with get_session() as _db:
+                    await _db.execute(
+                        text("INSERT INTO pnl_timeseries "
+                             "(time, strategy_instance, price_pnl, funding_pnl, fees_paid, net_pnl, cumulative_pnl, total_capital, available_capital) "
+                             "VALUES (:t, :inst, :ppnl, :fpnl, :fees, :net, :cum, :cap, :avail)"),
+                        dict(t=_dt.now(_tz.utc), inst="dgr_btc_main",
+                             ppnl=_pnl - _funding + _fees, fpnl=_funding, fees=_fees,
+                             net=_pnl, cum=_pnl, cap=_init, avail=_eq)
+                    )
+                    await _db.commit()
+            except Exception:
+                logger.exception("dgr_btc_pnl_timeseries_write_failed")
+
+    _dgr_pnl_task = asyncio.create_task(_dgr_pnl_writer(), name="dgr_btc_pnl_writer")
+    task_supervisor.register("dgr_btc_pnl_writer", _dgr_pnl_task)
+
+
     # --- dgr_btc P11 daily mirror divergence scheduler ---
     # 替代 host crontab — in-process scheduler 复用 TaskSupervisor 的 backoff/告警/health
     try:
