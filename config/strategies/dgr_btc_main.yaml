@@ -76,6 +76,12 @@ risk:
   alert_on_sl: true
   alert_on_kill: true
   alert_on_max_layer: true      # 触达第 5 层时告警
+  # round 2 audit B3 (risk-manager): KILL 触发后行为
+  # halt = 当前行为, 持仓冻结 (闪跌时=等死)
+  # flat = 强制全平仓 (LIVE 调 broker, paper 合成) — 闪跌救命路径
+  kill_action: halt
+  # max_forced_holds_hours: 满 max_layers 层卡死超此小时数 → 自动 KILL
+  # (上面已声明字段但代码无实现, 本次落地, 防 LUNA 锁死)
   # Regime detector (审查 #8 sideways grinder 防护 2026-05-28)
   # 30d 年化波动 < 25% AND 30d 最大回撤 > -15% → 暂停加仓 (ENTRY + ADD_LAYER)
   # SL/TP 永远启用. 默认 OFF — paper 14d 验证后再 PATCH 开启 (会影响 mirror)

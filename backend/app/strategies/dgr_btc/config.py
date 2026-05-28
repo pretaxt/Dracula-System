@@ -85,6 +85,14 @@ class DgrBtcStrategyConfig:
     risk_min_orderbook_depth_usdt: Decimal = Decimal("50000")
     risk_max_daily_loss_pct: Decimal = Decimal("0.05")
     risk_max_drawdown_pct: Decimal = Decimal("0.15")
+    # round 2 audit B3 (risk-manager): KILL switch 触发后行为
+    # "halt"  = 当前行为, 持仓冻结, _tick 直接 return (闪跌时=等死)
+    # "flat"  = 触发即全平仓 (LIVE: broker.place_market_unwind, paper: 合成)
+    risk_kill_action: str = "halt"
+    # round 2 audit (risk-manager): max_forced_holds 24h KILL 落地
+    # 满 max_layers 层卡死超过此小时数 → 自动写 KILL switch
+    # (yaml 之前已声明此字段但代码无实现, 防 LUNA 类闪跌后锁死)
+    risk_max_forced_holds_hours: int = 24
 
     # ---------- Regime detector (审查 #8 — sideways grinder 防护 2026-05-28) ----------
     # quant agent 指出: dgr_btc 在 sideways-with-shallow-drawdown regime (2024 H2 类)
@@ -263,6 +271,9 @@ class DgrBtcStrategyConfig:
             risk_max_drawdown_pct=_D(
                 _get(["risk", "max_drawdown_pct"]), Decimal("0.15")
             ),
+            # round 2 audit B3: KILL action
+            risk_kill_action=str(_get(["risk", "kill_action"], "halt")),
+            risk_max_forced_holds_hours=int(_get(["risk", "max_forced_holds_hours"], 24)),
             # regime detector (审查 #8)
             risk_regime_gate_enabled=bool(_get(["risk", "regime_gate_enabled"], False)),
             risk_regime_vol_threshold=_D(

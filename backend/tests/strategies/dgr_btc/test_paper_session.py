@@ -9,6 +9,7 @@
 import asyncio
 import os
 import tempfile
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -602,6 +603,154 @@ async def test_pre_liq_deleverage_live_broker_reject_fail_closed(cfg, tmpdir_sta
     assert sess._n_deleverages == pre_n_deleverages  # 计数器没增
     # 没有 cooldown 锚点更新 (允许下 tick 重试)
     assert sess._last_deleverage_at is None
+
+
+# ─── F.3 round 2 B3: KILL switch flat-on-trigger ───
+
+
+@pytest.mark.asyncio
+async def test_kill_halt_action_returns_without_flat(cfg, tmpdir_state, monkeypatch, tmp_path):
+    """默认 kill_action='halt' 时: _tick 检测 KILL 文件 → 直接 return, 不平仓"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.risk_kill_action = "halt"  # 显式默认
+    _inject_layer(sess)
+    pre_qty = sess._state.total_qty
+
+    # 写 KILL 文件
+    kill_file = tmp_path / "dgr_btc_KILL"
+    monkeypatch.setattr("os.path.exists", lambda p: str(p) == "/app/state/dgr_btc_KILL")
+    # mock 路径检查
+    import os as _os
+    monkeypatch.setattr(_os.path, "exists", lambda p: p == "/app/state/dgr_btc_KILL")
+
+    await sess._tick()
+    # halt 模式下持仓不变
+    assert sess._state.total_qty == pre_qty
+    assert sess._kill_flat_executed is False
+
+
+@pytest.mark.asyncio
+async def test_kill_flat_action_executes_full_unwind_paper(cfg, tmpdir_state, monkeypatch):
+    """kill_action='flat' + paper 模式: KILL 触发后强制全平 (合成 fill)"""
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.risk_kill_action = "flat"
+    _inject_layer(sess)
+    sess._last_spot_px = Decimal("70000")  # 触发价
+
+    pre_cash = sess._cash
+    assert sess._state.is_in_cycle
+
+    # mock KILL 文件存在
+    import os as _os
+    monkeypatch.setattr(_os.path, "exists", lambda p: p == "/app/state/dgr_btc_KILL")
+
+    await sess._tick()
+    # 平仓后 layers 清空, cash 增加 proceeds
+    assert sess._state.n_layers == 0
+    assert sess._cash > pre_cash
+    assert sess._kill_flat_executed is True
+
+
+@pytest.mark.asyncio
+async def test_kill_flat_action_calls_broker_in_live(cfg, tmpdir_state, monkeypatch):
+    """kill_action='flat' + LIVE 模式: 调 broker.place_market_unwind 真下平仓单"""
+    from app.strategies.dgr_btc.types import MarketType, Side
+
+    adapter = _make_klines_adapter("75000.0")
+    fake_broker = MagicMock()
+    fill_trade = MagicMock()
+    fill_trade.price = "70100"
+    fill_trade.quantity = "0.328"
+    fake_broker.place_market_unwind = AsyncMock(return_value=fill_trade)
+
+    sess = DgrBtcPaperSession(
+        cfg=cfg, adapter=adapter, live_mode=True,
+        broker_adapter=fake_broker, tick_interval_seconds=0.01,
+    )
+    sess.cfg.risk_kill_action = "flat"
+    _inject_layer(sess)
+    sess._last_spot_px = Decimal("70000")
+
+    import os as _os
+    monkeypatch.setattr(_os.path, "exists", lambda p: p == "/app/state/dgr_btc_KILL")
+
+    await sess._tick()
+    # LIVE: broker 必调
+    fake_broker.place_market_unwind.assert_called_once()
+    call_args = fake_broker.place_market_unwind.call_args
+    assert call_args.args[0] == MarketType.SPOT
+    assert call_args.args[1] == Side.SELL
+    assert sess._state.n_layers == 0
+    assert sess._kill_flat_executed is True
+
+
+# ─── F.4 round 2: max_forced_holds 24h KILL ───
+
+
+def test_max_forced_holds_kill_triggers_after_threshold(cfg, tmpdir_state, tmp_path, monkeypatch):
+    """满 max_layers 层 + 卡死超 24h → 写 KILL switch 文件"""
+    from datetime import timedelta
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.risk_max_forced_holds_hours = 24
+
+    # 注入满 4 层 (max_layers=4)
+    from app.strategies.dgr_btc.engine import Layer
+    sess._state.layers = [
+        Layer(entry_price=Decimal("75000"), qty_btc=Decimal("0.05"), cost_usdt=Decimal("3750")),
+        Layer(entry_price=Decimal("71250"), qty_btc=Decimal("0.07"), cost_usdt=Decimal("4988")),
+        Layer(entry_price=Decimal("67688"), qty_btc=Decimal("0.10"), cost_usdt=Decimal("6769")),
+        Layer(entry_price=Decimal("64303"), qty_btc=Decimal("0.15"), cost_usdt=Decimal("9645")),
+    ]
+    sess._cash = Decimal("174848")
+
+    # 模拟 25 小时前满层
+    sess._full_layer_since = datetime.now(timezone.utc) - timedelta(hours=25)
+
+    # 用 monkeypatch 替换 Path.touch 验证 KILL 文件写入
+    touched_paths: list[str] = []
+    real_touch = Path.touch
+    monkeypatch.setattr(Path, "touch", lambda self: touched_paths.append(str(self)))
+
+    sess._check_max_forced_holds_kill()
+    # 应触发 KILL 文件创建
+    kill_files = [p for p in touched_paths if "FULL_LAYER_TIMEOUT" in p]
+    assert len(kill_files) == 1
+
+
+def test_max_forced_holds_skipped_under_threshold(cfg, tmpdir_state):
+    """满层但未超阈值 (1h) 不触发"""
+    from datetime import timedelta
+    from app.strategies.dgr_btc.engine import Layer
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess.cfg.risk_max_forced_holds_hours = 24
+    sess._state.layers = [
+        Layer(entry_price=Decimal("75000"), qty_btc=Decimal(f"0.{i+1}"), cost_usdt=Decimal(f"{(i+1)*1000}"))
+        for i in range(4)
+    ]
+    sess._full_layer_since = datetime.now(timezone.utc) - timedelta(hours=1)  # 仅 1h
+    # 不应抛 / 不应触发 KILL
+    sess._check_max_forced_holds_kill()  # 不抛即通过
+
+
+def test_max_forced_holds_resets_when_not_full(cfg, tmpdir_state):
+    """非满层时 _full_layer_since 必须重置"""
+    from datetime import timedelta
+    from app.strategies.dgr_btc.engine import Layer
+
+    adapter = _make_klines_adapter("75000.0")
+    sess = DgrBtcPaperSession(cfg=cfg, adapter=adapter, tick_interval_seconds=0.01)
+    sess._state.layers = [Layer(entry_price=Decimal("75000"), qty_btc=Decimal("0.1"), cost_usdt=Decimal("7500"))]
+    sess._full_layer_since = datetime.now(timezone.utc) - timedelta(hours=10)
+
+    sess._check_max_forced_holds_kill()
+    # 非满层 → 锚点重置
+    assert sess._full_layer_since is None
 
 
 @pytest.mark.asyncio

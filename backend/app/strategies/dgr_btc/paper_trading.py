@@ -189,6 +189,11 @@ class DgrBtcPaperSession:
         self._last_deleverage_at: Optional[datetime] = None
         self._n_deleverages: int = 0  # 累计触发次数 (审计用)
 
+        # round 2 audit B3: KILL flat-on-trigger 执行标志 (单次)
+        self._kill_flat_executed: bool = False
+        # round 2 audit: 满层卡死时长跟踪 (max_forced_holds 24h KILL)
+        self._full_layer_since: Optional[datetime] = None
+
         # §6.2 #8 regime detector 缓存
         # 每小时只 fetch 30d bars 一次 (避免每 tick 都拉 720 根 1h bar)
         self._regime_last_eval_at: Optional[datetime] = None
@@ -419,15 +424,32 @@ class DgrBtcPaperSession:
         self._last_tick_at = datetime.now(timezone.utc)
 
         # KILL switch 检查 (paper + LIVE 都遵守)
+        # round 2 audit B3 (risk-manager): KILL 触发后, 根据 cfg.risk_kill_action 决策:
+        #   "halt" (默认) = 持仓冻结, _tick 直接 return (当前行为)
+        #   "flat"        = 强制全平仓 (LIVE 调 broker, paper 合成), 然后 return
         kill_path = "/app/state/dgr_btc_KILL"
         if os.path.exists(kill_path):
-            # 仍 fetch price 让 _last_spot_px 更新 (UI 显示用)，但不调 engine.decide
             try:
                 price = await self._fetch_spot_price()
                 self._last_spot_px = price
             except Exception:
                 pass
+            # 若 kill_action == "flat" 且有持仓, 强制全平 (单次, 已平不再重复)
+            if (
+                self.cfg.risk_kill_action == "flat"
+                and self._state.is_in_cycle
+                and not getattr(self, "_kill_flat_executed", False)
+            ):
+                try:
+                    await self._execute_kill_flat()
+                    self._kill_flat_executed = True
+                except Exception:
+                    logger.exception("dgr_btc_kill_flat_execute_failed")
             return
+
+        # round 2 audit (risk-manager): max_forced_holds 24h KILL 落地
+        # 满 max_layers 层卡死超过阈值 → 自动写 KILL switch (防 LUNA 类闪跌后无限锁死)
+        self._check_max_forced_holds_kill()
 
         # 拉最新 1m bar，含当前分钟 intrabar low (P11 修复: 让 paper 接近回测 intrabar mode)
         # 用 dracula adapter.fetch_klines(Symbol, interval, limit, InstrumentType.SPOT)
@@ -771,6 +793,146 @@ class DgrBtcPaperSession:
                 )
         except Exception:
             logger.exception("dgr_btc_margin_blind_kill_failed")
+
+    # ──────────────────── B3 KILL flat-on-trigger (round 2 audit risk) ────────────────────
+
+    async def _execute_kill_flat(self) -> None:
+        """KILL 触发且 risk_kill_action == 'flat' 时, 强制全平仓.
+
+        LIVE: 调 broker.place_market_unwind 真下市价卖单, 失败 fail-soft (log + telegram).
+        paper: 用 _last_spot_px 合成 fill 更新 state.
+        """
+        if not self._state.is_in_cycle:
+            return  # 空仓不动
+        mark_price = self._last_spot_px or _ZERO
+        if mark_price <= _ZERO:
+            logger.warning("dgr_btc_kill_flat_skipped no_mark_price")
+            return
+
+        fee_pct = self._engine.cfg.fee_pct
+        pre_qty = self._state.total_qty
+        pre_cost = self._state.total_cost
+        pre_avg = self._state.avg_cost
+
+        # LIVE 走 broker, paper 合成
+        if self.live_mode and self._broker_adapter is not None:
+            from app.strategies.dgr_btc.types import MarketType, Side  # noqa: PLC0415
+            try:
+                trade = await self._broker_adapter.place_market_unwind(
+                    MarketType.SPOT, Side.SELL, quantity=pre_qty,
+                )
+                fill_price = Decimal(str(getattr(trade, "price", mark_price)))
+                actual_qty = Decimal(str(getattr(trade, "quantity", pre_qty)))
+                proceeds = fill_price * actual_qty * (_ONE - fee_pct)
+            except Exception as e:
+                logger.error(
+                    "dgr_btc_kill_flat_LIVE_BROKER_REJECT qty=%s reason=%s",
+                    pre_qty, str(e)[:200],
+                )
+                if self.cfg.live_safety_telegram_alerts_enabled:
+                    try:
+                        from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                        notify_risk_violation(
+                            "DGR_BTC_KILL_FLAT_BROKER_REJECT",
+                            f"🚨🚨 dgr_btc KILL flat 平仓单被 broker 拒绝!\n"
+                            f"尝试卖出 {pre_qty:.5f} BTC @ market\n"
+                            f"原因: {str(e)[:120]}\n"
+                            f"本地持仓**未平**, 下 tick 重试.",
+                        )
+                    except Exception:
+                        pass
+                return  # 不更新 _kill_flat_executed, 下 tick 重试
+        else:
+            fill_price = mark_price
+            actual_qty = pre_qty
+            proceeds = actual_qty * mark_price * (_ONE - fee_pct)
+
+        pnl = proceeds - pre_cost
+        # 全平 → 清空 layers + cash += proceeds + realized_pnl += pnl
+        self._state.layers = []
+        self._state.next_buy_price = None
+        self._cash += proceeds
+        self._state.realized_pnl_usdt += pnl
+        # 不增 cycle_id (异常退出, 不算正常 cycle 结束)
+        self._n_trades_executed += 1
+
+        mode_label = "LIVE" if (self.live_mode and self._broker_adapter is not None) else "paper"
+        logger.warning(
+            "dgr_btc_kill_flat_executed mode=%s qty=%s fill_px=%s proceeds=%s pnl=%s",
+            mode_label, actual_qty, fill_price, proceeds, pnl,
+        )
+        self._append_trade_jsonl({
+            "action": "KILL_FLAT",
+            "mode": mode_label,
+            "fill_price": str(fill_price),
+            "qty": str(actual_qty),
+            "proceeds": str(proceeds),
+            "pre_avg": str(pre_avg),
+            "pre_cost": str(pre_cost),
+            "pnl": str(pnl),
+            "reason": "kill_switch_flat_action",
+        })
+        if self.cfg.live_safety_telegram_alerts_enabled:
+            try:
+                from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                notify_risk_violation(
+                    "DGR_BTC_KILL_FLAT_EXECUTED",
+                    f"🚨 dgr_btc KILL flat 已执行 [{mode_label}]\n"
+                    f"全平 {actual_qty:.5f} BTC @ ${fill_price:,.2f}\n"
+                    f"实现盈亏 ${pnl:+,.2f}",
+                )
+            except Exception:
+                pass
+
+    # ──────────────────── max_forced_holds 24h KILL (round 2 audit) ────────────────────
+
+    def _check_max_forced_holds_kill(self) -> None:
+        """满 max_layers 层卡死超 N 小时 → 自动写 KILL switch.
+
+        防 LUNA 类闪跌后, ladder 用尽 + 价格反弹不到 TP + 不触达 SL 的'锁死'场景.
+        """
+        cfg = self.cfg
+        if cfg.risk_max_forced_holds_hours <= 0:
+            return  # 0 = 禁用
+
+        # 状态机: 满层时设锚, 未满层 / 空仓时清零
+        if self._state.n_layers >= cfg.mart_max_layers:
+            if self._full_layer_since is None:
+                self._full_layer_since = datetime.now(timezone.utc)
+                logger.info(
+                    "dgr_btc_full_layer_reached layers=%d threshold_hours=%d",
+                    self._state.n_layers, cfg.risk_max_forced_holds_hours,
+                )
+        else:
+            self._full_layer_since = None
+            return
+
+        # 检查时长
+        elapsed_hours = (datetime.now(timezone.utc) - self._full_layer_since).total_seconds() / 3600
+        if elapsed_hours < cfg.risk_max_forced_holds_hours:
+            return
+
+        # 触发 KILL
+        try:
+            kill_path = "/app/state/dgr_btc_KILL.FULL_LAYER_TIMEOUT_" + \
+                datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            Path(kill_path).touch()
+            logger.critical(
+                "dgr_btc_kill_triggered_full_layer_timeout layers=%d elapsed_hours=%.1f threshold=%d kill_path=%s",
+                self._state.n_layers, elapsed_hours, cfg.risk_max_forced_holds_hours, kill_path,
+            )
+            if cfg.live_safety_telegram_alerts_enabled:
+                from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                notify_risk_violation(
+                    "DGR_BTC_KILL_FULL_LAYER_TIMEOUT",
+                    f"🚨🚨 dgr_btc KILL: 满 {self._state.n_layers} 层卡死 "
+                    f"{elapsed_hours:.1f}h > {cfg.risk_max_forced_holds_hours}h 阈值\n"
+                    f"含义: LUNA/FTX 类闪跌后 ladder 用尽 + 价格未反弹到 TP + 未跌到 SL\n"
+                    f"动作: 已写 KILL switch ({kill_path})\n"
+                    f"若 cfg.risk_kill_action='flat' → 下 tick 自动全平; 否则 halt 持仓冻结",
+                )
+        except Exception:
+            logger.exception("dgr_btc_full_layer_kill_write_failed")
 
     # ──────────────────── pre-liq auto-deleverage (审查 #3 救命级) ────────────────────
 
@@ -1148,6 +1310,9 @@ class DgrBtcPaperSession:
             # Pre-liq deleverage 跟踪 (审查 #3)
             "last_deleverage_at": self._last_deleverage_at.isoformat() if self._last_deleverage_at else None,
             "n_deleverages": self._n_deleverages,
+            # round 2 audit B3 + max_forced_holds
+            "full_layer_since": self._full_layer_since.isoformat() if self._full_layer_since else None,
+            "kill_flat_executed": self._kill_flat_executed,
         }
         tmp = self._state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
@@ -1182,6 +1347,10 @@ class DgrBtcPaperSession:
             ld = data.get("last_deleverage_at")
             self._last_deleverage_at = datetime.fromisoformat(ld) if ld else None
             self._n_deleverages = int(data.get("n_deleverages", 0))
+            # round 2 audit B3 + max_forced_holds
+            fls = data.get("full_layer_since")
+            self._full_layer_since = datetime.fromisoformat(fls) if fls else None
+            self._kill_flat_executed = bool(data.get("kill_flat_executed", False))
             logger.info(
                 "dgr_btc_paper_state_restored cycle=%d layers=%d cash=%s",
                 self._state.cycle_id, len(self._state.layers), self._cash,
