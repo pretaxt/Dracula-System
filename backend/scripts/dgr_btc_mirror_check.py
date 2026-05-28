@@ -218,25 +218,25 @@ def compare_states(
 
     # cycle_id, n_tp, n_sl: 整数差异
     if expected.cycle_id != actual.cycle_id:
-        diffs.append(f"cycle_id expected={expected.cycle_id} actual={actual.cycle_id}")
+        diffs.append(f"周期 ID 不一致 预期={expected.cycle_id} 实际={actual.cycle_id}")
     if abs(expected.n_tp - actual.n_tp) > 0:
-        diffs.append(f"n_tp expected={expected.n_tp} actual={actual.n_tp}")
+        diffs.append(f"止盈次数不一致 预期={expected.n_tp} 实际={actual.n_tp}")
     if abs(expected.n_sl - actual.n_sl) > 0:
-        diffs.append(f"n_sl expected={expected.n_sl} actual={actual.n_sl}")
+        diffs.append(f"止损次数不一致 预期={expected.n_sl} 实际={actual.n_sl}")
 
     # cash: % 差异
     exp_cash = Decimal(expected.cash)
     act_cash = Decimal(actual.cash)
     cash_pct = pct_diff(exp_cash, act_cash)
     if cash_pct > threshold_pct:
-        diffs.append(f"cash diff {cash_pct:.2f}% expected={exp_cash:.2f} actual={act_cash:.2f}")
+        diffs.append(f"现金偏差 {cash_pct:.2f}% 预期=${exp_cash:.2f} 实际=${act_cash:.2f}")
 
     # realized_pnl: 绝对 USDT 差异 (容差 $5 或 10% 取大)
     exp_pnl = Decimal(expected.realized_pnl)
     act_pnl = Decimal(actual.realized_pnl)
     pnl_diff_abs = abs(act_pnl - exp_pnl)
     if pnl_diff_abs > Decimal("5") and pct_diff(exp_pnl, act_pnl) > threshold_pct:
-        diffs.append(f"realized_pnl diff ${pnl_diff_abs:.2f} expected={exp_pnl:.2f} actual={act_pnl:.2f}")
+        diffs.append(f"已实现盈亏偏差 ${pnl_diff_abs:.2f} 预期=${exp_pnl:.2f} 实际=${act_pnl:.2f}")
 
     return (len(diffs) > 0, diffs)
 
@@ -253,14 +253,14 @@ async def send_telegram_alert(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
-        logger.warning("telegram env vars missing, skip alert")
+        logger.warning("telegram 环境变量未设置, 跳过推送")
         return
     import httpx
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             await client.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"})
-            logger.info("telegram alert sent")
+            logger.info("telegram 告警已发送")
         except Exception as e:
             logger.exception(f"telegram send failed: {e}")
 
@@ -269,13 +269,13 @@ async def main() -> int:
     today = datetime.now(timezone.utc).date().isoformat()
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
 
-    logger.info(f"mirror check: today={today} yesterday={yesterday}")
+    logger.info(f"镜像检查: 今日={today} 昨日={yesterday}")
 
     # 加载当前 paper state
     try:
         cur_state, cur_cash = load_paper_state()
     except FileNotFoundError:
-        logger.warning("paper state file not found (session not started?)")
+        logger.warning("paper 状态文件未找到 (session 未启动?)")
         return 1
     actual_snap = StateSnapshot.from_state(cur_state, cur_cash)
     save_snapshot(actual_snap, today)
@@ -283,7 +283,7 @@ async def main() -> int:
     # 加载昨天 snapshot
     y_snap = load_snapshot(yesterday)
     if y_snap is None:
-        logger.info(f"no snapshot for {yesterday} — first run, saving baseline only")
+        logger.info(f"昨日 ({yesterday}) 无快照 — 首跑，仅保存当日基线")
         write_audit({"event": "baseline_saved", "date": today, "snapshot": asdict(actual_snap)})
         return 0
 
@@ -292,7 +292,7 @@ async def main() -> int:
     y_state, y_cash = reconstruct_state_from_snapshot(y_snap, cfg)
 
     df = await fetch_24h_bars()
-    logger.info(f"fetched {len(df)} 1h bars for last 24h")
+    logger.info(f"已拉取最近 24h 共 {len(df)} 根 1h K 线")
 
     # P3 修复 (Codex medium): 用 init_state + init_cash 直接续跑昨日 state,
     # 不再丢弃重建出来的 y_state. layers/avg_cost/next_buy/n_tp/n_sl/realized_pnl
@@ -325,17 +325,27 @@ async def main() -> int:
     write_audit(audit_payload)
 
     if diverged:
+        # 预期 cash 含浮动持仓估值, 实际 cash 仅为纯现金, 两边格式化为可读金额
+        try:
+            exp_cash_f = float(Decimal(expected_snap.cash))
+            act_cash_f = float(Decimal(actual_snap.cash))
+        except Exception:
+            exp_cash_f, act_cash_f = 0.0, 0.0
         msg = (
-            f"⚠️ <b>dgr_btc mirror divergence</b> ({today})\n\n"
-            f"Expected (backtest replay): cycle={expected_snap.cycle_id} TP={expected_snap.n_tp} SL={expected_snap.n_sl} cash=${expected_snap.cash}\n"
-            f"Actual (paper):             cycle={actual_snap.cycle_id} TP={actual_snap.n_tp} SL={actual_snap.n_sl} cash=${actual_snap.cash}\n\n"
-            f"Diffs:\n" + "\n".join(f"  - {d}" for d in diffs)
+            f"⚠️ <b>dgr_btc 镜像一致性告警</b> ({today})\n\n"
+            f"<b>预期 (回测复盘)</b>:\n"
+            f"  周期 {expected_snap.cycle_id} · 止盈 {expected_snap.n_tp} · 止损 {expected_snap.n_sl}\n"
+            f"  权益 ${exp_cash_f:,.2f}\n\n"
+            f"<b>实际 (paper 实盘)</b>:\n"
+            f"  周期 {actual_snap.cycle_id} · 止盈 {actual_snap.n_tp} · 止损 {actual_snap.n_sl}\n"
+            f"  现金 ${act_cash_f:,.2f}\n\n"
+            f"<b>偏差项</b>:\n" + "\n".join(f"  · {d}" for d in diffs)
         )
-        logger.warning(f"DIVERGENCE: {diffs}")
+        logger.warning(f"镜像偏差: {diffs}")
         await send_telegram_alert(msg)
         return 2
 
-    logger.info(f"mirror OK: paper ≈ backtest (cycle={actual_snap.cycle_id} TP={actual_snap.n_tp} SL={actual_snap.n_sl})")
+    logger.info(f"镜像一致: paper ≈ 回测 (周期={actual_snap.cycle_id} 止盈={actual_snap.n_tp} 止损={actual_snap.n_sl})")
     return 0
 
 
