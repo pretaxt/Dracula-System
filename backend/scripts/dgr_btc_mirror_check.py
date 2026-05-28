@@ -325,20 +325,45 @@ async def main() -> int:
     write_audit(audit_payload)
 
     if diverged:
-        # 预期 cash 含浮动持仓估值, 实际 cash 仅为纯现金, 两边格式化为可读金额
+        # 拉当前 BTC 价用于浮动盈亏估算 (用 24h bars 最后一根 close 作为现价)
         try:
-            exp_cash_f = float(Decimal(expected_snap.cash))
-            act_cash_f = float(Decimal(actual_snap.cash))
+            cur_price_f = float(df.iloc[-1]["close"]) if df is not None and len(df) > 0 else 0.0
         except Exception:
-            exp_cash_f, act_cash_f = 0.0, 0.0
+            cur_price_f = 0.0
+
+        def _fmt_pos(snap: StateSnapshot, label: str) -> str:
+            """单边持仓人话化: BTC 数量 / 平均成本 / 当前价 / 浮动盈亏"""
+            try:
+                qty = float(Decimal(snap.total_qty))
+                avg = float(Decimal(snap.avg_cost))
+                cash = float(Decimal(snap.cash))
+                realized = float(Decimal(snap.realized_pnl))
+            except Exception:
+                qty, avg, cash, realized = 0.0, 0.0, 0.0, 0.0
+            notional = qty * cur_price_f if cur_price_f > 0 else qty * avg
+            unrealized = (cur_price_f - avg) * qty if cur_price_f > 0 and avg > 0 else 0.0
+            unrealized_pct = (cur_price_f / avg - 1) * 100 if cur_price_f > 0 and avg > 0 else 0.0
+            equity = cash + notional
+            lines = [
+                f"<b>{label}</b>:",
+                f"  周期 {snap.cycle_id} · 止盈 {snap.n_tp} · 止损 {snap.n_sl} · 持仓层数 {snap.n_layers}",
+            ]
+            if qty > 0:
+                lines.append(f"  持仓 {qty:.5f} BTC · 平均成本 ${avg:,.2f}")
+                if cur_price_f > 0:
+                    lines.append(f"  按现价 ${cur_price_f:,.2f} → 浮动盈亏 ${unrealized:+,.2f} ({unrealized_pct:+.2f}%)")
+                lines.append(f"  现金 ${cash:,.2f} · 持仓估值 ${notional:,.2f} · 总权益 ${equity:,.2f}")
+            else:
+                lines.append(f"  空仓 · 现金 ${cash:,.2f}")
+            if realized != 0:
+                lines.append(f"  累计已实现盈亏 ${realized:+,.2f}")
+            return "\n".join(lines)
+
         msg = (
-            f"⚠️ <b>dgr_btc 镜像一致性告警</b> ({today})\n\n"
-            f"<b>预期 (回测复盘)</b>:\n"
-            f"  周期 {expected_snap.cycle_id} · 止盈 {expected_snap.n_tp} · 止损 {expected_snap.n_sl}\n"
-            f"  权益 ${exp_cash_f:,.2f}\n\n"
-            f"<b>实际 (paper 实盘)</b>:\n"
-            f"  周期 {actual_snap.cycle_id} · 止盈 {actual_snap.n_tp} · 止损 {actual_snap.n_sl}\n"
-            f"  现金 ${act_cash_f:,.2f}\n\n"
+            f"⚠️ <b>dgr_btc 镜像一致性告警</b> ({today})\n"
+            f"<i>每日凌晨用回测引擎重放过去 24h, 对比实盘 paper 当前状态</i>\n\n"
+            f"{_fmt_pos(expected_snap, '预期 (回测复盘)')}\n\n"
+            f"{_fmt_pos(actual_snap, '实际 (paper 实盘)')}\n\n"
             f"<b>偏差项</b>:\n" + "\n".join(f"  · {d}" for d in diffs)
         )
         logger.warning(f"镜像偏差: {diffs}")
