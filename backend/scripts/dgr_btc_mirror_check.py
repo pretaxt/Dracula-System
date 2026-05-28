@@ -52,7 +52,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 STATE_PAPER = Path("/app/state/dgr_btc_paper_state.json")
 SNAPSHOT_DIR = Path("/app/state/dgr_btc_mirror_snapshots")
 AUDIT_LOG = Path("/app/state/dgr_btc_mirror_audit.jsonl")
-DIVERGENCE_THRESHOLD_PCT = Decimal("10.0")  # >10% → 告警
+# B2 修复 (round 2 audit risk): threshold 从 10% 收紧到 2%, abs floor 从 $5/0.001 收到 $1/0.0001
+# realized/unrealized/qty 三档统一阈值, 不再不一致.
+DIVERGENCE_THRESHOLD_PCT = Decimal("2.0")  # >2% → 告警
+DIVERGENCE_QTY_ABS_FLOOR = Decimal("0.0001")  # BTC 量, ≈ $7
+DIVERGENCE_USDT_ABS_FLOOR = Decimal("1.0")  # USDT 金额
 
 WEIGHTS = [
     Decimal("0.0760"),
@@ -240,12 +244,12 @@ def compare_states(
     if expected.n_layers != actual.n_layers:
         diffs.append(f"持仓层数不一致 预期={expected.n_layers} 实际={actual.n_layers}")
 
-    # 持仓 BTC 数量偏差 (取代旧 cash 偏差; cash 字段语义在 expected/actual 中不一致)
+    # B2: 三档统一容差 — 持仓 BTC / 平均成本 / realized / unrealized 全用同样的 abs+pct 双门
+    # 持仓 BTC 数量偏差
     exp_qty = Decimal(expected.total_qty)
     act_qty = Decimal(actual.total_qty)
     qty_diff_abs = abs(act_qty - exp_qty)
-    # 容差: 0.001 BTC 或 10% 取大
-    if qty_diff_abs > Decimal("0.001") and pct_diff(exp_qty, act_qty) > threshold_pct:
+    if qty_diff_abs > DIVERGENCE_QTY_ABS_FLOOR and pct_diff(exp_qty, act_qty) > threshold_pct:
         diffs.append(f"持仓 BTC 数量偏差 {qty_diff_abs:.5f} 预期={exp_qty:.5f} 实际={act_qty:.5f}")
 
     # 平均成本偏差 (持仓时才比)
@@ -256,21 +260,19 @@ def compare_states(
         if avg_pct > threshold_pct:
             diffs.append(f"平均成本偏差 {avg_pct:.2f}% 预期=${exp_avg:,.2f} 实际=${act_avg:,.2f}")
 
-    # realized_pnl: 绝对 USDT 差异 (容差 $5 或 10% 取大)
+    # realized_pnl: 绝对 USDT 差异
     exp_pnl = Decimal(expected.realized_pnl)
     act_pnl = Decimal(actual.realized_pnl)
     pnl_diff_abs = abs(act_pnl - exp_pnl)
-    if pnl_diff_abs > Decimal("5") and pct_diff(exp_pnl, act_pnl) > threshold_pct:
+    if pnl_diff_abs > DIVERGENCE_USDT_ABS_FLOOR and pct_diff(exp_pnl, act_pnl) > threshold_pct:
         diffs.append(f"已实现盈亏偏差 ${pnl_diff_abs:,.2f} 预期=${exp_pnl:,.2f} 实际=${act_pnl:,.2f}")
 
-    # 审查 #5 三维对账: 持仓时比 unrealized_pnl_at_mark (捕捉 fee/mark_to_market 漂移)
-    # 两边都有此字段才比 (向后兼容旧 snapshot)
+    # 审查 #5 三维对账: unrealized_pnl_at_mark (B2: 阈值与其他档对齐, 不再 5% 独立)
     if expected.unrealized_pnl_at_mark is not None and actual.unrealized_pnl_at_mark is not None:
         exp_upnl = Decimal(expected.unrealized_pnl_at_mark)
         act_upnl = Decimal(actual.unrealized_pnl_at_mark)
         upnl_diff_abs = abs(act_upnl - exp_upnl)
-        # 容差: $5 或 5% 取大 (浮动估值, 容忍小漂移)
-        if upnl_diff_abs > Decimal("5") and pct_diff(exp_upnl, act_upnl) > Decimal("5.0"):
+        if upnl_diff_abs > DIVERGENCE_USDT_ABS_FLOOR and pct_diff(exp_upnl, act_upnl) > threshold_pct:
             diffs.append(
                 f"浮动盈亏偏差 ${upnl_diff_abs:,.2f} "
                 f"预期=${exp_upnl:,.2f} 实际=${act_upnl:,.2f} "

@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
 
+# B5 修复 (round 2 audit): margin_health 连续失败 N 次后 KILL
+# (margin_ratio 算不出 = 整个救命链路盲, 比策略错误更危险)
+_MARGIN_CHECK_MAX_FAILURES = 10  # 5s tick × 10 = 50s 持续故障
+
 
 # ─── Compat views for caller (telegram / positions / dashboard 直读) ───
 
@@ -451,10 +455,20 @@ class DgrBtcPaperSession:
         # §6.2 #1: 单分支 — broker 已封装 paper synthetic / LIVE binance 差异
         await self._process_decisions(close, low)
         # 保证金健康监控 (杠杆 > 1 时启用, 跨阈值告警)
+        # B5 修复 (round 2 audit risk): 不再静默吞异常.
+        # 连续 _MARGIN_CHECK_MAX_FAILURES 次失败 → 触发 KILL switch
+        # (margin_ratio 算不出来时, 整个救命链路盲, 比策略错误更危险).
         try:
             self._check_margin_health(close, alert=True)
+            self._margin_check_failures = 0  # 成功重置
         except Exception:
-            logger.debug("margin_check_failed", exc_info=True)
+            self._margin_check_failures = getattr(self, "_margin_check_failures", 0) + 1
+            logger.exception(
+                "dgr_btc_margin_check_failed consecutive=%d max=%d",
+                self._margin_check_failures, _MARGIN_CHECK_MAX_FAILURES,
+            )
+            if self._margin_check_failures >= _MARGIN_CHECK_MAX_FAILURES:
+                self._trigger_kill_for_margin_blind_spot()
         # 预清算自动减仓 (审查 #3 救命级 + B1 修复 LIVE 真下单) —
         # 在 margin alert 之后, 距强平太近时执行
         try:
@@ -727,6 +741,36 @@ class DgrBtcPaperSession:
             self._last_margin_alert_level = None
 
         return health
+
+    # ──────────────────── B5 margin blind spot KILL (round 2 audit) ────────────────────
+
+    def _trigger_kill_for_margin_blind_spot(self) -> None:
+        """连续 N 次 margin_health 失败 → 写 KILL switch 文件 + telegram critical.
+
+        margin_ratio 算不出 = pre_liq deleverage 永远不触发 = 整个救命链路失效.
+        这种"沉默盲区"比策略错误更危险, 必须立即停止下新单.
+        """
+        try:
+            kill_path = "/app/state/dgr_btc_KILL.MARGIN_BLIND_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            Path(kill_path).touch()
+            logger.critical(
+                "dgr_btc_kill_triggered_margin_blind_spot consecutive_failures=%d kill_path=%s",
+                self._margin_check_failures, kill_path,
+            )
+            if self.cfg.live_safety_telegram_alerts_enabled:
+                from app.notifications.telegram import notify_risk_violation  # noqa: PLC0415
+                notify_risk_violation(
+                    "DGR_BTC_KILL_MARGIN_BLIND",
+                    (
+                        f"🚨🚨🚨 dgr_btc KILL 触发: 保证金健康检查连续 "
+                        f"{self._margin_check_failures} 次失败\n"
+                        f"含义: margin_ratio 算不出 → pre_liq deleverage 救命层失效\n"
+                        f"动作: 已写 KILL switch ({kill_path}), 后续 tick 跳过下单\n"
+                        f"请人工排查 _check_margin_health 异常源 (API / 数据 / 计算 bug)"
+                    ),
+                )
+        except Exception:
+            logger.exception("dgr_btc_margin_blind_kill_failed")
 
     # ──────────────────── pre-liq auto-deleverage (审查 #3 救命级) ────────────────────
 
