@@ -86,6 +86,14 @@ class DgrBtcStrategyConfig:
     risk_max_daily_loss_pct: Decimal = Decimal("0.05")
     risk_max_drawdown_pct: Decimal = Decimal("0.15")
 
+    # ---------- Regime detector (审查 #8 — sideways grinder 防护 2026-05-28) ----------
+    # quant agent 指出: dgr_btc 在 sideways-with-shallow-drawdown regime (2024 H2 类)
+    # 被 grind down. detector 进入此 regime 时暂停加仓让现有持仓自然走 TP/SL.
+    risk_regime_gate_enabled: bool = False  # 默认 OFF — paper 验证后再启用 (会影响 mirror)
+    risk_regime_vol_threshold: Decimal = Decimal("0.25")  # 年化 vol 阈值 25%
+    risk_regime_dd_threshold: Decimal = Decimal("-0.15")  # 30d max DD 阈值 -15%
+    risk_regime_warmup_days: int = 20  # 数据不足此天数时不触发 (冷启动保护)
+
     # ---------- Pre-liquidation auto-deleverage (审查 #3 救命级补强 2026-05-28) ----------
     # 距强平 N% (margin_ratio < threshold) → 自动平 deleverage_pct 的仓位救命
     # risk-manager 审查指出: 策略 SL avg×0.90 永远不会触发, 强平在 avg×0.937 (10x)
@@ -255,6 +263,15 @@ class DgrBtcStrategyConfig:
             risk_max_drawdown_pct=_D(
                 _get(["risk", "max_drawdown_pct"]), Decimal("0.15")
             ),
+            # regime detector (审查 #8)
+            risk_regime_gate_enabled=bool(_get(["risk", "regime_gate_enabled"], False)),
+            risk_regime_vol_threshold=_D(
+                _get(["risk", "regime_vol_threshold"]), Decimal("0.25")
+            ),
+            risk_regime_dd_threshold=_D(
+                _get(["risk", "regime_dd_threshold"]), Decimal("-0.15")
+            ),
+            risk_regime_warmup_days=int(_get(["risk", "regime_warmup_days"], 20)),
             # pre-liquidation auto-deleverage (审查 #3)
             risk_pre_liq_enabled=bool(_get(["risk", "pre_liq_enabled"], True)),
             risk_pre_liq_margin_ratio_threshold=_D(

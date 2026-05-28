@@ -76,6 +76,14 @@ risk:
   alert_on_sl: true
   alert_on_kill: true
   alert_on_max_layer: true      # 触达第 5 层时告警
+  # Regime detector (审查 #8 sideways grinder 防护 2026-05-28)
+  # 30d 年化波动 < 25% AND 30d 最大回撤 > -15% → 暂停加仓 (ENTRY + ADD_LAYER)
+  # SL/TP 永远启用. 默认 OFF — paper 14d 验证后再 PATCH 开启 (会影响 mirror)
+  regime_gate_enabled: false
+  regime_vol_threshold: 0.25
+  regime_dd_threshold: -0.15
+  regime_warmup_days: 20
+
   # Pre-liquidation auto-deleverage (审查 #3 救命级 2026-05-28)
   # 距强平 < threshold 时自动平 deleverage_pct 的仓位救命
   # risk-manager 审查指出: 策略 SL (-10%) 在 10x 杠杆下永远不会触发, 强平在 -6.3%

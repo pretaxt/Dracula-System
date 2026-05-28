@@ -165,20 +165,33 @@ class MartingaleEngine:
         state: StrategyState,
         price: Decimal,
         low: Decimal,
+        allow_add_layer: bool = True,
     ) -> Decision:
         """根据当前 tick 价格 + state 决定下一步动作
 
         优先级:
-          1. 如果没仓位 → ENTRY layer 1
-          2. 检查 STOP_LOSS (用 low，最高优先级)
+          1. 如果没仓位 → ENTRY layer 1（受 allow_add_layer gate 控制）
+          2. 检查 STOP_LOSS (用 low，最高优先级，永远启用)
           3. 检查 ADD_LAYER (用 low，加 1 档；多档由 caller 在同一 tick 内连续调 decide)
-          4. 检查 TAKE_PROFIT (用 price)
+             — 受 allow_add_layer gate 控制
+          4. 检查 TAKE_PROFIT (用 price，永远启用)
           5. NOOP
+
+        Args:
+            allow_add_layer: §6.2 #8 regime detector gate.
+                False = 暂停所有加仓（ENTRY + ADD_LAYER），但 SL/TP 仍正常工作。
+                paper 和 backtest 都需传同样的 gate 值才能保持 mirror byte-equal。
         """
         cfg = self.cfg
 
-        # 1. cycle 启动：买入第 1 层
+        # 1. cycle 启动：买入第 1 层（受 gate）
         if not state.is_in_cycle:
+            if not allow_add_layer:
+                return Decision(
+                    kind=DecisionKind.NOOP,
+                    target_price=price,
+                    reason="REGIME_GATE_BLOCKS_ENTRY",
+                )
             stake = cfg.initial_capital * cfg.layer_weights[0]
             return Decision(
                 kind=DecisionKind.ADD_LAYER,
@@ -191,7 +204,7 @@ class MartingaleEngine:
         avg = state.avg_cost
         total_qty = state.total_qty
 
-        # 2. STOP LOSS（intrabar low 触发）
+        # 2. STOP LOSS（intrabar low 触发，永远启用）
         stop_price = avg * (_ONE - cfg.sl_pct)
         if low <= stop_price:
             return Decision(
@@ -201,9 +214,10 @@ class MartingaleEngine:
                 reason=f"CYCLE_{state.cycle_id}_SL@{stop_price:.2f}_avg={avg:.2f}",
             )
 
-        # 3. ADD_LAYER（intrabar low 触达 next_buy）
+        # 3. ADD_LAYER（intrabar low 触达 next_buy，受 gate）
         if (
-            state.n_layers < cfg.max_layers
+            allow_add_layer
+            and state.n_layers < cfg.max_layers
             and state.next_buy_price is not None
             and low <= state.next_buy_price
         ):
@@ -216,7 +230,7 @@ class MartingaleEngine:
                 layer_index=state.n_layers,
             )
 
-        # 4. TAKE PROFIT（用 close price）
+        # 4. TAKE PROFIT（用 close price，永远启用）
         tp_trigger = avg * (_ONE + cfg.tp_pct)
         if price >= tp_trigger:
             return Decision(
