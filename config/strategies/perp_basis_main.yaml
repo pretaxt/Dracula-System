@@ -84,7 +84,7 @@ risk:
 # Live Trading（Phase D）
 paper_trading:
   enabled: true
-  live_mode: true
+  live_mode: false                 # 默认禁止实盘；确认后再显式打开
   scan_interval_seconds: 60           # session tick 节奏（独立于 scanner）
 
 # HTX 溢价筛选器（按需运行 + 主动应用）

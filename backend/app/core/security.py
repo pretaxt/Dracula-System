@@ -15,11 +15,32 @@ from app.core.config import get_settings
 
 _ALGORITHM = "HS256"
 _TOKEN_EXPIRE_HOURS = 24
+_PLACEHOLDERS = frozenset({"", "change_me", "changeme", "placeholder"})
+
+
+class AuthNotConfiguredError(RuntimeError):
+    """API_TOKEN / API_SECRET_KEY 未配置或仍是占位符。"""
 
 
 class TokenData(BaseModel):
     sub: str
     exp: datetime
+
+
+def _is_placeholder(value: str | None) -> bool:
+    return (value or "").strip().lower() in _PLACEHOLDERS
+
+
+def require_auth_configured(settings: Any | None = None) -> None:
+    """启动前检查：空口令或 CHANGE_ME 则拒绝启动。"""
+    settings = settings or get_settings()
+    if _is_placeholder(getattr(settings, "api_token", None)) or _is_placeholder(
+        getattr(settings, "api_secret_key", None)
+    ):
+        raise AuthNotConfiguredError(
+            "API_TOKEN and API_SECRET_KEY must be set to non-empty secrets "
+            "(not empty or CHANGE_ME). Refusing to start."
+        )
 
 
 def create_access_token(sub: str = "admin") -> tuple[str, datetime]:
@@ -39,7 +60,9 @@ def decode_token(token: str) -> TokenData:
 
 
 def verify_password(plain: str) -> bool:
-    """常量时间比较，防止时序攻击。"""
+    """常量时间比较，防止时序攻击。未配置口令时一律失败。"""
     settings = get_settings()
     expected = settings.api_token or ""
+    if _is_placeholder(expected):
+        return False
     return hmac.compare_digest(plain.encode(), expected.encode())

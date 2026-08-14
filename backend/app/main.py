@@ -88,6 +88,9 @@ _STRATEGY_CONFIG_PATH = "config/strategies/funding_rate_main.yaml"
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
+    from app.core.security import require_auth_configured  # noqa: PLC0415
+
+    require_auth_configured(settings)
     logger.info("dracula_starting", environment=settings.environment)
 
     # P0-β TaskSupervisor — 监控所有 long-running task，crash 后告警 + /health 反映
